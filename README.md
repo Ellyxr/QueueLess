@@ -1,5 +1,5 @@
 # When creating changes and pushing new features,
-> base the branch name on the user story ID from google sheets. US-# means User Story - Number. Click the badge below and click it again to redirect.
+> Galing sa google sheets User Story dapat ung branchname. US-# means User Story - Number. Click the badge below and click it again to redirect.
 
 > ![Static Badge](https://img.shields.io/badge/GoToSheets-Go%20to%20Sheets?style=flat&logo=googlesheets&logoColor=%23ededed&labelColor=%2334A853&color=%23262626&link=https%3A%2F%2Fdocs.google.com%2Fspreadsheets%2Fd%2F1ADfgh4PM9Fk8Xh18J7MifoSNttUOsJ6lcGwPBCcKN_0%2Fedit%3Fusp%3Dsharing)
 
@@ -13,12 +13,12 @@ git checkout -b BranchNameMo
 git add .
 > add . means add all of the changes na ginawa mo
 
-git commit -m "feat: complete US-006 work"
+git commit -m "feat: complete US-# work"
 
 > commit -m means magccommit ka ng message. within the "" ung msg mo
 
 ## 3. Push and automatically create a Pull Request from your terminal!
-gh pr create --title "US-#: Name ng Feature" --body "Closes US-006"
+gh pr create --title "US-#: Name ng Feature" --body "Closes US-# / specific features u made here"
 > gh = github 
 
 >pr create = pull request create
