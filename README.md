@@ -3,8 +3,8 @@
 
 > do this on ur terminal
 ## 1. Create and switch to your feature branch
-git checkout -b feat/us-006 
-> feat/us-006 is the branch name
+git checkout -b BranchNameMo 
+> BranchNameMo is the branch name. Branch name should be the user story id sa google sheets.
 
 ## 2. Add and commit your changes
 git add .
