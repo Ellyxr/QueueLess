@@ -25,6 +25,17 @@ gh pr create --title "US-#-Name ng Feature" --body "Closes US-# / specific featu
 
 > if hindi mo siya nagawa sa issang push lang, same pa rin na US-# gamitin
 
+## Areas
+
+- `artifacts/frontend/` — Vite, React, TypeScript, Tailwind, and shadcn/ui scaffold
+- `artifacts/api-server/` — NestJS API scaffold and Prisma schema
+- `database/` — database documentation and migration notes
+- `docs/` — architecture, API, and decision records
+
+Frontend environment names are documented in `artifacts/frontend/.env.example`. Backend environment names are documented in `artifacts/api-server/.env.example`.
+
+Feature logic, database seed records, and production service configuration are intentionally deferred.
+
 > automatic siyang magppush sa branch mo and create a pull request sa main. Pag nangyare un, automatik na siyang qquality check para malaman kung okay na siyang mamerge. ensuring the quality is mah domain yes i
 
 > pull request means iccombine ung code na un sa main
