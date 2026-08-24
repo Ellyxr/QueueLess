@@ -1,0 +1,856 @@
+// =============================================================================
+// QueueLess — Proposed Prisma Schema (Planning Artifact) — v2
+// Derived from: approved ERD (US-004 v2) + ARD Section 3 tool decisions
+// Datasource: PostgreSQL (Neon Free for dev, per ARD; AWS-managed Postgres for prod)
+// ORM/migrations: Prisma + Prisma Migrate
+//
+// STATUS: NOT YET MIGRATED. Input to the development-foundation plan, for
+// backend/DB review before `prisma migrate dev` is run.
+//
+// v2 CHANGES FROM v1 (see US-004-ERD-Design.md Section 6 for full rationale):
+//   - Vendor.ownerUserId is now @unique (one storefront per user)
+//   - UserRole.STUDENT renamed to BUYER; RoleAssignment supports simultaneous
+//     BUYER + VENDOR_OWNER on one account (student vendors)
+//   - New: Organization, Event, EventVendorParticipation
+//   - New: Cart, CartItem
+//   - New: EmailVerificationCode, RefreshToken
+//   - Vendor gains vendorType (SAMPALOC_LANE | STUDENT) and a PENDING_APPROVAL status
+//   - OrderStatus values confirmed: PENDING/PAID/COOKING/OUT_FOR_DELIVERY/DELIVERED
+//     (+ CANCELLED, added — flagged assumption, see design doc item 9)
+//   - PasabuyStatus values confirmed/adapted: PENDING/ACCEPTED/PAID/IN_PROGRESS/
+//     DELIVERED/CANCELLED
+//   - PasabuyParticipant + its two enums REMOVED (pooling ruled out; requester/
+//     fulfiller already live directly on PasabuyRequest)
+//   - Refund gains orderItemId (item-level partial refunds); a Payment can now
+//     have multiple Refund rows
+//   - OrderItem gains removedAt (set when a vendor removes/refunds that item)
+//   - All IDs switched from Prisma-level @default(uuid()) to Postgres-native
+//     @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+//
+// FLAGGED DECISIONS are marked inline with "// DECISION:" comments where a
+// choice was made without an explicit source-document line item. See the
+// design doc's Decision Log for the reasoning behind each.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// ENUMS
+// -----------------------------------------------------------------------------
+
+// DECISION: renamed from STUDENT to BUYER for clarity — "student" is now also
+// used to describe a vendor subtype (see VendorType) and an email-verification
+// concept (User.studentEmailVerifiedAt), so keeping "STUDENT" as a role name
+// was ambiguous. BUYER is the role that lets an account purchase; it has no
+// bearing on whether the underlying person is a student — that's determined by
+// which signup path was used, tracked separately.
+enum UserRole {
+  BUYER
+  VENDOR_OWNER
+  ADMIN
+}
+
+// DECISION: new — distinguishes the two vendor onboarding paths. Sampaloc Lane
+// vendors are off-campus/lane vendors onboarded via a placeholder application
+// page (not self-serve yet); Student vendors sign up with a verified student
+// (Outlook) email, same as a Buyer account.
+enum VendorType {
+  SAMPALOC_LANE
+  STUDENT
+}
+
+// DECISION: PENDING_APPROVAL added for Sampaloc Lane applications awaiting
+// admin review, since that onboarding path isn't self-serve.
+enum VendorStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_APPROVAL
+}
+
+enum OrderType {
+  INDIVIDUAL
+  GROUP
+}
+
+// Confirmed by the team: PENDING -> PAID -> COOKING -> OUT_FOR_DELIVERY ->
+// DELIVERED. CANCELLED added (flagged assumption, not literally given) as a
+// terminal state reachable pre-COOKING — needed for vendor-side order
+// rejection and for the item-level refund flow (removing an item from an
+// order that never reaches the customer). Confirm before migration.
+enum OrderStatus {
+  PENDING
+  PAID
+  COOKING
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+// Kept deliberately separate from OrderStatus — GroupOrder is the pre-payment
+// "building the cart together" phase, not the post-payment fulfillment flow.
+// It finalizes into exactly one Order, which then runs OrderStatus above.
+enum GroupOrderStatus {
+  OPEN
+  LOCKED
+  FINALIZED
+  CANCELLED
+}
+
+enum GroupOrderParticipantStatus {
+  INVITED
+  JOINED
+  LEFT
+}
+
+enum PaymentShareStatus {
+  PENDING
+  PAID
+}
+
+enum PaymentPurpose {
+  ORDER_SHARE
+  PASABUY
+  SUBSCRIPTION
+  FEATURED_LISTING
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+// DECISION: kept as enum, confirmed. Only PayMongo exists today; an enum
+// guards against typo'd provider strings at the DB level, and adding a second
+// provider later is a one-line migration, not a redesign.
+enum PaymentProvider {
+  PAYMONGO
+}
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  PROCESSED
+  DENIED
+}
+
+// Confirmed, adapted from the given Order flow: "Cooking" doesn't map to an
+// errand request, so it's replaced. ACCEPTED added because fulfiller
+// assignment is already a required distinct moment (business rule). IN_PROGRESS
+// stands in for "Cooking" + "Out for Delivery" combined (fulfiller is out
+// buying/delivering the item).
+enum PasabuyStatus {
+  PENDING
+  ACCEPTED
+  PAID
+  IN_PROGRESS
+  DELIVERED
+  CANCELLED
+}
+
+enum ReportStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  DISMISSED
+}
+
+enum VendorSubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum FeaturedListingStatus {
+  ACTIVE
+  EXPIRED
+}
+
+// DECISION: new — supports the event promotion feature.
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  ONGOING
+  COMPLETED
+  CANCELLED
+}
+
+// DECISION: new — a vendor's inclusion in a specific event is tracked
+// independently of the vendor's normal storefront status.
+enum EventVendorStatus {
+  INVITED
+  CONFIRMED
+  DECLINED
+  REMOVED
+}
+
+// DECISION: new — cart lifecycle.
+enum CartStatus {
+  ACTIVE
+  CHECKED_OUT
+  ABANDONED
+}
+
+// DECISION: new — currently only SIGNUP, but modeled as an enum (not a plain
+// string) since a PASSWORD_RESET purpose is a near-certain future addition and
+// this table is otherwise identical for that use case.
+enum EmailVerificationPurpose {
+  SIGNUP
+}
+
+// -----------------------------------------------------------------------------
+// IDENTITY
+// -----------------------------------------------------------------------------
+
+model User {
+  id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                  String    @unique
+  passwordHash           String
+  fullName               String
+  phone                  String?
+  isActive               Boolean   @default(true)
+  // DECISION: set once a signup verification code (Buyer or Student Vendor
+  // path) is confirmed. Null for Sampaloc Lane vendor accounts, since that
+  // path never verifies a student identity.
+  studentEmailVerifiedAt DateTime? @db.Timestamptz(6)
+  createdAt              DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime  @updatedAt @db.Timestamptz(6)
+
+  roleAssignments          RoleAssignment[]
+  vendorOwned              Vendor?                 @relation("VendorOwner")
+  eventsCreated            Event[]                 @relation("EventCreatedBy")
+  carts                    Cart[]
+  ordersPlaced             Order[]                 @relation("OrderCustomer")
+  orderStatusChanges       OrderStatusHistory[]    @relation("OrderStatusChangedBy")
+  groupOrdersInitiated     GroupOrder[]            @relation("GroupOrderInitiator")
+  groupOrderParticipations GroupOrderParticipant[]
+  paymentShares            PaymentShare[]          @relation("PaymentSharePayer")
+  payments                 Payment[]               @relation("PaymentPayer")
+  refundsRequested         Refund[]                @relation("RefundRequestedBy")
+  pasabuyRequestsMade      PasabuyRequest[]        @relation("PasabuyRequester")
+  pasabuyRequestsFulfilled PasabuyRequest[]        @relation("PasabuyFulfiller")
+  pasabuyStatusChanges     PasabuyStatusHistory[]  @relation("PasabuyStatusChangedBy")
+  reportsSubmitted         Report[]                @relation("ReportReporter")
+  reportsTargetingMe       Report[]                @relation("ReportTargetUser")
+  reportStatusChangesMade  ReportStatusHistory[]   @relation("ReportStatusAdmin")
+  notifications            Notification[]
+  auditRecords             AuditRecord[]           @relation("AuditActor")
+  refreshTokens            RefreshToken[]
+
+  @@map("users")
+}
+
+// Supports multiple simultaneous role assignments per user (student vendors
+// hold both BUYER and VENDOR_OWNER). "At most one ACTIVE assignment per
+// (user, role)" needs a partial unique index — Prisma schema language cannot
+// express a WHERE-conditioned unique constraint declaratively; add via raw SQL
+// migration step.
+model RoleAssignment {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @db.Uuid
+  role      UserRole
+  grantedAt DateTime  @default(now()) @db.Timestamptz(6)
+  revokedAt DateTime? @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("role_assignments")
+}
+
+// DECISION: new. Deliberately has NO relation to User — verification happens
+// before the account row exists. The signup endpoint creates the User only
+// after a valid, unexpired, unconsumed code matching this table is presented.
+// codeHash (not the raw code) is stored, same principle as passwordHash.
+model EmailVerificationCode {
+  id         String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email      String
+  codeHash   String
+  purpose    EmailVerificationPurpose @default(SIGNUP)
+  expiresAt  DateTime                 @db.Timestamptz(6)
+  consumedAt DateTime?                @db.Timestamptz(6)
+  attempts   Int                      @default(0)
+  createdAt  DateTime                 @default(now()) @db.Timestamptz(6)
+
+  @@index([email])
+  @@map("email_verification_codes")
+}
+
+// DECISION: new — backs ADR-002 (JWT/session lifecycle). Refresh tokens are
+// opaque random strings, stored hashed so a leaked DB dump doesn't hand out
+// usable tokens. Enables revocation (logout, "log out everywhere") and
+// rotation-on-reuse detection via replacedByTokenId.
+model RefreshToken {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String    @db.Uuid
+  tokenHash         String    @unique
+  expiresAt         DateTime  @db.Timestamptz(6)
+  revokedAt         DateTime? @db.Timestamptz(6)
+  replacedByTokenId String?   @db.Uuid
+  createdAt         DateTime  @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// -----------------------------------------------------------------------------
+// MARKETPLACE
+// -----------------------------------------------------------------------------
+
+// DECISION: ownerUserId is now @unique — one storefront per owner, confirmed.
+model Vendor {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerUserId    String       @unique @db.Uuid
+  name           String
+  description    String?
+  campusLocation String?
+  vendorType     VendorType
+  status         VendorStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @db.Timestamptz(6)
+
+  owner                User                        @relation("VendorOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  products             Product[]
+  eventParticipations  EventVendorParticipation[]
+  carts                Cart[]
+  orders               Order[]
+  groupOrders          GroupOrder[]
+  subscriptions        VendorSubscription[]
+  featuredListings     FeaturedListing[]
+  reportsTargeting     Report[]                    @relation("ReportTargetVendor")
+
+  @@index([ownerUserId])
+  @@map("vendors")
+}
+
+model Product {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId    String   @db.Uuid
+  name        String
+  description String?
+  price       Decimal  @db.Decimal(10, 2)
+  category    String?
+  isAvailable Boolean  @default(true)
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+
+  vendor           Vendor            @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  orderItems       OrderItem[]
+  cartItems        CartItem[]
+  featuredListings FeaturedListing[]
+  reportsTargeting Report[]          @relation("ReportTargetProduct")
+
+  // Soft rule — not a hard business rule. Remove if duplicate product names
+  // per vendor should be allowed.
+  @@unique([vendorId, name])
+  @@index([vendorId])
+  @@map("products")
+}
+
+// -----------------------------------------------------------------------------
+// EVENTS
+// -----------------------------------------------------------------------------
+
+// DECISION: new. Minimal by design — no auth/ownership of its own, treated as
+// a label/attribution record only. Expand once the team confirms whether org
+// officers need their own account (see design doc Section 6, item 17).
+model Organization {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String
+  description  String?
+  contactEmail String?
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(6)
+
+  events Event[]
+
+  @@map("organizations")
+}
+
+// DECISION: new. organizationId nullable — an event can be admin-created with
+// no organization attached.
+model Event {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId  String?     @db.Uuid
+  createdByUserId String?     @db.Uuid
+  name            String
+  description     String?
+  location        String?
+  startAt         DateTime    @db.Timestamptz(6)
+  endAt           DateTime    @db.Timestamptz(6)
+  status          EventStatus @default(DRAFT)
+  bannerImageUrl  String?
+  createdAt       DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime    @updatedAt @db.Timestamptz(6)
+
+  organization        Organization?               @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  createdBy            User?                       @relation("EventCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  vendorParticipations EventVendorParticipation[]
+  orders               Order[]
+
+  // "endAt > startAt" is a CHECK-constraint rule not expressible declaratively
+  // in Prisma schema language; requires a raw SQL migration step.
+  @@index([organizationId])
+  @@index([status])
+  @@map("events")
+}
+
+// DECISION: new — join table. A vendor's participation in an event is tracked
+// independently of the vendor's day-to-day storefront status.
+model EventVendorParticipation {
+  id        String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eventId   String             @db.Uuid
+  vendorId  String             @db.Uuid
+  status    EventVendorStatus  @default(INVITED)
+  joinedAt  DateTime?          @db.Timestamptz(6)
+
+  event  Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, vendorId])
+  @@index([eventId])
+  @@index([vendorId])
+  @@map("event_vendor_participations")
+}
+
+// -----------------------------------------------------------------------------
+// ORDERING
+// -----------------------------------------------------------------------------
+
+// DECISION: new. "At most one ACTIVE cart per (user, vendor)" is a partial-
+// unique-index rule not expressible declaratively in Prisma schema language;
+// requires a raw SQL migration step (same pattern as RoleAssignment above).
+model Cart {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String     @db.Uuid
+  vendorId  String     @db.Uuid
+  status    CartStatus @default(ACTIVE)
+  createdAt DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime   @updatedAt @db.Timestamptz(6)
+
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vendor Vendor     @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  items CartItem[]
+
+  @@index([userId])
+  @@index([vendorId])
+  @@map("carts")
+}
+
+model CartItem {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cartId    String   @db.Uuid
+  productId String   @db.Uuid
+  quantity  Int
+  addedAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([cartId, productId])
+  @@index([cartId])
+  @@map("cart_items")
+}
+
+model Order {
+  id             String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId     String      @db.Uuid
+  vendorId       String      @db.Uuid
+  eventId        String?     @db.Uuid
+  groupOrderId   String?     @unique @db.Uuid
+  orderType      OrderType
+  status         OrderStatus @default(PENDING)
+  subtotal       Decimal     @db.Decimal(10, 2)
+  marketplaceFee Decimal     @db.Decimal(10, 2)
+  totalAmount    Decimal     @db.Decimal(10, 2)
+  createdAt      DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime    @updatedAt @db.Timestamptz(6)
+
+  customer         User                 @relation("OrderCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  vendor           Vendor               @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  event            Event?               @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  groupOrder       GroupOrder?          @relation(fields: [groupOrderId], references: [id], onDelete: SetNull)
+  items            OrderItem[]
+  statusHistory    OrderStatusHistory[]
+  paymentShares    PaymentShare[]
+  pasabuyRequests  PasabuyRequest[]
+  reportsTargeting Report[]             @relation("ReportTargetOrder")
+
+  @@index([customerId])
+  @@index([vendorId])
+  @@index([eventId])
+  @@index([status])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId           String    @db.Uuid
+  productId         String    @db.Uuid
+  participantId     String?   @db.Uuid
+  quantity          Int
+  unitPriceSnapshot Decimal   @db.Decimal(10, 2)
+  lineSubtotal      Decimal   @db.Decimal(10, 2)
+  // DECISION: set when a vendor removes this item and refunds it (item-level
+  // partial refund support). Order.totalAmount is NOT auto-recalculated here
+  // at the schema level — that's backend logic — but this column is the
+  // queryable signal that the item was pulled from the order.
+  removedAt         DateTime? @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @db.Timestamptz(6)
+
+  order       Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     Product                @relation(fields: [productId], references: [id], onDelete: Restrict)
+  participant GroupOrderParticipant? @relation(fields: [participantId], references: [id], onDelete: SetNull)
+  refunds     Refund[]
+
+  @@index([orderId])
+  @@index([productId])
+  @@index([participantId])
+  @@map("order_items")
+}
+
+model OrderStatusHistory {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId         String      @db.Uuid
+  status          OrderStatus
+  changedByUserId String?     @db.Uuid
+  note            String?
+  changedAt       DateTime    @default(now()) @db.Timestamptz(6)
+
+  order         Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  changedByUser User? @relation("OrderStatusChangedBy", fields: [changedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@map("order_status_history")
+}
+
+// Confirmed: single-vendor only, one Order per GroupOrder (1:1 optional).
+// Cross-vendor group orders are out of scope per PayMongo sandbox access.
+model GroupOrder {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  initiatorUserId String           @db.Uuid
+  vendorId        String           @db.Uuid
+  status          GroupOrderStatus @default(OPEN)
+  createdAt       DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime         @updatedAt @db.Timestamptz(6)
+
+  initiator    User                    @relation("GroupOrderInitiator", fields: [initiatorUserId], references: [id], onDelete: Restrict)
+  vendor       Vendor                  @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  participants GroupOrderParticipant[]
+  order        Order?
+
+  @@index([initiatorUserId])
+  @@index([vendorId])
+  @@map("group_orders")
+}
+
+model GroupOrderParticipant {
+  id           String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  groupOrderId String                      @db.Uuid
+  userId       String                      @db.Uuid
+  status       GroupOrderParticipantStatus @default(INVITED)
+  joinedAt     DateTime?                   @db.Timestamptz(6)
+
+  groupOrder GroupOrder  @relation(fields: [groupOrderId], references: [id], onDelete: Cascade)
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderItems OrderItem[]
+
+  @@unique([groupOrderId, userId])
+  @@index([groupOrderId])
+  @@map("group_order_participants")
+}
+
+// Fee-allocation formula (confirmed, backend concern, no schema impact):
+// amountDue = participantSubtotal + (participantSubtotal / orderSubtotal) * marketplaceFee
+model PaymentShare {
+  id          String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId     String             @db.Uuid
+  payerUserId String             @db.Uuid
+  amountDue   Decimal            @db.Decimal(10, 2)
+  status      PaymentShareStatus @default(PENDING)
+  paymentId   String?            @db.Uuid
+  createdAt   DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime           @updatedAt @db.Timestamptz(6)
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  payer   User     @relation("PaymentSharePayer", fields: [payerUserId], references: [id], onDelete: Restrict)
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@unique([orderId, payerUserId])
+  @@index([orderId])
+  @@index([paymentId])
+  @@map("payment_shares")
+}
+
+// -----------------------------------------------------------------------------
+// PAYMENTS
+// -----------------------------------------------------------------------------
+
+// DECISION (unchanged from v1, reconfirmed — see design doc item 5): kept as
+// nullable-FK-plus-CHECK-constraint rather than split into per-purpose tables.
+// order_id is deliberately omitted — PaymentShare.paymentId is the sole
+// ORDER_SHARE linkage, avoiding two inconsistent paths to the same fact.
+model Payment {
+  id                   String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  payerUserId          String          @db.Uuid
+  purpose              PaymentPurpose
+  pasabuyRequestId     String?         @db.Uuid
+  vendorSubscriptionId String?         @db.Uuid
+  featuredListingId    String?         @db.Uuid
+  amount               Decimal         @db.Decimal(10, 2)
+  currency             String          @default("PHP")
+  provider             PaymentProvider @default(PAYMONGO)
+  providerPaymentId    String?
+  status               PaymentStatus   @default(PENDING)
+  createdAt            DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime        @updatedAt @db.Timestamptz(6)
+
+  payer              User                @relation("PaymentPayer", fields: [payerUserId], references: [id], onDelete: Restrict)
+  paymentShares      PaymentShare[]
+  pasabuyRequest     PasabuyRequest?     @relation(fields: [pasabuyRequestId], references: [id], onDelete: Restrict)
+  vendorSubscription VendorSubscription? @relation(fields: [vendorSubscriptionId], references: [id], onDelete: Restrict)
+  featuredListing    FeaturedListing?    @relation(fields: [featuredListingId], references: [id], onDelete: Restrict)
+  refunds            Refund[]
+
+  @@index([payerUserId])
+  @@index([status])
+  @@index([providerPaymentId])
+  @@map("payments")
+}
+
+// DECISION: orderItemId added — refunds are item-level (a vendor removes one
+// item from an order and refunds just that item), so a single Payment can now
+// have multiple Refund rows. nullable because Pasabuy/subscription/featured-
+// listing refunds have no OrderItem to point to. Application layer must keep
+// sum(amount) across PROCESSED refunds <= the parent Payment's amount.
+model Refund {
+  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentId         String       @db.Uuid
+  orderItemId       String?      @db.Uuid
+  amount            Decimal      @db.Decimal(10, 2)
+  reason            String?
+  status            RefundStatus @default(REQUESTED)
+  requestedByUserId String       @db.Uuid
+  providerRefundId  String?
+  processedAt       DateTime?    @db.Timestamptz(6)
+  createdAt         DateTime     @default(now()) @db.Timestamptz(6)
+
+  payment     Payment    @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  orderItem   OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+  requestedBy User       @relation("RefundRequestedBy", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([paymentId])
+  @@index([orderItemId])
+  @@map("refunds")
+}
+
+// -----------------------------------------------------------------------------
+// PASABUY
+// -----------------------------------------------------------------------------
+
+// DECISION: PasabuyParticipant (and its two enums) is REMOVED — pooling was
+// ruled out (one-to-one requester + fulfiller only). Both roles already live
+// directly on this row, so the join table added no value.
+model PasabuyRequest {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requesterUserId  String        @db.Uuid
+  fulfillerUserId  String?       @db.Uuid
+  relatedOrderId   String?       @db.Uuid
+  status           PasabuyStatus @default(PENDING)
+  pickupLocation   String?
+  dropoffLocation  String?
+  itemDescription  String
+  convenienceFee   Decimal       @db.Decimal(10, 2)
+  totalAmount      Decimal       @db.Decimal(10, 2)
+  createdAt        DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime      @updatedAt @db.Timestamptz(6)
+
+  requester        User                   @relation("PasabuyRequester", fields: [requesterUserId], references: [id], onDelete: Restrict)
+  fulfiller        User?                  @relation("PasabuyFulfiller", fields: [fulfillerUserId], references: [id], onDelete: SetNull)
+  relatedOrder     Order?                 @relation(fields: [relatedOrderId], references: [id], onDelete: SetNull)
+  statusHistory    PasabuyStatusHistory[]
+  payments         Payment[]
+  reportsTargeting Report[]               @relation("ReportTargetPasabuy")
+
+  @@index([requesterUserId])
+  @@index([fulfillerUserId])
+  @@index([status])
+  @@map("pasabuy_requests")
+}
+
+model PasabuyStatusHistory {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pasabuyRequestId String        @db.Uuid
+  status           PasabuyStatus
+  changedByUserId  String?       @db.Uuid
+  note             String?
+  changedAt        DateTime      @default(now()) @db.Timestamptz(6)
+
+  pasabuyRequest PasabuyRequest @relation(fields: [pasabuyRequestId], references: [id], onDelete: Cascade)
+  changedByUser  User?          @relation("PasabuyStatusChangedBy", fields: [changedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([pasabuyRequestId])
+  @@map("pasabuy_status_history")
+}
+
+// -----------------------------------------------------------------------------
+// REPORTING
+// -----------------------------------------------------------------------------
+
+// "Exactly one reported_* FK populated" is a CHECK-constraint rule (see
+// PostgreSQL-specific considerations) not expressible declaratively in Prisma
+// schema language; requires a raw SQL migration step.
+model Report {
+  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reporterUserId    String       @db.Uuid
+  category          String
+  description       String
+  status            ReportStatus @default(OPEN)
+  reportedUserId    String?      @db.Uuid
+  reportedVendorId  String?      @db.Uuid
+  reportedProductId String?      @db.Uuid
+  reportedOrderId   String?      @db.Uuid
+  reportedPasabuyId String?      @db.Uuid
+  createdAt         DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime     @updatedAt @db.Timestamptz(6)
+
+  reporter        User                  @relation("ReportReporter", fields: [reporterUserId], references: [id], onDelete: Restrict)
+  reportedUser    User?                 @relation("ReportTargetUser", fields: [reportedUserId], references: [id], onDelete: SetNull)
+  reportedVendor  Vendor?               @relation("ReportTargetVendor", fields: [reportedVendorId], references: [id], onDelete: SetNull)
+  reportedProduct Product?              @relation("ReportTargetProduct", fields: [reportedProductId], references: [id], onDelete: SetNull)
+  reportedOrder   Order?                @relation("ReportTargetOrder", fields: [reportedOrderId], references: [id], onDelete: SetNull)
+  reportedPasabuy PasabuyRequest?       @relation("ReportTargetPasabuy", fields: [reportedPasabuyId], references: [id], onDelete: SetNull)
+  statusHistory   ReportStatusHistory[]
+
+  @@index([reporterUserId])
+  @@index([status])
+  @@map("reports")
+}
+
+model ReportStatusHistory {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reportId    String       @db.Uuid
+  status      ReportStatus
+  adminUserId String       @db.Uuid
+  note        String?
+  changedAt   DateTime     @default(now()) @db.Timestamptz(6)
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  admin  User   @relation("ReportStatusAdmin", fields: [adminUserId], references: [id], onDelete: Restrict)
+
+  @@index([reportId])
+  @@map("report_status_history")
+}
+
+// -----------------------------------------------------------------------------
+// MONETIZATION
+// -----------------------------------------------------------------------------
+
+model SubscriptionPlan {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                String   @unique
+  price               Decimal  @db.Decimal(10, 2)
+  durationDays        Int
+  benefitsDescription String?
+  createdAt           DateTime @default(now()) @db.Timestamptz(6)
+
+  vendorSubscriptions VendorSubscription[]
+
+  @@map("subscription_plans")
+}
+
+// "At most one ACTIVE subscription per vendor" is a partial-unique-index rule
+// not expressible declaratively in Prisma schema language; requires a raw SQL
+// migration step.
+model VendorSubscription {
+  id        String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId  String                   @db.Uuid
+  planId    String                   @db.Uuid
+  status    VendorSubscriptionStatus @default(ACTIVE)
+  startDate DateTime                 @db.Timestamptz(6)
+  endDate   DateTime                 @db.Timestamptz(6)
+  createdAt DateTime                 @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime                 @updatedAt @db.Timestamptz(6)
+
+  vendor   Vendor           @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  plan     SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  payments Payment[]
+
+  @@index([vendorId])
+  @@index([status])
+  @@map("vendor_subscriptions")
+}
+
+// "endDate > startDate" is a CHECK-constraint rule not expressible
+// declaratively in Prisma schema language; requires a raw SQL migration step.
+model FeaturedListing {
+  id        String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId  String                @db.Uuid
+  productId String?               @db.Uuid
+  startDate DateTime              @db.Timestamptz(6)
+  endDate   DateTime              @db.Timestamptz(6)
+  pricePaid Decimal               @db.Decimal(10, 2)
+  status    FeaturedListingStatus @default(ACTIVE)
+  createdAt DateTime              @default(now()) @db.Timestamptz(6)
+
+  vendor   Vendor    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  product  Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+  payments Payment[]
+
+  @@index([vendorId])
+  @@index([productId])
+  @@map("featured_listings")
+}
+
+// -----------------------------------------------------------------------------
+// NOTIFICATIONS — built now (confirmed), not deferred
+// -----------------------------------------------------------------------------
+
+model Notification {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String   @db.Uuid
+  type              String
+  title             String
+  body              String
+  relatedEntityType String?
+  relatedEntityId   String?
+  isRead            Boolean  @default(false)
+  createdAt         DateTime @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+// -----------------------------------------------------------------------------
+// ADMINISTRATION / AUDIT
+// -----------------------------------------------------------------------------
+
+model AuditRecord {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorUserId String?  @db.Uuid
+  actionType  String
+  entityType  String
+  entityId    String
+  beforeState Json?
+  afterState  Json?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  actor User? @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+  @@index([createdAt])
+  @@map("audit_records")
+}
