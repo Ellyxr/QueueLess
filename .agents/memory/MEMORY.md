@@ -1,0 +1,1 @@
+- [Prisma schema tooling](prisma-schema-tooling.md) — the provided QueueLess schema uses the Prisma 6 schema contract; Prisma 7 rejects its datasource URL field.
