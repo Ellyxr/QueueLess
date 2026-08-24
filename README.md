@@ -18,7 +18,7 @@ git commit -m "feat: complete US-# work"
 > commit -m means magccommit ka ng message. within the "" ung msg mo
 
 ## 3. Push and automatically create a Pull Request from your terminal!
-gh pr create --title "US-#: Name ng Feature" --body "Closes US-# / specific features u made here"
+gh pr create --title "US-#-Name ng Feature" --body "Closes US-# / specific features u made here"
 > gh = github 
 
 >pr create = pull request create
