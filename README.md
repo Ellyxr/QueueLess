@@ -17,13 +17,15 @@ git commit -m "feat: complete US-# work"
 
 > commit -m means magccommit ka ng message. within the "" ung msg mo
 
-## 3. Push and automatically create a Pull Request from your terminal!
-gh pr create --title "US-#-Name ng Feature" --body "Closes US-# / specific features u made here"
-> gh = github 
-
->pr create = pull request create
+## 3. Push and create a Pull Request from your terminal!
+gh pr create --repo Ellyxr/QueueLess --title "enterkalang" --body ""
+> gh = github ; pr create = pull request create ; --repo = ensures na diyan sia mappush ; --title and --body 
 
 > if hindi mo siya nagawa sa issang push lang, same pa rin na US-# gamitin
+
+>  sa branch mo and create a pull request sa main. Pag nangyare un, automatik na siyang qquality check para malaman kung okay na siyang mamerge. ensuring the quality is mah domain yes i
+
+> pull request means iccombine ung changed code na un sa branch (ex. main)
 
 ## Areas
 
@@ -36,6 +38,3 @@ Frontend environment names are documented in `artifacts/frontend/.env.example`. 
 
 Feature logic, database seed records, and production service configuration are intentionally deferred.
 
-> automatic siyang magppush sa branch mo and create a pull request sa main. Pag nangyare un, automatik na siyang qquality check para malaman kung okay na siyang mamerge. ensuring the quality is mah domain yes i
-
-> pull request means iccombine ung code na un sa main
