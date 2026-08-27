@@ -7,6 +7,8 @@ on:
 jobs:
   build-and-check:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ci
 
     steps:
       - name: Checkout repository
@@ -28,13 +30,9 @@ jobs:
 
       - name: Generate Prisma client
         run: pnpm --filter @workspace/api-server prisma:generate
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ci
 
       - name: Validate Prisma schema
         run: pnpm --filter @workspace/api-server prisma:validate
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ci
 
       - name: Build applications
         run: pnpm --filter @workspace/frontend... --filter @workspace/api-server... build
