@@ -21,6 +21,7 @@ git commit -m "feat: complete US-# work"
 gh pr create --repo Ellyxr/QueueLess --title "enterkalang" --body ""
 > gh = github ; pr create = pull request create ; --repo = ensures na diyan sia mappush ; --title and --body 
 
+> if gh did not work: paste winget install --id GitHub.cli on terminal
 > if hindi mo siya nagawa sa issang push lang, same pa rin na US-# gamitin
 
 >  sa branch mo and create a pull request sa main. Pag nangyare un, automatik na siyang qquality check para malaman kung okay na siyang mamerge. ensuring the quality is mah domain yes i
