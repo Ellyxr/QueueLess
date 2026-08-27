@@ -21,16 +21,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: pnpm
+          cache: "pnpm"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build frontend
-        run: pnpm --filter @workspace/frontend build
-
-      - name: Build backend
-        run: pnpm --filter @workspace/api-server build
+      - name: Generate Prisma client
+        run: pnpm --filter @workspace/api-server prisma:generate
 
       - name: Validate Prisma schema
         run: pnpm --filter @workspace/api-server prisma:validate
+
+      - name: Build applications
+        run: pnpm --filter @workspace/frontend... --filter @workspace/api-server... build
