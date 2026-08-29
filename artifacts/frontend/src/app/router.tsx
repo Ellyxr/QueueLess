@@ -3,6 +3,8 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { AppShell } from '@/components/app-shell';
 import Home from '@/pages/home';
 import NotFound from '@/pages/not-found';
+import LoginPage from '@/pages/login'; // 1. Ini-import natin ang LoginPage dito
+
 import {
   Route,
   Router as WouterRouter,
@@ -22,6 +24,7 @@ export function AppRouter() {
         <RoutedErrorBoundary>
           <Switch>
             <Route path="/" component={Home} />
+            <Route path="/login" component={LoginPage} /> {/* 2. Idinagdag natin ang /login route */}
             <Route component={NotFound} />
           </Switch>
         </RoutedErrorBoundary>
