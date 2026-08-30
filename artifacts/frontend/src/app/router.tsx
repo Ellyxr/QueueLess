@@ -23,8 +23,7 @@ export function AppRouter() {
       <AppShell>
         <RoutedErrorBoundary>
           <Switch>
-            <Route path="/" component={Home} />
-            <Route path="/login" component={LoginPage} /> {/* 2. Idinagdag natin ang /login route */}
+            <Route path="/" component={LoginPage} /> {/* 2. Idinagdag natin ang /login route */}
             <Route component={NotFound} />
           </Switch>
         </RoutedErrorBoundary>
