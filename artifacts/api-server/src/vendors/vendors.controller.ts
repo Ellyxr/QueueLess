@@ -1,24 +1,20 @@
 import {
   Controller,
   Get,
-  HttpCode,
-  HttpStatus,
   UseGuards,
 } from '@nestjs/common';
+import { ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { Roles } from '../auth/roles.decorator';
-import { RolesGuard } from '../auth/roles.guard';
+import { VendorsService } from './vendors.service';
 
+@ApiBearerAuth()
 @Controller('vendors')
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('VENDOR_OWNER')
+@UseGuards(JwtAuthGuard)
 export class VendorsController {
+  constructor(private readonly vendorsService: VendorsService) {}
+
   @Get()
-  @HttpCode(HttpStatus.NOT_IMPLEMENTED)
-  placeholder() {
-    return {
-      statusCode: HttpStatus.NOT_IMPLEMENTED,
-      message: 'Not implemented',
-    };
+  async listVendors() {
+    return this.vendorsService.listActiveVendors();
   }
 }
