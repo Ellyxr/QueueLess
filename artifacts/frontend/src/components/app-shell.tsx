@@ -16,15 +16,11 @@ export function AppShell({ children }: { children: ReactNode }) {
           </span>
         </div>
         <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground" data-testid="status-foundation">
-          <Circle className="h-2 w-2 fill-current text-secondary-foreground" aria-hidden="true" />
-          <span>Foundation / online</span>
+        
+         
         </div>
       </header>
       <div className="relative z-10">{children}</div>
-      <footer className="relative z-10 mx-auto flex w-full max-w-[1440px] items-center justify-between px-5 pb-6 pt-10 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground sm:px-8 lg:px-12">
-        <span data-testid="text-version">QueueLess / frontend foundation</span>
-        <span data-testid="text-year">2025</span>
-      </footer>
     </div>
   );
 }
