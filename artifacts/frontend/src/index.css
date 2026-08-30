@@ -225,68 +225,68 @@ Ung light mode cinonvert ko as example */
   --elevate-1: rgba(255, 255, 255, 0.04);
   --elevate-2: rgba(255, 255, 255, 0.09);
 
-  --background: 205 25% 13%;
+  --background: 60.02 13.63% 4.13%;
 
-  --foreground: 42 38% 95%;
+  --foreground: 60.02 13.63% 4.13%;
 
-  --border: 205 17% 27%;
+  --border: 0 0% 100% / 0.1;
 
-  --card: 205 22% 17%;
+  --card: 60.02 13.73% 9.98%;
 
-  --card-foreground: 42 38% 95%;
+  --card-foreground: 60.06 22.98% 98.06%;
 
   --card-border: 205 17% 27%;
 
-  --sidebar: 205 25% 13%;
+  --sidebar: 60.02 13.73% 9.98%;
 
-  --sidebar-foreground: 42 38% 95%;
+  --sidebar-foreground: 60.06 22.98% 98.06%;
 
-  --sidebar-border: 205 17% 27%;
+  --sidebar-border: 0 0% 100% / 0.1;
 
-  --sidebar-primary: 35 82% 55%;
+  --sidebar-primary: 199.27 100% 47.86%;
 
-  --sidebar-primary-foreground: 205 25% 13%;
+  --sidebar-primary-foreground: 203.63 87.22% 15.52%;
 
-  --sidebar-accent: 205 19% 22%;
+  --sidebar-accent: 60.04 11.83% 15.08%;
 
-  --sidebar-accent-foreground: 42 38% 95%;
+  --sidebar-accent-foreground: 60.06 22.98% 98.06%;
 
-  --sidebar-ring: 35 82% 55%;
+  --sidebar-ring: 59.96 9.27% 44.48%;
 
-  --popover: 205 22% 17%;
+  --popover: 60.02 13.73% 9.98%;
 
-  --popover-foreground: 42 38% 95%;
+  --popover-foreground: 60.06 22.98% 98.06%;
 
   --popover-border: 205 17% 27%;
 
-  --primary: 35 82% 55%;
+  --primary: 201.21 100% 26.99%;
 
-  --primary-foreground: 205 25% 13%;
+  --primary-foreground: 203.34 100% 96.99%;
 
-  --secondary: 164 25% 27%;
+  --secondary: 240.04 4.04% 15.93%;
 
-  --secondary-foreground: 42 38% 95%;
+  --secondary-foreground: 0 0% 98.03%;
 
-  --muted: 205 19% 22%;
+  --muted: 60.04 11.83% 15.08%;
 
-  --muted-foreground: 205 11% 66%;
+  --muted-foreground: 59.99 8.17% 64.13%;
 
-  --accent: 12 44% 62%;
+  --accent: 60.04 11.83% 15.08%;
 
-  --accent-foreground: 205 25% 13%;
+  --accent-foreground: 60.06 22.98% 98.06%;
 
-  --destructive: 4 62% 58%;
+  --destructive: 358.75 100% 69.56%;
 
   --destructive-foreground: 205 25% 13%;
 
   /* Used as the border around inputs. Dark mode: Should be a border that is light enough to have high contrast when rendered on a --card background. More contrast than standard --border */
-  --input: 205 17% 27%;
-  --ring: 35 82% 55%;
-  --chart-1: 35 82% 55%;
-  --chart-2: 162 33% 52%;
-  --chart-3: 12 44% 62%;
-  --chart-4: 42 38% 75%;
-  --chart-5: 39 60% 58%;
+  --input: 0 0% 100% / 0.15;
+  --ring: 59.96 9.27% 44.48%;
+  --chart-1: 46.99 100% 59.38%;
+  --chart-2: 36.49 100% 49.6%;
+  --chart-3: 30.1 100% 44.19%;
+  --chart-4: 24.68 100% 36.59%;
+  --chart-5: 23.76 100% 29.52%;
 
   --shadow-2xs: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0);
   --shadow-xs: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0);
