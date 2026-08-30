@@ -3,6 +3,8 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { AppShell } from '@/components/app-shell';
 import Home from '@/pages/home';
 import NotFound from '@/pages/not-found';
+import LoginPage from '@/pages/login'; // 1. Ini-import natin ang LoginPage dito
+
 import {
   Route,
   Router as WouterRouter,
