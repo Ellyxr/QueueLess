@@ -1,24 +1,39 @@
 import {
+  Body,
   Controller,
   Get,
-  HttpCode,
-  HttpStatus,
+  Patch,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiBearerAuth } from '@nestjs/swagger';
+import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { Roles } from '../auth/roles.decorator';
-import { RolesGuard } from '../auth/roles.guard';
+import { UpdateProfileDto } from './dto/update-profile.dto';
+import { UsersService } from './users.service';
+
+type AuthenticatedRequest = Request & {
+  user: {
+    sub: string;
+  };
+};
 
 @Controller('users')
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('BUYER')
+@UseGuards(JwtAuthGuard)
+@ApiBearerAuth()
 export class UsersController {
-  @Get()
-  @HttpCode(HttpStatus.NOT_IMPLEMENTED)
-  placeholder() {
-    return {
-      statusCode: HttpStatus.NOT_IMPLEMENTED,
-      message: 'Not implemented',
-    };
+  constructor(private readonly usersService: UsersService) {}
+
+  @Get('me')
+  getProfile(@Req() request: AuthenticatedRequest) {
+    return this.usersService.getProfile(request.user.sub);
+  }
+
+  @Patch('me')
+  updateProfile(
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: UpdateProfileDto,
+  ) {
+    return this.usersService.updateProfile(request.user.sub, dto);
   }
 }
