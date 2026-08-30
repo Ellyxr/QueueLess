@@ -1,9 +1,8 @@
 ## Summary
 
 <!-- Describe the foundation or feature change. -->
-Did some QA testing and found issues,
+Added Marketplace, Profile, and vendor UI. Most components are placeholders and theres no routing logic yet between pages.
 
 ## Checks
 
-- [] Fixed frontend api POST API_URL to route successfully sa backend. 
-- [] Added live validation feedbacks to email domain, phonenumber length, password matching
+- [] 
