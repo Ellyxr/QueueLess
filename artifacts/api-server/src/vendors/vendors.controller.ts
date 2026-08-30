@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Param,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
@@ -16,5 +17,10 @@ export class VendorsController {
   @Get()
   async listVendors() {
     return this.vendorsService.listActiveVendors();
+  }
+
+  @Get(':vendorId')
+  async getVendorStorefront(@Param('vendorId') vendorId: string) {
+    return this.vendorsService.getVendorStorefront(vendorId);
   }
 }
