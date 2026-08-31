@@ -13,6 +13,7 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { useRequireAuth } from '@/hooks/use-require-auth';
 
 const navItems = ['Home', 'Transactions', 'Inbox', 'Profile'];
 
@@ -37,6 +38,8 @@ const recentOrders = [
 ];
 
 export default function VendorPage({ username = 'Jordan' }: { username?: string }) {
+  useRequireAuth(['vendor', 'student_vendor', 'admin']);
+  
   return (
     <main className="mx-auto w-full max-w-[1200px] px-4 py-8 sm:px-6 lg:px-10">
       <div className="rounded-[28px] border border-border/80 bg-background/80 p-3 shadow-sm backdrop-blur-sm sm:p-4">

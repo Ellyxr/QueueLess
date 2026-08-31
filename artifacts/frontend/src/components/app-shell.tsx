@@ -7,8 +7,13 @@ import {
   ShoppingCart,
   Compass,
   X,
+  Store,
+  Shield,
+  LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { User } from "@/types/auth";
+import { logoutUser } from "@/features/auth/api";
 
 interface AppShellProps {
   children: ReactNode;
@@ -16,11 +21,12 @@ interface AppShellProps {
   isLoggedIn?: boolean;
 }
 
-// Map each nav item to its respective icon
 const navIcons: Record<string, React.ReactNode> = {
   Browse: <Compass className="h-4 w-4" />,
   Search: <Search className="h-4 w-4" />,
   Cart: <ShoppingCart className="h-4 w-4" />,
+  Vendor: <Store className="h-4 w-4" />,
+  Admin: <Shield className="h-4 w-4" />,
 };
 
 export function AppShell({
@@ -30,15 +36,30 @@ export function AppShell({
 }: AppShellProps) {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoginPage, setIsLoginPage] = useState(false);
 
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
-  // Use IntersectionObserver instead of window.scroll to prevent React re-render spam
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setIsLoginPage(window.location.pathname === "/login");
+    }
+
+    const storedUser = localStorage.getItem("user");
+    if (storedUser) {
+      try {
+        setUser(JSON.parse(storedUser));
+      } catch (e) {
+        console.error("Failed to parse user session", e);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     const observer = new IntersectionObserver(
       ([entry]) => {
-        // When the sentinel goes out of view, we have scrolled down
         setIsScrolled(!entry.isIntersecting);
       },
       { threshold: [1] },
@@ -51,7 +72,6 @@ export function AppShell({
     return () => observer.disconnect();
   }, []);
 
-  // Auto-focus input when opened
   useEffect(() => {
     if (isSearchOpen && searchInputRef.current) {
       searchInputRef.current.focus();
@@ -62,7 +82,6 @@ export function AppShell({
     <div className="foundation-noise relative min-h-[100dvh] bg-background">
       <div className="foundation-grid pointer-events-none absolute inset-x-0 top-0 h-[620px] opacity-80" />
 
-      {/* Sentinel element to track scroll position smoothly */}
       <div
         ref={sentinelRef}
         className="absolute top-0 h-4 w-full pointer-events-none"
@@ -76,7 +95,7 @@ export function AppShell({
         }`}
       >
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm"> 
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
             <span className="h-4 w-4 rounded-full border-[1.5px] border-current" />
           </div>
           <div className="hidden sm:block">
@@ -88,7 +107,6 @@ export function AppShell({
 
         {/* Navigation / Expanding Search Bar */}
         <nav className="relative flex items-center justify-center md:w-[600px]">
-          {/* Normal Nav Items */}
           <div
             className={`flex items-center gap-2 transition-all duration-300 ease-in-out ${
               isSearchOpen
@@ -101,6 +119,10 @@ export function AppShell({
                 key={item}
                 variant="ghost"
                 className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+                onClick={() => {
+                  if (item === "Browse") window.location.href = "/";
+                  
+                }}
               >
                 <span className="w-0 -translate-x-2 opacity-0 overflow-hidden transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100 flex items-center shrink-0">
                   {navIcons[item]}
@@ -108,6 +130,33 @@ export function AppShell({
                 <span>{item}</span>
               </Button>
             ))}
+
+            {/* US-006: Role-Based Navigation */}
+            {(user?.role === "vendor" || user?.role === "student_vendor") && (
+              <Button
+                variant="ghost"
+                onClick={() => (window.location.href = "/vendor")}
+                className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+              >
+                <span className="w-0 -translate-x-2 opacity-0 overflow-hidden transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100 flex items-center shrink-0">
+                  {navIcons["Vendor"]}
+                </span>
+                <span>Vendor Portal</span>
+              </Button>
+            )}
+
+            {user?.role === "admin" && (
+              <Button
+                variant="ghost"
+                onClick={() => (window.location.href = "/admin")}
+                className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/30"
+              >
+                <span className="w-0 -translate-x-2 opacity-0 overflow-hidden transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100 flex items-center shrink-0">
+                  {navIcons["Admin"]}
+                </span>
+                <span>Admin Panel</span>
+              </Button>
+            )}
 
             {/* Search Trigger Button */}
             <Button
@@ -122,7 +171,6 @@ export function AppShell({
             </Button>
           </div>
 
-          {/* Expanded Search Input Field */}
           <div
             className={`absolute inset-0 flex items-center transition-all duration-300 ease-in-out ${
               isSearchOpen
@@ -153,7 +201,6 @@ export function AppShell({
             variant="ghost"
             size="icon"
             onClick={() => setIsSearchOpen(!isSearchOpen)}
-
             className="rounded-full border border-border/80 bg-background text-foreground md:hidden"
           >
             <Search className="h-4 w-4" />
@@ -172,18 +219,30 @@ export function AppShell({
           >
             <Bell className="h-4 w-4" />
           </Button>
-          {isLoggedIn ? (
-            <Button
-              variant="secondary"
-              className="gap-2 rounded-full px-3 py-2 sm:px-4"
-            >
-              <UserCircle2 className="h-4 w-4" />
-              <span className="hidden sm:inline">{username}</span>
-            </Button>
-          ) : (
-            <Button variant="default" className="rounded-full px-4 py-2">
-              Log In
-            </Button>
+
+          {/* Hide user session & logout button entirely when on /login page */}
+          {!isLoginPage && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => (window.location.href = "/profile")}
+                className="gap-2 rounded-full px-3 py-2 sm:px-4"
+              >
+                <UserCircle2 className="h-4 w-4" />
+                <span className="hidden sm:inline">
+                  {user?.fullName || username}
+                </span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={logoutUser}
+                title="Log out"
+                className="rounded-full border border-border/80 text-destructive hover:bg-destructive/10"
+              >
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </div>
           )}
         </div>
       </header>

@@ -19,6 +19,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
+import { logoutUser } from '@/features/auth/api';
+import { useRequireAuth } from '@/hooks/use-require-auth';
+
 
 const initialProfile = {
   firstName: 'Jamie',
@@ -42,6 +45,9 @@ const stats = [
 ];
 
 export default function ProfilePage() {
+  // US-008: Redirect kapag walang valid auth
+  useRequireAuth();
+  
   const [isEditing, setIsEditing] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [profile, setProfile] = useState(initialProfile);
@@ -331,7 +337,12 @@ export default function ProfilePage() {
       </div>
 
       <div className="mt-8 flex flex-col gap-3 border-t border-border pt-6 sm:flex-row sm:justify-end">
-        <Button type="button" variant="ghost" className="justify-center gap-2 rounded-full text-foreground">
+        <Button 
+          type="button" 
+          variant="ghost" 
+          onClick={logoutUser}
+          className="justify-center gap-2 rounded-full text-foreground hover:bg-destructive/10 hover:text-destructive"
+        >
           <LogOut className="h-4 w-4" />
           Log out
         </Button>
