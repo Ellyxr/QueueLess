@@ -682,7 +682,7 @@ function VendorCard({
                     className="gap-1.5 rounded-full px-3 py-1.5 text-xs"
                     onClick={(event) => {
                       event.stopPropagation();
-                      setIsExpanded(false);
+                      window.location.href = `/store/${encodeURIComponent(name)}`;
                     }}
                   >
                     View Page
