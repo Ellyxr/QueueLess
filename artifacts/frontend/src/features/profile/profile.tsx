@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  ArrowRight,
   Camera,
   Check,
   Eye,
@@ -11,12 +12,10 @@ import {
   SunMedium,
   Trash2,
   UserRound,
-  ArrowRight,
 } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Card,
   CardContent,
@@ -26,7 +25,10 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { logoutUser } from "@/features/auth/api";
+import { useRequireAuth } from "@/hooks/use-require-auth";
 
 const initialProfile = {
   fullName: "Toni Fowler",
@@ -34,6 +36,8 @@ const initialProfile = {
   phone: "1234567891",
   password: "Password123!",
 };
+
+const passwordSpecialCharPattern = /[!@#$%^&*(),.?":{}|<>_-]/;
 
 const orderHistory = [
   {
@@ -89,7 +93,66 @@ const orderHighlights = [
   },
 ];
 
+const renderOrderHighlights = () =>
+  orderHighlights.map((item, index) => (
+    <Card
+      key={item.label}
+      className={`group relative min-h-47.5 overflow-hidden rounded-[22px] border-card-border/80 shadow-sm ${item.className}`}
+    >
+      <img src={item.image} alt="" className="absolute inset-0 h-full w-full object-cover" />
+      <div
+        className={`absolute inset-0 ${
+          index === 1
+            ? "bg-linear-to-r from-primary via-primary/90 to-transparent"
+            : "bg-linear-to-r from-white via-white/95 to-transparent"
+        }`}
+      />
+      <CardContent className="relative z-10 flex h-full min-h-47.5 flex-col justify-between p-5">
+        <div className="max-w-[75%]">
+          <p
+            className={`font-mono text-[9px] uppercase tracking-[0.18em] ${
+              index === 1 ? "text-primary-foreground/70" : "text-muted-foreground"
+            }`}
+          >
+            {item.label}
+          </p>
+          <h3
+            className={`mt-3 text-xl font-semibold leading-tight tracking-[-0.04em] ${
+              index === 1 ? "text-primary-foreground" : "text-foreground"
+            }`}
+          >
+            {item.title}
+          </h3>
+          <p
+            className={`mt-1 text-xs ${
+              index === 1 ? "text-primary-foreground/75" : "text-muted-foreground"
+            }`}
+          >
+            {item.subtitle}
+          </p>
+        </div>
+
+        {(index === 0 || index === 1) && (
+          <Button
+            type="button"
+            size="sm"
+            variant={index === 1 ? "secondary" : "default"}
+            className="group/order-again relative mt-4 flex w-full items-center justify-between rounded-full px-4 transition-all duration-500 ease-in-out hover:w-full sm:w-25"
+            aria-label="Order Again"
+          >
+            <span className="absolute left-1/2 -translate-x-1/2 transition-all duration-300 ease-in-out group-hover/order-again:static group-hover/order-again:translate-x-0">
+              Order Again
+            </span>
+            <ArrowRight className="ml-auto h-4 w-4 translate-x-2 opacity-0 transition-all duration-300 ease-in-out group-hover/order-again:translate-x-0 group-hover/order-again:opacity-100" />
+          </Button>
+        )}
+      </CardContent>
+    </Card>
+  ));
+
 export default function ProfilePage() {
+  useRequireAuth();
+
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
@@ -104,7 +167,6 @@ export default function ProfilePage() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  // Password change states
   const [currentPasswordInput, setCurrentPasswordInput] = useState("");
   const [newPasswordInput, setNewPasswordInput] = useState("");
   const [confirmPasswordInput, setConfirmPasswordInput] = useState("");
@@ -120,13 +182,12 @@ export default function ProfilePage() {
   });
 
   const handleNameChange = (value: string) => {
-    // Validate: no numbers or special characters (letters and spaces only)
     const filtered = value.replace(/[^a-zA-Z\s]/g, "");
-    if (filtered !== value) {
-      setNameError("Full name cannot contain numbers or special characters.");
-    } else {
-      setNameError("");
-    }
+    setNameError(
+      filtered === value
+        ? ""
+        : "Full name cannot contain numbers or special characters.",
+    );
     setProfile((current) => ({ ...current, fullName: filtered }));
   };
 
@@ -136,44 +197,46 @@ export default function ProfilePage() {
   };
 
   const handleSave = () => {
-    // Validate passwords if changing
-    if (newPasswordInput || currentPasswordInput || confirmPasswordInput) {
-      if (currentPasswordInput !== profile.password) {
-        setPasswordMessage({
-          text: "Current password is incorrect.",
-          type: "error",
-        });
-        return;
-      }
-      if (
-        newPasswordInput.length <= 8 ||
-        !/[!@#$%^&*(),.?":{}|<>-_]/.test(newPasswordInput) ||
-        !/\d/.test(newPasswordInput)
-      ) {
-        setPasswordMessage({
-          text: "New password must be more than 8 characters, include at least 1 special character and 1 number.",
-          type: "error",
-        });
-        return;
-      }
-      if (newPasswordInput !== confirmPasswordInput) {
-        setPasswordMessage({
-          text: "Confirm password does not match new password.",
-          type: "error",
-        });
-        return;
-      }
-
-      // Success state update
-      setProfile((current) => ({ ...current, password: newPasswordInput }));
-      setPasswordMessage({
-        text: "Password successfully updated!",
-        type: "success",
-      });
-    } else {
+    if (!newPasswordInput && !currentPasswordInput && !confirmPasswordInput) {
       setPasswordMessage(null);
+      setIsEditing(false);
+      return;
     }
 
+    if (currentPasswordInput !== profile.password) {
+      setPasswordMessage({
+        text: "Current password is incorrect.",
+        type: "error",
+      });
+      return;
+    }
+
+    const isPasswordValid =
+      newPasswordInput.length > 8 &&
+      passwordSpecialCharPattern.test(newPasswordInput) &&
+      /\d/.test(newPasswordInput);
+
+    if (!isPasswordValid) {
+      setPasswordMessage({
+        text: "New password must be more than 8 characters, include at least 1 special character and 1 number.",
+        type: "error",
+      });
+      return;
+    }
+
+    if (newPasswordInput !== confirmPasswordInput) {
+      setPasswordMessage({
+        text: "Confirm password does not match new password.",
+        type: "error",
+      });
+      return;
+    }
+
+    setProfile((current) => ({ ...current, password: newPasswordInput }));
+    setPasswordMessage({
+      text: "Password successfully updated!",
+      type: "success",
+    });
     setIsEditing(false);
   };
 
@@ -181,7 +244,7 @@ export default function ProfilePage() {
   const isNewPasswordInvalid =
     newPasswordInput.length > 0 &&
     (newPasswordInput.length <= 8 ||
-      !/[!@#$%^&*(),_.?":{}|<>-]/.test(newPasswordInput) ||
+      !passwordSpecialCharPattern.test(newPasswordInput) ||
       !/\d/.test(newPasswordInput));
   const isConfirmPasswordInvalid =
     confirmPasswordInput.length > 0 &&
@@ -198,18 +261,16 @@ export default function ProfilePage() {
   if (isLoading) {
     return (
       <main className="flex min-h-[60vh] items-center justify-center px-4 py-8">
-        <div className="flex flex-col items-center justify-center gap-3 rounded-[24px] border border-border bg-card/80 px-8 py-6 shadow-sm backdrop-blur-sm">
+        <div className="flex flex-col items-center justify-center gap-3 rounded-3xl border border-border bg-card/80 px-8 py-6 shadow-sm backdrop-blur-sm">
           <Spinner className="h-8 w-8 text-primary" />
-          <p className="text-sm font-medium text-muted-foreground">
-            Loading profile...
-          </p>
+          <p className="text-sm font-medium text-muted-foreground">Loading profile...</p>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto w-full max-w-[1400px] px-4 py-8 sm:px-6 lg:px-6">
+    <main className="mx-auto w-full max-w-350 px-4 py-8 sm:px-6 lg:px-6">
       <div className="grid gap-6 xl:grid-cols-[1.5fr_0.9fr]">
         <section className="space-y-6">
           <Card className="border-card-border/80 bg-card/90 shadow-sm backdrop-blur-sm">
@@ -260,7 +321,7 @@ export default function ProfilePage() {
                 >
                   {" "}
                   {!isEditing && (
-                    <PencilLine className="mr-0 h-4 w-4 max-w-0 translate-x-[-4px] overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:mr-2 group-hover:max-w-4 group-hover:translate-x-0 group-hover:opacity-100" />
+                    <PencilLine className="mr-0 h-4 w-4 max-w-0 -translate-x-1 overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:mr-2 group-hover:max-w-4 group-hover:translate-x-0 group-hover:opacity-100" />
                   )}{" "}
                   {isEditing ? "Cancel" : "Edit profile"}{" "}
                 </Button>
@@ -272,7 +333,7 @@ export default function ProfilePage() {
             {orderHighlights.map((item, index) => (
               <Card
                 key={item.label}
-                className={`group relative min-h-[190px] overflow-hidden rounded-[22px] border-card-border/80 shadow-sm ${item.className}`}
+                className={`group relative min-h-47.5 overflow-hidden rounded-[22px] border-card-border/80 shadow-sm ${item.className}`}
               >
                 {" "}
                 {/* Placeholder food/vendor image */}{" "}
@@ -283,9 +344,9 @@ export default function ProfilePage() {
                 />{" "}
                 {/* White gradient — text remains on the solid side */}{" "}
                 <div
-                  className={`absolute inset-0 ${index === 1 ? "bg-gradient-to-r from-primary via-primary/90 to-transparent" : "bg-gradient-to-r from-white via-white/95 to-transparent"}`}
+                  className={`absolute inset-0 ${index === 1 ? "bg-linear-to-r from-primary via-primary/90 to-transparent" : "bg-linear-to-r from-white via-white/95 to-transparent"}`}
                 />{" "}
-                <CardContent className="relative z-10 flex h-full min-h-[190px] flex-col justify-between p-5">
+                <CardContent className="relative z-10 flex h-full min-h-47.5 flex-col justify-between p-5">
                   {" "}
                   <div className="max-w-[75%]">
                     {" "}
@@ -358,10 +419,11 @@ export default function ProfilePage() {
               {isEditing ? (
                 <div className="space-y-5">
                   <div className="space-y-2">
-                    <label className="text-sm font-medium text-foreground">
+                    <label htmlFor="full-name" className="text-sm font-medium text-foreground">
                       Full name
                     </label>
                     <Input
+                      id="full-name"
                       value={profile.fullName}
                       onChange={(event) => handleNameChange(event.target.value)}
                     />
@@ -374,11 +436,12 @@ export default function ProfilePage() {
 
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
-                      <label className="text-sm font-medium text-foreground">
+                      <label htmlFor="profile-email" className="text-sm font-medium text-foreground">
                         Email
                       </label>
                       <div className="relative flex items-center rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring overflow-hidden">
                         <Input
+                          id="profile-email"
                           type="text"
                           value={profile.email.split("@")[0]}
                           onChange={(e) => {
@@ -402,7 +465,7 @@ export default function ProfilePage() {
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-sm font-medium text-foreground">
+                      <label htmlFor="phoneNumber" className="text-sm font-medium text-foreground">
                         Phone number
                       </label>
                       <div className="relative flex items-center rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring overflow-hidden">
@@ -435,11 +498,12 @@ export default function ProfilePage() {
                     </h3>
 
                     <div className="space-y-2">
-                      <label className="text-xs font-medium text-foreground">
+                      <label htmlFor="current-password" className="text-xs font-medium text-foreground">
                         Current password
                       </label>
                       <div className="relative">
                         <Input
+                          id="current-password"
                           type={showCurrentPassword ? "text" : "password"}
                           value={currentPasswordInput}
                           onChange={(event) =>
@@ -466,11 +530,12 @@ export default function ProfilePage() {
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-xs font-medium text-foreground">
+                      <label htmlFor="new-password" className="text-xs font-medium text-foreground">
                         New password
                       </label>
                       <div className="relative">
                         <Input
+                          id="new-password"
                           type={showNewPassword ? "text" : "password"}
                           value={newPasswordInput}
                           onChange={(event) =>
@@ -503,11 +568,12 @@ export default function ProfilePage() {
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-xs font-medium text-foreground">
+                      <label htmlFor="confirm-password" className="text-xs font-medium text-foreground">
                         Confirm new password
                       </label>
                       <div className="relative">
                         <Input
+                          id="confirm-password"
                           type={showConfirmPassword ? "text" : "password"}
                           value={confirmPasswordInput}
                           onChange={(event) =>
@@ -604,7 +670,7 @@ export default function ProfilePage() {
                 {" "}
                 <div>
                   {" "}
-                  <CardTitle className="text-2xl tracking-[-0.05em] text-foreground">
+                  <CardTitle className="text-2xl tracking-tighter text-foreground">
                     {" "}
                     Order history{" "}
                   </CardTitle>{" "}
@@ -655,7 +721,7 @@ export default function ProfilePage() {
         <aside className="space-y-6">
           <Card className="border-card-border/80 bg-card/90 shadow-sm">
             <CardHeader className="pb-4">
-              <CardTitle className="text-2xl tracking-[-0.05em] text-foreground">
+              <CardTitle className="text-2xl tracking-tighter text-foreground">
                 App settings
               </CardTitle>
               <CardDescription>
@@ -758,10 +824,11 @@ export default function ProfilePage() {
       </div>
 
       <div className="mt-8 flex flex-col gap-3 border-t border-border pt-6 sm:flex-row sm:justify-end">
-        <Button
-          type="button"
-          variant="ghost"
-          className="justify-center gap-2 rounded-full text-foreground"
+        <Button 
+          type="button" 
+          variant="ghost" 
+          onClick={logoutUser}
+          className="justify-center gap-2 rounded-full text-foreground hover:bg-destructive/10 hover:text-destructive"
         >
           <LogOut className="h-4 w-4" />
           Log out
