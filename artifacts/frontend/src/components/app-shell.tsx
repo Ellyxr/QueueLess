@@ -41,8 +41,6 @@ export function AppShell({
   const [isLoginPage, setIsLoginPage] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
-
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -115,29 +113,34 @@ export function AppShell({
                 isSearchOpen
                   ? "pointer-events-none w-0 translate-x-4 opacity-0"
                   : "w-auto translate-x-0 opacity-100"
-              }`}
+              }`
+            }
             >
-              {["Browse", "Cart"].map((item) => (
-                <Button
-                  key={item}
-                  variant="ghost"
-                  className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
-                >
-                  <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
-                    {navIcons[item]}
-                  </span>
-                  <span>{item}</span>
-                </Button>
-              ))}
+              <Button
+                variant="ghost"
+                onClick={() => (window.location.href = "/")}
+                className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+              >
+                <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
+                  {navIcons["Browse"]}
+                </span>
+                <span>Browse</span>
+              </Button>
+
+              <Button
+                variant="ghost"
+                className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+              >
+                <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
+                  {navIcons["Cart"]}
+                </span>
+                <span>Cart</span>
+              </Button>
 
               <Button
                 variant="ghost"
                 onClick={() => setIsSearchOpen(true)}
                 className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
-                onClick={() => {
-                  if (item === "Browse") window.location.href = "/";
-                  
-                }}
               >
                 <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
                   <Search className="h-4 w-4" />
@@ -181,7 +184,6 @@ export function AppShell({
               <Search className="h-4 w-4" />
             </Button>
 
-            {/* US-006: Role-Based Navigation */}
             {(user?.role === "vendor" || user?.role === "student_vendor") && (
               <Button
                 variant="ghost"
@@ -208,7 +210,6 @@ export function AppShell({
               </Button>
             )}
 
-            {/* Search Trigger Button */}
             <Button
               variant="ghost"
               size="icon"
@@ -234,18 +235,28 @@ export function AppShell({
               >
                 <Bell className="h-4 w-4" />
               </Button>
-              {isLoggedIn ? (
-                <Button
-                  variant="secondary"
-                  className="gap-2 rounded-full px-3 py-2 sm:px-4"
-                >
-                  <UserCircle2 className="h-4 w-4" />
-                  <span>{username}</span>
-                </Button>
-              ) : (
-                <Button variant="default" className="rounded-full px-4 py-2">
-                  Log In
-                </Button>
+              {!isLoginPage && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => (window.location.href = "/profile")}
+                    className="gap-2 rounded-full px-3 py-2 sm:px-4"
+                  >
+                    <UserCircle2 className="h-4 w-4" />
+                    <span className="hidden sm:inline">
+                      {user?.fullName || username}
+                    </span>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={logoutUser}
+                    title="Log out"
+                    className="rounded-full border border-border/80 text-destructive hover:bg-destructive/10"
+                  >
+                    <LogOut className="h-4 w-4" />
+                  </Button>
+                </div>
               )}
             </div>
 
@@ -267,82 +278,6 @@ export function AppShell({
             </div>
           </div>
         </div>
-
-          <div
-            className={`absolute inset-0 flex items-center transition-all duration-300 ease-in-out ${
-              isSearchOpen
-                ? "w-full opacity-100 translate-x-0"
-                : "w-0 opacity-0 pointer-events-none translate-x-4"
-            }`}
-          >
-            <div className="relative flex w-full items-center">
-              <Search className="pointer-events-none absolute left-3.5 h-4 w-4 text-muted-foreground" />
-              <input
-                ref={searchInputRef}
-                type="text"
-                placeholder="Search products..."
-                className="w-full rounded-full border border-border/80 bg-secondary/50 py-2 pl-10 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
-              />
-              <button
-                onClick={() => setIsSearchOpen(false)}
-                className="absolute right-3 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </div>
-        </nav>
-
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setIsSearchOpen(!isSearchOpen)}
-            className="rounded-full border border-border/80 bg-background text-foreground md:hidden"
-          >
-            <Search className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="rounded-full border border-border/80 bg-background text-foreground"
-          >
-            <ShoppingBag className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="rounded-full border border-border/80 bg-background text-foreground"
-          >
-            <Bell className="h-4 w-4" />
-          </Button>
-
-          {/* Hide user session & logout button entirely when on /login page */}
-          {!isLoginPage && (
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => (window.location.href = "/profile")}
-                className="gap-2 rounded-full px-3 py-2 sm:px-4"
-              >
-                <UserCircle2 className="h-4 w-4" />
-                <span className="hidden sm:inline">
-                  {user?.fullName || username}
-                </span>
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={logoutUser}
-                title="Log out"
-                className="rounded-full border border-border/80 text-destructive hover:bg-destructive/10"
-              >
-                <LogOut className="h-4 w-4" />
-              </Button>
-            </div>
-          )}
-        </div>
-        )}
 
         {isMobileMenuOpen && (
           <div className="mt-3 space-y-2 border-t border-border/80 pt-3 md:hidden">
