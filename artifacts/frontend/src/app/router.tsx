@@ -6,6 +6,7 @@ import LoginPage from '@/pages/login';
 import MarketplacePage from '@/features/marketplace/marketplace';
 import Profile from '@/features/profile/profile';
 import Vendor from '@/features/vendor/vendor';
+import { StoreRouter } from '@/features/store/store-router';
 
 import {
   Route,
@@ -35,7 +36,7 @@ export function AppRouter() {
           <Switch>
             <Route path="/" component={MarketplaceRoute} />
             <Route path="/login" component={LoginPage} />
-            
+            <Route path="/store/:storeName" component={StoreRouter} />
             <Route path="/profile" component={Profile} />
             <Route path="/vendor" component={VendorRoute} />
             <Route component={NotFound} />
