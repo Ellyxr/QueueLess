@@ -17,7 +17,11 @@ export function MarketplacePromoCard({
 }: MarketplacePromoCardProps) {
   return (
     <div className="relative overflow-hidden rounded-[28px] border border-border/80 bg-card shadow-md">
-      <img src={image} alt={title} className="absolute inset-0 h-full w-full object-cover" />
+      <img
+        src={image}
+        alt={title}
+        className="absolute inset-0 h-full w-full object-cover"
+      />
       <div className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/35 to-black/10" />
 
       <div className="relative z-10 flex min-h-[260px] flex-col justify-between p-5 sm:p-6">
@@ -42,11 +46,11 @@ export function MarketplacePromoCard({
             </h3>
           </div>
 
-          <div className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-right backdrop-blur-sm">
-            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/70">
-              From
+          <div className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-right backdrop-blur-sm flex items-center gap-2">
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/70 pr-1 align-middle justify-center">
+              For
             </p>
-            <p className="mt-1 text-xl font-semibold text-white">
+            <p className="text-xl font-semibold text-white">
               ₱{price.toLocaleString("en-PH")}
             </p>
           </div>
