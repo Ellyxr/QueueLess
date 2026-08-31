@@ -1,9 +1,12 @@
 import {
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { VendorStatus } from '@prisma/client';
+import type { UserRole } from '../auth/roles';
+import { UpdateVendorDto } from './dto/update-vendor.dto';
 
 @Injectable()
 export class VendorsService {
@@ -42,9 +45,7 @@ export class VendorsService {
         vendorType: true,
         status: true,
         products: {
-          where: {
-            isAvailable: true,
-          },
+          where: {},
           select: {
             id: true,
             name: true,
@@ -65,5 +66,71 @@ export class VendorsService {
     }
 
     return vendor;
+  }
+
+  async updateVendorStorefront(
+    userId: string,
+    vendorId: string,
+    dto: UpdateVendorDto,
+    roles: UserRole[],
+  ) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: {
+        id: vendorId,
+      },
+      select: {
+        id: true,
+        ownerUserId: true,
+      },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found');
+    }
+
+    const isAdmin = roles.includes('ADMIN');
+    const isOwner = vendor.ownerUserId === userId;
+
+    if (!isAdmin && !isOwner) {
+      throw new ForbiddenException(
+        'You do not have permission to modify this vendor',
+      );
+    }
+
+    const data: {
+      name?: string;
+      description?: string | null;
+      campusLocation?: string | null;
+    } = {};
+
+    if (dto.name !== undefined) {
+      data.name = dto.name.trim();
+    }
+
+    if (dto.description !== undefined) {
+      data.description = dto.description.trim() || null;
+    }
+
+    if (dto.campusLocation !== undefined) {
+      data.campusLocation = dto.campusLocation.trim() || null;
+    }
+
+    return this.prisma.vendor.update({
+      where: {
+        id: vendorId,
+      },
+      data,
+      select: {
+        id: true,
+        ownerUserId: true,
+        name: true,
+        description: true,
+        campusLocation: true,
+        vendorType: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
   }
 }
