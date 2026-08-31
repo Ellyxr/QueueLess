@@ -6,6 +6,7 @@ import {
   UserCircle2,
   ShoppingCart,
   Compass,
+  Menu,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,7 @@ export function AppShell({
 }: AppShellProps) {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -69,69 +71,155 @@ export function AppShell({
       />
 
       <header
-        className={`sticky top-0 z-50 flex items-center justify-between gap-3 border border-border/80 bg-card/80 px-8 py-3 transition-all duration-300 ease-in-out sm:px-4 ${
+        className={`sticky top-0 z-50 border border-border/80 bg-card/80 px-3 py-3 transition-all duration-300 ease-in-out sm:px-4 ${
           isScrolled
-            ? "mx-auto w-[90%] rounded-[28px] shadow-lg backdrop-blur-md top-2"
+            ? "mx-auto top-2 w-[90%] rounded-[28px] shadow-lg backdrop-blur-md"
             : "w-full"
         }`}
       >
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm"> 
-            <span className="h-4 w-4 rounded-full border-[1.5px] border-current" />
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+              <span className="h-4 w-4 rounded-full border-[1.5px] border-current" />
+            </div>
+            <div className="hidden sm:block">
+              <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                QueueLess
+              </p>
+            </div>
           </div>
-          <div className="hidden sm:block">
-            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-              QueueLess
-            </p>
+
+          <nav className="relative hidden items-center justify-center md:flex md:w-[600px]">
+            <div
+              className={`flex items-center gap-2 transition-all duration-300 ease-in-out ${
+                isSearchOpen
+                  ? "pointer-events-none w-0 translate-x-4 opacity-0"
+                  : "w-auto translate-x-0 opacity-100"
+              }`}
+            >
+              {["Browse", "Cart"].map((item) => (
+                <Button
+                  key={item}
+                  variant="ghost"
+                  className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+                >
+                  <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
+                    {navIcons[item]}
+                  </span>
+                  <span>{item}</span>
+                </Button>
+              ))}
+
+              <Button
+                variant="ghost"
+                onClick={() => setIsSearchOpen(true)}
+                className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+              >
+                <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
+                  <Search className="h-4 w-4" />
+                </span>
+                <span>Search</span>
+              </Button>
+            </div>
+
+            <div
+              className={`absolute left-1/2 top-1/2 flex w-[80%] -translate-x-1/2 -translate-y-1/2 items-center transition-all duration-300 ease-out will-change-[transform,opacity] ${
+                isSearchOpen
+                  ? "pointer-events-auto opacity-100 scale-100"
+                  : "pointer-events-none opacity-0 scale-95"
+              }`}
+            >
+              <div className="relative flex w-full items-center">
+                <Search className="pointer-events-none absolute left-3.5 h-4 w-4 text-muted-foreground" />
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  placeholder="Search products..."
+                  className="w-full rounded-full border border-border/80 bg-secondary/50 py-2 pl-10 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
+                <button
+                  onClick={() => setIsSearchOpen(false)}
+                  className="absolute right-3 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          </nav>
+
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setIsSearchOpen(!isSearchOpen)}
+              className="rounded-full border border-border/80 bg-background text-foreground md:hidden"
+            >
+              <Search className="h-4 w-4" />
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setIsMobileMenuOpen((current) => !current)}
+              className="rounded-full border border-border/80 bg-background text-foreground md:hidden"
+              aria-label="Toggle menu"
+            >
+              <Menu className="h-4 w-4" />
+            </Button>
+
+            <div className="hidden items-center gap-2 md:flex">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full border border-border/80 bg-background text-foreground"
+              >
+                <ShoppingBag className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full border border-border/80 bg-background text-foreground"
+              >
+                <Bell className="h-4 w-4" />
+              </Button>
+              {isLoggedIn ? (
+                <Button
+                  variant="secondary"
+                  className="gap-2 rounded-full px-3 py-2 sm:px-4"
+                >
+                  <UserCircle2 className="h-4 w-4" />
+                  <span>{username}</span>
+                </Button>
+              ) : (
+                <Button variant="default" className="rounded-full px-4 py-2">
+                  Log In
+                </Button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 md:hidden">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full border border-border/80 bg-background text-foreground"
+              >
+                <ShoppingBag className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full border border-border/80 bg-background text-foreground"
+              >
+                <Bell className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
 
-        {/* Navigation / Expanding Search Bar */}
-        <nav className="relative flex items-center justify-center md:w-[600px]">
-          {/* Normal Nav Items */}
-          <div
-            className={`flex items-center gap-2 transition-all duration-300 ease-in-out ${
-              isSearchOpen
-                ? "w-0 opacity-0 pointer-events-none -translate-x-4"
-                : "w-auto opacity-100 translate-x-0"
-            }`}
-          >
-            {["Browse", "Cart"].map((item) => (
-              <Button
-                key={item}
-                variant="ghost"
-                className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
-              >
-                <span className="w-0 -translate-x-2 opacity-0 overflow-hidden transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100 flex items-center shrink-0">
-                  {navIcons[item]}
-                </span>
-                <span>{item}</span>
-              </Button>
-            ))}
-
-            {/* Search Trigger Button */}
-            <Button
-              variant="ghost"
-              onClick={() => setIsSearchOpen(true)}
-              className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
-            >
-              <span className="w-0 -translate-x-2 opacity-0 overflow-hidden transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100 flex items-center shrink-0">
-                <Search className="h-4 w-4" />
-              </span>
-              <span>Search</span>
-            </Button>
-          </div>
-
-          {/* Expanded Search Input Field */}
-          <div
-            className={`absolute inset-0 flex items-center transition-all duration-300 ease-in-out ${
-              isSearchOpen
-                ? "w-full opacity-100 translate-x-0"
-                : "w-0 opacity-0 pointer-events-none translate-x-4"
-            }`}
-          >
+        {isSearchOpen && (
+          <div className="mt-3 md:hidden">
             <div className="relative flex w-full items-center">
-              <Search className="absolute left-3.5 h-4 w-4 text-muted-foreground pointer-events-none" />
+              <Search className="pointer-events-none absolute left-3.5 h-4 w-4 text-muted-foreground" />
               <input
                 ref={searchInputRef}
                 type="text"
@@ -146,46 +234,49 @@ export function AppShell({
               </button>
             </div>
           </div>
-        </nav>
+        )}
 
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setIsSearchOpen(!isSearchOpen)}
+        {isMobileMenuOpen && (
+          <div className="mt-3 space-y-2 border-t border-border/80 pt-3 md:hidden">
+            {[
+              { label: "Browse", icon: Compass },
+              { label: "Cart", icon: ShoppingCart },
+              { label: "Search", icon: Search },
+            ].map(({ label, icon: Icon }) => (
+              <Button
+                key={label}
+                variant="ghost"
+                onClick={() => {
+                  if (label === "Search") {
+                    setIsSearchOpen(true);
+                  }
+                  setIsMobileMenuOpen(false);
+                }}
+                className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2 text-left font-medium"
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </Button>
+            ))}
 
-            className="rounded-full border border-border/80 bg-background text-foreground md:hidden"
-          >
-            <Search className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="rounded-full border border-border/80 bg-background text-foreground"
-          >
-            <ShoppingBag className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="rounded-full border border-border/80 bg-background text-foreground"
-          >
-            <Bell className="h-4 w-4" />
-          </Button>
-          {isLoggedIn ? (
-            <Button
-              variant="secondary"
-              className="gap-2 rounded-full px-3 py-2 sm:px-4"
-            >
-              <UserCircle2 className="h-4 w-4" />
-              <span className="hidden sm:inline">{username}</span>
-            </Button>
-          ) : (
-            <Button variant="default" className="rounded-full px-4 py-2">
-              Log In
-            </Button>
-          )}
-        </div>
+            {isLoggedIn ? (
+              <Button
+                variant="secondary"
+                className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2"
+              >
+                <UserCircle2 className="h-4 w-4" />
+                {username}
+              </Button>
+            ) : (
+              <Button
+                variant="default"
+                className="w-full rounded-full px-4 py-2"
+              >
+                Log In
+              </Button>
+            )}
+          </div>
+        )}
       </header>
 
       <div className="relative z-10 mt-4">{children}</div>
