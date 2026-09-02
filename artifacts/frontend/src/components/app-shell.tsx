@@ -37,6 +37,7 @@ export function AppShell({
 }: AppShellProps) {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchVal, setSearchVal] = useState("");
   const [user, setUser] = useState<User | null>(null);
   const [isLoginPage, setIsLoginPage] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -46,6 +47,13 @@ export function AppShell({
   useEffect(() => {
     if (typeof window !== "undefined") {
       setIsLoginPage(window.location.pathname === "/login");
+      
+      // Auto populate search input from URL search params if present
+      const params = new URLSearchParams(window.location.search);
+      const query = params.get("search");
+      if (query) {
+        setSearchVal(query);
+      }
     }
 
     const storedUser = localStorage.getItem("user");
@@ -79,6 +87,21 @@ export function AppShell({
     }
   }, [isSearchOpen]);
 
+  // US-011: Handle dynamic URL updates on Search
+  const handleSearchChange = (value: string) => {
+    setSearchVal(value);
+    const url = new URL(window.location.href);
+    if (value.trim()) {
+      url.searchParams.set("search", value);
+    } else {
+      url.searchParams.delete("search");
+    }
+    window.history.replaceState({}, "", url.toString());
+    
+    // Trigger custom event so page listens to instant input updates
+    window.dispatchEvent(new Event("popstate"));
+  };
+
   return (
     <div className="foundation-noise relative min-h-[100dvh] bg-background">
       <div className="foundation-grid pointer-events-none absolute inset-x-0 top-0 h-[620px] opacity-80" />
@@ -96,7 +119,7 @@ export function AppShell({
         }`}
       >
         <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => (window.location.href = "/")}>
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
               <span className="h-4 w-4 rounded-full border-[1.5px] border-current" />
             </div>
@@ -113,8 +136,7 @@ export function AppShell({
                 isSearchOpen
                   ? "pointer-events-none w-0 translate-x-4 opacity-0"
                   : "w-auto translate-x-0 opacity-100"
-              }`
-            }
+              }`}
             >
               <Button
                 variant="ghost"
@@ -161,11 +183,16 @@ export function AppShell({
                 <input
                   ref={searchInputRef}
                   type="text"
+                  value={searchVal}
+                  onChange={(e) => handleSearchChange(e.target.value)}
                   placeholder="Search products..."
                   className="w-full rounded-full border border-border/80 bg-secondary/50 py-2 pl-10 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
                 <button
-                  onClick={() => setIsSearchOpen(false)}
+                  onClick={() => {
+                    handleSearchChange("");
+                    setIsSearchOpen(false);
+                  }}
                   className="absolute right-3 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -292,6 +319,8 @@ export function AppShell({
                 onClick={() => {
                   if (label === "Search") {
                     setIsSearchOpen(true);
+                  } else if (label === "Browse") {
+                    window.location.href = "/";
                   }
                   setIsMobileMenuOpen(false);
                 }}
@@ -305,6 +334,7 @@ export function AppShell({
             {isLoggedIn ? (
               <Button
                 variant="secondary"
+                onClick={() => (window.location.href = "/profile")}
                 className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2"
               >
                 <UserCircle2 className="h-4 w-4" />
@@ -313,6 +343,7 @@ export function AppShell({
             ) : (
               <Button
                 variant="default"
+                onClick={() => (window.location.href = "/login")}
                 className="w-full rounded-full px-4 py-2"
               >
                 Log In
