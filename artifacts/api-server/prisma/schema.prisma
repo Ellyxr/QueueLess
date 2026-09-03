@@ -311,6 +311,7 @@ model Vendor {
   id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   ownerUserId    String       @unique @db.Uuid
   name           String
+  businessName   String?
   description    String?
   campusLocation String?
   vendorType     VendorType
@@ -329,6 +330,7 @@ model Vendor {
   reportsTargeting     Report[]                    @relation("ReportTargetVendor")
 
   @@index([ownerUserId])
+  @@index([status])
   @@map("vendors")
 }
 
