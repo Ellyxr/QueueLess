@@ -25,6 +25,7 @@ import {
   Milk,
   Sun,
   Cookie,
+  SearchX,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -34,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
+import { listVendors, type VendorStorefront } from "@/features/auth/api";
 
 const categories = [
   "Pizza",
@@ -510,40 +512,53 @@ const vendorMenuItems: Record<string, Array<{ image: string; name: string; flavo
   ],
 };
 
-function FoodCardSkeleton({ compact = false }: { compact?: boolean }) {
-  return (
-    <div
-      className={cn(
-        "rounded-[20px] border border-border bg-card p-3 shadow-sm",
-        compact && "p-2.5",
-      )}
-    >
-      <div className="animate-pulse">
-        <div className="mb-3 h-24 rounded-[16px] bg-muted" />
-        <div className="mb-2 h-3 w-20 rounded-full bg-muted" />
-        <div className="h-4 w-32 rounded-full bg-muted" />
-        <div className="mt-4 flex items-center justify-between">
-          <div className="h-3 w-16 rounded-full bg-muted" />
-          <div className="h-3 w-14 rounded-full bg-muted" />
-        </div>
-      </div>
-    </div>
-  );
+type MarketplaceVendor = {
+  id: string;
+  name: string;
+  type: string;
+  description: string;
+  campusLocation: string;
+  vendorType: string;
+  eta: string;
+  rating: number;
+  menuItems: Array<{ image: string; name: string; flavorProfile: string; price: number }>;
+};
+
+function toMarketplaceVendor(vendor: VendorStorefront): MarketplaceVendor {
+  return {
+    id: vendor.id,
+    name: vendor.name,
+    type: vendor.description || (vendor.vendorType === "STUDENT" ? "Student vendor" : "Campus vendor"),
+    description: vendor.description || "Fresh food from a local vendor.",
+    campusLocation: vendor.campusLocation || "Campus",
+    vendorType: vendor.vendorType,
+    eta: "15-25 min",
+    rating: 5,
+    menuItems: (vendor.products || [])
+      .filter((product) => product.isAvailable)
+      .map((product) => ({
+        image: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80",
+        name: product.name,
+        flavorProfile: product.description,
+        price: Number(product.price),
+      })),
+  };
 }
 
 function VendorCard({
+  menuItems,
   name,
   eta,
   rating,
   type,
 }: {
+  menuItems: Array<{ image: string; name: string; flavorProfile: string; price: number }>;
   name: string;
   eta: string;
   rating: number;
   type: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const menuItems = vendorMenuItems[name] ?? [];
   const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -605,8 +620,20 @@ function VendorCard({
                 className="space-y-3 p-4"
               >
                 <div className="grid grid-cols-2 gap-2">
-                  <FoodCardSkeleton compact />
-                  <FoodCardSkeleton compact />
+                  {menuItems.slice(0, 2).map((item) => (
+                    <StoreItemCard
+                      key={item.name}
+                      image={item.image}
+                      name={item.name}
+                      flavorProfile={item.flavorProfile}
+                      price={item.price}
+                    />
+                  ))}
+                  {menuItems.length === 0 && (
+                    <div className="col-span-2 flex min-h-28 items-center justify-center rounded-[20px] border border-dashed border-border bg-card p-3 text-center text-xs text-muted-foreground">
+                      No menu items available
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-between text-sm text-muted-foreground">
@@ -706,12 +733,84 @@ export default function MarketplacePage({
 }) {
   const [showAllCategories, setShowAllCategories] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [marketplaceVendors, setMarketplaceVendors] = useState<MarketplaceVendor[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  
+  // US-011: Search and Category Filter States
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+
   const visibleCategories = showAllCategories ? categories : categories.slice(0, 8);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setIsLoading(false), 700);
-    return () => window.clearTimeout(timer);
+    let isMounted = true;
+
+    listVendors()
+      .then((vendors) => {
+        if (isMounted) setMarketplaceVendors(vendors.map(toMarketplaceVendor));
+      })
+      .catch((error: unknown) => {
+        if (isMounted) setLoadError(error instanceof Error ? error.message : "Unable to load vendors.");
+      })
+      .finally(() => {
+        if (isMounted) setIsLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
+
+  // US-011: Sync search query with URL parameter set by AppShell navbar
+  useEffect(() => {
+    const updateSearchFromUrl = () => {
+      const params = new URLSearchParams(window.location.search);
+      setSearchQuery(params.get("search") || "");
+    };
+
+    updateSearchFromUrl();
+    window.addEventListener("popstate", updateSearchFromUrl);
+    return () => window.removeEventListener("popstate", updateSearchFromUrl);
+  }, []);
+
+  // Filter helper logic for US-011
+  const matchesFilter = (vendor: MarketplaceVendor) => {
+    const q = searchQuery.toLowerCase().trim();
+    const cat = selectedCategory?.toLowerCase() || "";
+
+    const menuItems = vendor.menuItems;
+    const hasMatchingMenuItem = menuItems.some(
+      (item) =>
+        item.name.toLowerCase().includes(q) ||
+        item.flavorProfile.toLowerCase().includes(q)
+    );
+
+    const matchesQuery =
+      !q ||
+      vendor.name.toLowerCase().includes(q) ||
+      vendor.type.toLowerCase().includes(q) ||
+      hasMatchingMenuItem;
+
+    const matchesCategory =
+      !selectedCategory ||
+      vendor.type.toLowerCase().includes(cat) ||
+      vendor.name.toLowerCase().includes(cat) ||
+      menuItems.some(
+        (item) =>
+          item.name.toLowerCase().includes(cat) ||
+          item.flavorProfile.toLowerCase().includes(cat)
+      );
+
+    return matchesQuery && matchesCategory;
+  };
+
+  const filteredFeatured = marketplaceVendors
+    .filter((vendor) => vendor.vendorType !== "STUDENT")
+    .filter(matchesFilter);
+  const filteredLocal = marketplaceVendors
+    .filter((vendor) => vendor.vendorType === "STUDENT")
+    .filter(matchesFilter);
+  const hasResults = filteredFeatured.length > 0 || filteredLocal.length > 0;
 
   if (isLoading) {
     return (
@@ -726,10 +825,22 @@ export default function MarketplacePage({
     );
   }
 
+  if (loadError) {
+    return (
+      <main className="mx-auto flex min-h-[60vh] w-full max-w-[1440px] items-center justify-center px-4 py-10">
+        <div className="rounded-3xl border border-destructive/30 bg-card p-8 text-center shadow-sm">
+          <h1 className="text-xl font-semibold text-foreground">Marketplace unavailable</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{loadError}</p>
+        </div>
+      </main>
+    );
+  }
+
   return (
-    <main className="mx-auto w-full max-w-[1440px] px-4 pb-14 pt-4 sm:px-6 lg:px-10">
+    <main className="mx-auto w-full max-w-[1340px] px-4 pb-14 pt-4 sm:px-6 lg:px-10">
       <div className="rounded-[28px] border border-border/80 bg-background/80 p-3 shadow-sm backdrop-blur-sm sm:p-4">
-        <section className="mt-6 space-y-6">
+        
+        <section className="mt-4 space-y-6">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div className="max-w-2xl">
               <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -739,7 +850,7 @@ export default function MarketplacePage({
                 Hello, 
                 <span className="pl-2 text-primary">
                   {username}
-                  </span>
+                </span>
               </h1>
             </div>
 
@@ -758,6 +869,7 @@ export default function MarketplacePage({
           />
         </section>
 
+        {/* US-011: Category Filters Section */}
         <section className="mt-8">
           <div className="mb-4 flex items-center justify-between">
             <div>
@@ -791,103 +903,152 @@ export default function MarketplacePage({
                 : "grid-cols-2 sm:grid-cols-4 lg:grid-cols-8",
             )}
           >
-            {visibleCategories.map((category) => (
-              <button
-                key={category}
-                type="button"
-                className={cn(
-                  "group flex items-center gap-2 rounded-full border border-border bg-card p-2.5 text-left shadow-sm transition-all duration-300 ease-out hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md",
-                  showAllCategories ? "justify-start" : "justify-center",
-                )}
-              >
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary transition-transform duration-300 group-hover:scale-110">
-                  {categoryIcons[category] || <Utensils className="h-4 w-4" />}
-                </div>
-                <p className="text-sm font-medium text-card-foreground">
-                  {category}
-                </p>
-              </button>
-            ))}
+            {visibleCategories.map((category) => {
+              const isSelected = selectedCategory === category;
+              return (
+                <button
+                  key={category}
+                  type="button"
+                  onClick={() =>
+                    setSelectedCategory(isSelected ? null : category)
+                  }
+                  className={cn(
+                    "group flex items-center gap-2 rounded-full border border-border bg-card p-2.5 text-left shadow-sm transition-all duration-300 ease-out hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md",
+                    showAllCategories ? "justify-start" : "justify-center",
+                    isSelected && "border-primary bg-primary/10 ring-1 ring-primary/40"
+                  )}
+                >
+                  <div
+                    className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary transition-transform duration-300 group-hover:scale-110",
+                      isSelected && "bg-primary text-primary-foreground"
+                    )}
+                  >
+                    {categoryIcons[category] || <Utensils className="h-4 w-4" />}
+                  </div>
+                  <p
+                    className={cn(
+                      "text-sm font-medium text-card-foreground",
+                      isSelected && "font-semibold text-primary"
+                    )}
+                  >
+                    {category}
+                  </p>
+                </button>
+              );
+            })}
           </div>
         </section>
 
-        <section className="mt-10 space-y-8">
-          <div>
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                  Sampaloc Lane
-                </p>
-                <h3 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">
-                  Vendor picks
-                </h3>
-              </div>
-              <div className="flex items-center gap-3">
-                <Sparkles className="h-4 w-4 text-primary" />
-                <Button variant="ghost" className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-secondary">
-                  View all
-                </Button>
-              </div>
+        {/* US-011: Results or No-Results View */}
+        {!hasResults ? (
+          <div className="my-12 flex flex-col items-center justify-center rounded-3xl border border-dashed border-border p-10 text-center">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+              <SearchX className="h-8 w-8" />
             </div>
+            <h4 className="mt-4 text-xl font-bold tracking-tight text-foreground">
+              No food or vendors found
+            </h4>
+            <p className="mt-1 text-sm text-muted-foreground max-w-md">
+              We couldn't find anything matching "{searchQuery || selectedCategory}". Try searching for something else or clear your filters.
+            </p>
+            <Button
+              variant="outline"
+              onClick={() => {
+                const url = new URL(window.location.href);
+                url.searchParams.delete("search");
+                window.history.replaceState({}, "", url.toString());
+                setSearchQuery("");
+                setSelectedCategory(null);
+              }}
+              className="mt-6 rounded-full px-6"
+            >
+              Clear Search & Filters
+            </Button>
+          </div>
+        ) : (
+          <section className="mt-10 space-y-8">
+            {filteredFeatured.length > 0 && (
+              <div>
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                      Sampaloc Lane
+                    </p>
+                    <h3 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">
+                      Vendor picks
+                    </h3>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                    <Button variant="ghost" className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-secondary">
+                      View all
+                    </Button>
+                  </div>
+                </div>
 
-            <div className="md:hidden">
-              <div className="overflow-x-auto pb-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                <div className="flex min-w-[980px] gap-4">
-                  {featuredVendors.map((vendor) => (
-                    <div key={vendor.name} className="w-[220px] min-w-[220px] flex-none">
-                      <VendorCard {...vendor} />
+                <div className="md:hidden">
+                  <div className="overflow-x-auto pb-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                    <div className="flex min-w-[980px] gap-4">
+                      {filteredFeatured.map((vendor) => (
+                        <div key={vendor.name} className="w-[220px] min-w-[220px] flex-none">
+                          <VendorCard {...vendor} />
+                        </div>
+                      ))}
                     </div>
+                  </div>
+                </div>
+
+                <div className="hidden md:grid md:grid-cols-4 md:gap-4 [grid-auto-flow:dense]">
+                  {filteredFeatured.map((vendor) => (
+                    <VendorCard key={vendor.name} {...vendor} />
                   ))}
                 </div>
               </div>
-            </div>
+            )}
 
-            <div className="hidden md:grid md:grid-cols-4 md:gap-4 [grid-auto-flow:dense]">
-              {featuredVendors.map((vendor) => (
-                <VendorCard key={vendor.name} {...vendor} />
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div className="mb-4 flex items-center justify-between">
+            {filteredLocal.length > 0 && (
               <div>
-                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                  Student vendors
-                </p>
-                <h3 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">
-                  Quick bites
-                </h3>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="rounded-full bg-secondary px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-secondary-foreground">
-                  24/7
-                </span>
-                <Button variant="ghost" className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-secondary">
-                  View all
-                </Button>
-              </div>
-            </div>
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                      Student vendors
+                    </p>
+                    <h3 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">
+                      Quick bites
+                    </h3>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="rounded-full bg-secondary px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-secondary-foreground">
+                      24/7
+                    </span>
+                    <Button variant="ghost" className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-secondary">
+                      View all
+                    </Button>
+                  </div>
+                </div>
 
-            <div className="md:hidden">
-              <div className="overflow-x-auto pb-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                <div className="flex min-w-[980px] gap-4">
-                  {localVendors.map((vendor) => (
-                    <div key={vendor.name} className="w-[220px] min-w-[220px] flex-none">
-                      <VendorCard {...vendor} />
+                <div className="md:hidden">
+                  <div className="overflow-x-auto pb-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                    <div className="flex min-w-[980px] gap-4">
+                      {filteredLocal.map((vendor) => (
+                        <div key={vendor.name} className="w-[220px] min-w-[220px] flex-none">
+                          <VendorCard {...vendor} />
+                        </div>
+                      ))}
                     </div>
+                  </div>
+                </div>
+
+                <div className="hidden md:grid md:grid-cols-4 md:gap-4 [grid-auto-flow:dense]">
+                  {filteredLocal.map((vendor) => (
+                    <VendorCard key={vendor.name} {...vendor} />
                   ))}
                 </div>
               </div>
-            </div>
-
-            <div className="hidden md:grid md:grid-cols-4 md:gap-4 [grid-auto-flow:dense]">
-              {localVendors.map((vendor) => (
-                <VendorCard key={vendor.name} {...vendor} />
-              ))}
-            </div>
-          </div>
-        </section>
+            )}
+          </section>
+        )}
       </div>
     </main>
   );
