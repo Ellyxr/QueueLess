@@ -22,6 +22,7 @@ import {
   setActivePortal,
   type Portal,
 } from "@/features/auth/api";
+import { CART_CHANGED_EVENT, getCartItems } from "@/features/cart/cart";
 
 interface AppShellProps {
   children: ReactNode;
@@ -49,6 +50,7 @@ export function AppShell({
   const [activePortal, setActivePortalState] = useState<Portal>("buyer");
   const [isLoginPage, setIsLoginPage] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [cartCount, setCartCount] = useState(() => getCartItems().reduce((sum, item) => sum + item.quantity, 0));
   const searchInputRef = useRef<HTMLInputElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
@@ -74,16 +76,24 @@ export function AppShell({
     window.addEventListener(AUTH_STATE_CHANGED_EVENT, syncAuthState);
     window.addEventListener(PORTAL_CHANGED_EVENT, syncAuthState);
     window.addEventListener("popstate", syncAuthState);
+    const syncCart = () => setCartCount(getCartItems().reduce((sum, item) => sum + item.quantity, 0));
+    window.addEventListener(CART_CHANGED_EVENT, syncCart);
     return () => {
       window.removeEventListener(AUTH_STATE_CHANGED_EVENT, syncAuthState);
       window.removeEventListener(PORTAL_CHANGED_EVENT, syncAuthState);
       window.removeEventListener("popstate", syncAuthState);
+      window.removeEventListener(CART_CHANGED_EVENT, syncCart);
     };
   }, []);
 
   const isExternalVendor = user?.role === "vendor";
   const isStudentVendor = user?.role === "student_vendor";
   const isVendorPortal = isExternalVendor || (isStudentVendor && activePortal === "vendor");
+  const showCartBadge =
+    !isLoginPage &&
+    user !== null &&
+    Boolean(localStorage.getItem("token")) &&
+    cartCount > 0;
 
   const switchPortal = (portal: Portal) => {
     setActivePortal(portal);
@@ -198,12 +208,13 @@ export function AppShell({
                   <Button
                     data-cart-target
                     variant="ghost"
+                    onClick={() => (window.location.href = "/cart")}
                     className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
                   >
                     <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
                       {navIcons["Cart"]}
                     </span>
-                    <span>Cart</span>
+                    <span className="relative">Cart{showCartBadge && <span className="absolute -right-4 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">{cartCount > 9 ? "9+" : cartCount}</span>}</span>
                   </Button>
 
                   <Button
@@ -386,6 +397,8 @@ export function AppShell({
                 onClick={() => {
                   if (label === "Search") {
                     setIsSearchOpen(true);
+                  } else if (label === "Cart") {
+                    window.location.href = "/cart";
                   } else if (label === "Browse" || label === "Home") {
                     window.location.href = "/";
                   } else if (label === "Profile") {
@@ -396,7 +409,7 @@ export function AppShell({
                 className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2 text-left font-medium"
               >
                 <Icon className="h-4 w-4" />
-                {label}
+                <span className="relative">{label}{label === "Cart" && showCartBadge && <span className="absolute -right-5 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">{cartCount > 9 ? "9+" : cartCount}</span>}</span>
               </Button>
             ))}
 
