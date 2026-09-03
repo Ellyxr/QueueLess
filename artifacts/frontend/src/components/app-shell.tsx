@@ -3,6 +3,7 @@ import {
   Search,
   ShoppingBag,
   Bell,
+  Inbox,
   UserCircle2,
   ShoppingCart,
   Compass,
@@ -14,7 +15,14 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { User } from "@/types/auth";
-import { logoutUser } from "@/features/auth/api";
+import {
+  AUTH_STATE_CHANGED_EVENT,
+  PORTAL_CHANGED_EVENT,
+  logoutUser,
+  setActivePortal,
+  type Portal,
+} from "@/features/auth/api";
+import { CART_CHANGED_EVENT, getCartItems } from "@/features/cart/cart";
 
 interface AppShellProps {
   children: ReactNode;
@@ -37,26 +45,60 @@ export function AppShell({
 }: AppShellProps) {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchVal, setSearchVal] = useState("");
   const [user, setUser] = useState<User | null>(null);
+  const [activePortal, setActivePortalState] = useState<Portal>("buyer");
   const [isLoginPage, setIsLoginPage] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [cartCount, setCartCount] = useState(() => getCartItems().reduce((sum, item) => sum + item.quantity, 0));
   const searchInputRef = useRef<HTMLInputElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    const syncAuthState = () => {
       setIsLoginPage(window.location.pathname === "/login");
-    }
-
-    const storedUser = localStorage.getItem("user");
-    if (storedUser) {
+      const storedUser = localStorage.getItem("user");
       try {
-        setUser(JSON.parse(storedUser));
+        setUser(storedUser ? JSON.parse(storedUser) : null);
       } catch (e) {
         console.error("Failed to parse user session", e);
+        setUser(null);
       }
-    }
+
+      const storedPortal = localStorage.getItem("active-portal");
+      setActivePortalState(storedPortal === "vendor" ? "vendor" : "buyer");
+
+      const params = new URLSearchParams(window.location.search);
+      setSearchVal(params.get("search") || "");
+    };
+
+    syncAuthState();
+    window.addEventListener(AUTH_STATE_CHANGED_EVENT, syncAuthState);
+    window.addEventListener(PORTAL_CHANGED_EVENT, syncAuthState);
+    window.addEventListener("popstate", syncAuthState);
+    const syncCart = () => setCartCount(getCartItems().reduce((sum, item) => sum + item.quantity, 0));
+    window.addEventListener(CART_CHANGED_EVENT, syncCart);
+    return () => {
+      window.removeEventListener(AUTH_STATE_CHANGED_EVENT, syncAuthState);
+      window.removeEventListener(PORTAL_CHANGED_EVENT, syncAuthState);
+      window.removeEventListener("popstate", syncAuthState);
+      window.removeEventListener(CART_CHANGED_EVENT, syncCart);
+    };
   }, []);
+
+  const isExternalVendor = user?.role === "vendor";
+  const isStudentVendor = user?.role === "student_vendor";
+  const isVendorPortal = isExternalVendor || (isStudentVendor && activePortal === "vendor");
+  const showCartBadge =
+    !isLoginPage &&
+    user !== null &&
+    Boolean(localStorage.getItem("token")) &&
+    cartCount > 0;
+
+  const switchPortal = (portal: Portal) => {
+    setActivePortal(portal);
+    window.location.href = portal === "vendor" ? "/vendor" : "/";
+  };
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -79,6 +121,21 @@ export function AppShell({
     }
   }, [isSearchOpen]);
 
+  // US-011: Handle dynamic URL updates on Search
+  const handleSearchChange = (value: string) => {
+    setSearchVal(value);
+    const url = new URL(window.location.href);
+    if (value.trim()) {
+      url.searchParams.set("search", value);
+    } else {
+      url.searchParams.delete("search");
+    }
+    window.history.replaceState({}, "", url.toString());
+    
+    // Trigger custom event so page listens to instant input updates
+    window.dispatchEvent(new Event("popstate"));
+  };
+
   return (
     <div className="foundation-noise relative min-h-[100dvh] bg-background">
       <div className="foundation-grid pointer-events-none absolute inset-x-0 top-0 h-[620px] opacity-80" />
@@ -96,9 +153,10 @@ export function AppShell({
         }`}
       >
         <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-              <span className="h-4 w-4 rounded-full border-[1.5px] border-current" />
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => (window.location.href = "/")}>
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl text-primary-foreground">
+             
+              <img src="/favicon.svg" alt="logo" />
             </div>
             <div className="hidden sm:block">
               <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
@@ -113,40 +171,64 @@ export function AppShell({
                 isSearchOpen
                   ? "pointer-events-none w-0 translate-x-4 opacity-0"
                   : "w-auto translate-x-0 opacity-100"
-              }`
-            }
+              }`}
             >
-              <Button
-                variant="ghost"
-                onClick={() => (window.location.href = "/")}
-                className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
-              >
-                <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
-                  {navIcons["Browse"]}
-                </span>
-                <span>Browse</span>
-              </Button>
+              {isVendorPortal ? (
+                [
+                  { label: "Home", icon: navIcons["Browse"], onClick: () => (window.location.href = "/") },
+                  { label: "Transactions", icon: <ShoppingBag className="h-4 w-4" /> },
+                  { label: "Inbox", icon: <Inbox className="h-4 w-4" /> },
+                  { label: "Profile", icon: <UserCircle2 className="h-4 w-4" />, onClick: () => (window.location.href = "/profile") },
+                ].map(({ label, icon, onClick }) => (
+                  <Button
+                    key={label}
+                    variant="ghost"
+                    onClick={onClick}
+                    className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+                  >
+                    <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
+                      {icon}
+                    </span>
+                    <span>{label}</span>
+                  </Button>
+                ))
+              ) : (
+                <>
+                  <Button
+                    variant="ghost"
+                    onClick={() => (window.location.href = "/")}
+                    className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+                  >
+                    <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
+                      {navIcons["Browse"]}
+                    </span>
+                    <span>Browse</span>
+                  </Button>
 
-              <Button
-                variant="ghost"
-                className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
-              >
-                <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
-                  {navIcons["Cart"]}
-                </span>
-                <span>Cart</span>
-              </Button>
+                  <Button
+                    data-cart-target
+                    variant="ghost"
+                    onClick={() => (window.location.href = "/cart")}
+                    className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+                  >
+                    <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
+                      {navIcons["Cart"]}
+                    </span>
+                    <span className="relative">Cart{showCartBadge && <span className="absolute -right-4 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">{cartCount > 9 ? "9+" : cartCount}</span>}</span>
+                  </Button>
 
-              <Button
-                variant="ghost"
-                onClick={() => setIsSearchOpen(true)}
-                className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
-              >
-                <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
-                  <Search className="h-4 w-4" />
-                </span>
-                <span>Search</span>
-              </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => setIsSearchOpen(true)}
+                    className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+                  >
+                    <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
+                      <Search className="h-4 w-4" />
+                    </span>
+                    <span>Search</span>
+                  </Button>
+                </>
+              )}
             </div>
 
             <div
@@ -161,11 +243,16 @@ export function AppShell({
                 <input
                   ref={searchInputRef}
                   type="text"
+                  value={searchVal}
+                  onChange={(e) => handleSearchChange(e.target.value)}
                   placeholder="Search products..."
                   className="w-full rounded-full border border-border/80 bg-secondary/50 py-2 pl-10 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
                 <button
-                  onClick={() => setIsSearchOpen(false)}
+                  onClick={() => {
+                    handleSearchChange("");
+                    setIsSearchOpen(false);
+                  }}
                   className="absolute right-3 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -184,7 +271,7 @@ export function AppShell({
               <Search className="h-4 w-4" />
             </Button>
 
-            {(user?.role === "vendor" || user?.role === "student_vendor") && (
+            {isExternalVendor && (
               <Button
                 variant="ghost"
                 onClick={() => (window.location.href = "/vendor")}
@@ -194,6 +281,16 @@ export function AppShell({
                   {navIcons["Vendor"]}
                 </span>
                 <span>Vendor Portal</span>
+              </Button>
+            )}
+
+            {isStudentVendor && (
+              <Button
+                variant="ghost"
+                onClick={() => switchPortal(isVendorPortal ? "buyer" : "vendor")}
+                className="rounded-full px-4 py-2 font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+              >
+                {isVendorPortal ? "Buyer Portal" : "Vendor Portal"}
               </Button>
             )}
 
@@ -281,30 +378,45 @@ export function AppShell({
 
         {isMobileMenuOpen && (
           <div className="mt-3 space-y-2 border-t border-border/80 pt-3 md:hidden">
-            {[
-              { label: "Browse", icon: Compass },
-              { label: "Cart", icon: ShoppingCart },
-              { label: "Search", icon: Search },
-            ].map(({ label, icon: Icon }) => (
+            {(isVendorPortal
+              ? [
+                  { label: "Home", icon: Compass },
+                  { label: "Transactions", icon: ShoppingBag },
+                  { label: "Inbox", icon: Inbox },
+                  { label: "Profile", icon: UserCircle2 },
+                ]
+              : [
+                  { label: "Browse", icon: Compass },
+                  { label: "Cart", icon: ShoppingCart },
+                  { label: "Search", icon: Search },
+                ]
+            ).map(({ label, icon: Icon }) => (
               <Button
                 key={label}
                 variant="ghost"
                 onClick={() => {
                   if (label === "Search") {
                     setIsSearchOpen(true);
+                  } else if (label === "Cart") {
+                    window.location.href = "/cart";
+                  } else if (label === "Browse" || label === "Home") {
+                    window.location.href = "/";
+                  } else if (label === "Profile") {
+                    window.location.href = "/profile";
                   }
                   setIsMobileMenuOpen(false);
                 }}
                 className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2 text-left font-medium"
               >
                 <Icon className="h-4 w-4" />
-                {label}
+                <span className="relative">{label}{label === "Cart" && showCartBadge && <span className="absolute -right-5 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">{cartCount > 9 ? "9+" : cartCount}</span>}</span>
               </Button>
             ))}
 
             {isLoggedIn ? (
               <Button
                 variant="secondary"
+                onClick={() => (window.location.href = "/profile")}
                 className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2"
               >
                 <UserCircle2 className="h-4 w-4" />
@@ -313,6 +425,7 @@ export function AppShell({
             ) : (
               <Button
                 variant="default"
+                onClick={() => (window.location.href = "/login")}
                 className="w-full rounded-full px-4 py-2"
               >
                 Log In

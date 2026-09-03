@@ -145,6 +145,7 @@ export default function StorePage({
                           name={item.name}
                           flavorProfile={item.flavorProfile}
                           price={item.price}
+                          storeName={storeName}
                         />
                       ))}
                     </div>

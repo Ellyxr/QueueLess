@@ -24,6 +24,22 @@ export class VendorsService {
         campusLocation: true,
         vendorType: true,
         status: true,
+        products: {
+          where: {
+            isAvailable: true,
+          },
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            price: true,
+            category: true,
+            isAvailable: true,
+          },
+          orderBy: {
+            name: 'asc',
+          },
+        },
       },
       orderBy: {
         name: 'asc',
@@ -63,6 +79,28 @@ export class VendorsService {
 
     if (!vendor) {
       throw new NotFoundException('Vendor not found');
+    }
+
+    return vendor;
+  }
+
+  async getVendorForOwner(userId: string) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: {
+        ownerUserId: userId,
+      },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        campusLocation: true,
+        vendorType: true,
+        status: true,
+      },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found for this user');
     }
 
     return vendor;

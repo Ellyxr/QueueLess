@@ -72,7 +72,9 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({ onSubmit }) => {
   const isDomainInvalid =
     email.length > 0 &&
     (selectedRole === "vendor"
-      ? !email.endsWith("@gmail.com") || !email.endsWith("@yahoo.com") || !email.endsWith("@hotmail.com")
+      ? !email.endsWith("@gmail.com") &&
+        !email.endsWith("@yahoo.com") &&
+        !email.endsWith("@hotmail.com")
       : !email.endsWith("@students.nu-laguna.edu.ph"));
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -302,6 +304,24 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({ onSubmit }) => {
               </p>
             )}
           </div>
+
+          {selectedRole === "vendor" && (
+            <div className="space-y-2">
+              <Label htmlFor="businessName" className="text-xs font-semibold">
+                Business / Stall Name
+              </Label>
+              <div className="rounded-md border border-white/20 bg-white/40 backdrop-blur-sm">
+                <Input
+                  id="businessName"
+                  type="text"
+                  placeholder="e.g. Juan's Food Stall"
+                  value={businessName}
+                  onChange={(e) => setBusinessName(e.target.value)}
+                  disabled={isLoading}
+                />
+              </div>
+            </div>
+          )}
 
           {/* Password with Eye Toggle */}
           <div className="space-y-2">

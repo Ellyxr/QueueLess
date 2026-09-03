@@ -19,11 +19,13 @@ export interface User {
   fullName: string;
   phoneNumber: string;
   role: 'student' | 'student_vendor' | 'vendor' | 'admin';
+  roles?: string[];
   businessName?: string;
 }
 
 export interface AuthResponse {
-  token: string;
+  token?: string;
+  accessToken?: string;
   user?: User;
   message?: string;
 }
