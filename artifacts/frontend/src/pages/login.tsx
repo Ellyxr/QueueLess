@@ -2,34 +2,63 @@ import React, { useState } from 'react';
 import { useLocation } from 'wouter';
 import { LoginForm } from '../features/auth/LoginForm';
 import { RegisterForm } from '../features/auth/RegisterForm';
-import { loginUser, registerUser } from '../features/auth/api';
+import { loginUser, notifyAuthStateChanged, registerUser, setActivePortal } from '../features/auth/api';
 import { Button } from '../components/ui/button';
-import { LoginInput, RegisterInput } from '../types/auth';
+import { LoginInput, RegisterInput, User } from '../types/auth';
 
 export const LoginPage: React.FC = () => {
   const [isLoginView, setIsLoginView] = useState(true);
   const [, setLocation] = useLocation();
 
+  const saveSession = (
+    response: Awaited<ReturnType<typeof loginUser>>,
+    fallbackRole?: RegisterInput['role'],
+  ): User['role'] => {
+    const token = response.accessToken || response.token;
+    if (!token) return fallbackRole || 'student';
+
+    localStorage.setItem('token', token);
+    let sessionRole: User['role'] = fallbackRole || 'student';
+    if (response.user) {
+      const backendRole = (response.user as typeof response.user & {
+        activeRole?: string;
+        roles?: string[];
+      }).activeRole;
+      let role: User['role'] = fallbackRole || response.user.role || 'student';
+      const backendRoles = (response.user as typeof response.user & { roles?: string[] }).roles || [];
+      if (backendRoles.includes('VENDOR_OWNER') && backendRoles.includes('BUYER')) {
+        role = 'student_vendor';
+      } else if (backendRole === 'VENDOR_OWNER') {
+        role = 'vendor';
+      } else if (backendRole === 'ADMIN') {
+        role = 'admin';
+      }
+      sessionRole = role;
+
+      localStorage.setItem('user', JSON.stringify({
+        ...response.user,
+        role,
+        roles: backendRoles,
+        phoneNumber: response.user.phoneNumber || (response.user as { phone?: string | null }).phone || '',
+      }));
+    }
+    notifyAuthStateChanged();
+    return sessionRole;
+  };
+
   const handleLoginSubmit = async (data: LoginInput) => {
     const res = await loginUser(data);
-    if (res.token) {
-      localStorage.setItem('token', res.token);
-      if (res.user) {
-        localStorage.setItem('user', JSON.stringify(res.user));
-      }
-    }
-    setLocation('/');
+    const role = saveSession(res);
+    setActivePortal(role === 'student_vendor' ? 'buyer' : 'vendor');
+    setLocation(role === 'vendor' || role === 'student_vendor' ? '/vendor' : '/');
   };
 
   const handleRegisterSubmit = async (data: RegisterInput) => {
-    const res = await registerUser(data);
-    if (res.token) {
-      localStorage.setItem('token', res.token);
-      if (res.user) {
-        localStorage.setItem('user', JSON.stringify(res.user));
-      }
-    }
-    setLocation('/');
+    await registerUser(data);
+    const res = await loginUser({ email: data.email, password: data.password });
+    const role = saveSession(res, data.role);
+    setActivePortal(role === 'student_vendor' ? 'buyer' : data.role === 'vendor' ? 'vendor' : 'buyer');
+    setLocation(data.role === 'vendor' ? '/vendor' : '/');
   };
 
   return (

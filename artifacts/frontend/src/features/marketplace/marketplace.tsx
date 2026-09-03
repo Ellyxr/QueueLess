@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
+import { listVendors, type VendorStorefront } from "@/features/auth/api";
 
 const categories = [
   "Pizza",
@@ -511,40 +512,53 @@ const vendorMenuItems: Record<string, Array<{ image: string; name: string; flavo
   ],
 };
 
-function FoodCardSkeleton({ compact = false }: { compact?: boolean }) {
-  return (
-    <div
-      className={cn(
-        "rounded-[20px] border border-border bg-card p-3 shadow-sm",
-        compact && "p-2.5",
-      )}
-    >
-      <div className="animate-pulse">
-        <div className="mb-3 h-24 rounded-[16px] bg-muted" />
-        <div className="mb-2 h-3 w-20 rounded-full bg-muted" />
-        <div className="h-4 w-32 rounded-full bg-muted" />
-        <div className="mt-4 flex items-center justify-between">
-          <div className="h-3 w-16 rounded-full bg-muted" />
-          <div className="h-3 w-14 rounded-full bg-muted" />
-        </div>
-      </div>
-    </div>
-  );
+type MarketplaceVendor = {
+  id: string;
+  name: string;
+  type: string;
+  description: string;
+  campusLocation: string;
+  vendorType: string;
+  eta: string;
+  rating: number;
+  menuItems: Array<{ image: string; name: string; flavorProfile: string; price: number }>;
+};
+
+function toMarketplaceVendor(vendor: VendorStorefront): MarketplaceVendor {
+  return {
+    id: vendor.id,
+    name: vendor.name,
+    type: vendor.description || (vendor.vendorType === "STUDENT" ? "Student vendor" : "Campus vendor"),
+    description: vendor.description || "Fresh food from a local vendor.",
+    campusLocation: vendor.campusLocation || "Campus",
+    vendorType: vendor.vendorType,
+    eta: "15-25 min",
+    rating: 5,
+    menuItems: (vendor.products || [])
+      .filter((product) => product.isAvailable)
+      .map((product) => ({
+        image: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80",
+        name: product.name,
+        flavorProfile: product.description,
+        price: Number(product.price),
+      })),
+  };
 }
 
 function VendorCard({
+  menuItems,
   name,
   eta,
   rating,
   type,
 }: {
+  menuItems: Array<{ image: string; name: string; flavorProfile: string; price: number }>;
   name: string;
   eta: string;
   rating: number;
   type: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const menuItems = vendorMenuItems[name] ?? [];
   const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -606,8 +620,20 @@ function VendorCard({
                 className="space-y-3 p-4"
               >
                 <div className="grid grid-cols-2 gap-2">
-                  <FoodCardSkeleton compact />
-                  <FoodCardSkeleton compact />
+                  {menuItems.slice(0, 2).map((item) => (
+                    <StoreItemCard
+                      key={item.name}
+                      image={item.image}
+                      name={item.name}
+                      flavorProfile={item.flavorProfile}
+                      price={item.price}
+                    />
+                  ))}
+                  {menuItems.length === 0 && (
+                    <div className="col-span-2 flex min-h-28 items-center justify-center rounded-[20px] border border-dashed border-border bg-card p-3 text-center text-xs text-muted-foreground">
+                      No menu items available
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-between text-sm text-muted-foreground">
@@ -707,6 +733,8 @@ export default function MarketplacePage({
 }) {
   const [showAllCategories, setShowAllCategories] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [marketplaceVendors, setMarketplaceVendors] = useState<MarketplaceVendor[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
   
   // US-011: Search and Category Filter States
   const [searchQuery, setSearchQuery] = useState("");
@@ -715,8 +743,22 @@ export default function MarketplacePage({
   const visibleCategories = showAllCategories ? categories : categories.slice(0, 8);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setIsLoading(false), 700);
-    return () => window.clearTimeout(timer);
+    let isMounted = true;
+
+    listVendors()
+      .then((vendors) => {
+        if (isMounted) setMarketplaceVendors(vendors.map(toMarketplaceVendor));
+      })
+      .catch((error: unknown) => {
+        if (isMounted) setLoadError(error instanceof Error ? error.message : "Unable to load vendors.");
+      })
+      .finally(() => {
+        if (isMounted) setIsLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // US-011: Sync search query with URL parameter set by AppShell navbar
@@ -732,11 +774,11 @@ export default function MarketplacePage({
   }, []);
 
   // Filter helper logic for US-011
-  const matchesFilter = (vendor: { name: string; type: string }) => {
+  const matchesFilter = (vendor: MarketplaceVendor) => {
     const q = searchQuery.toLowerCase().trim();
     const cat = selectedCategory?.toLowerCase() || "";
 
-    const menuItems = vendorMenuItems[vendor.name] || [];
+    const menuItems = vendor.menuItems;
     const hasMatchingMenuItem = menuItems.some(
       (item) =>
         item.name.toLowerCase().includes(q) ||
@@ -762,8 +804,12 @@ export default function MarketplacePage({
     return matchesQuery && matchesCategory;
   };
 
-  const filteredFeatured = featuredVendors.filter(matchesFilter);
-  const filteredLocal = localVendors.filter(matchesFilter);
+  const filteredFeatured = marketplaceVendors
+    .filter((vendor) => vendor.vendorType !== "STUDENT")
+    .filter(matchesFilter);
+  const filteredLocal = marketplaceVendors
+    .filter((vendor) => vendor.vendorType === "STUDENT")
+    .filter(matchesFilter);
   const hasResults = filteredFeatured.length > 0 || filteredLocal.length > 0;
 
   if (isLoading) {
@@ -779,8 +825,19 @@ export default function MarketplacePage({
     );
   }
 
+  if (loadError) {
+    return (
+      <main className="mx-auto flex min-h-[60vh] w-full max-w-[1440px] items-center justify-center px-4 py-10">
+        <div className="rounded-3xl border border-destructive/30 bg-card p-8 text-center shadow-sm">
+          <h1 className="text-xl font-semibold text-foreground">Marketplace unavailable</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{loadError}</p>
+        </div>
+      </main>
+    );
+  }
+
   return (
-    <main className="mx-auto w-full max-w-[1440px] px-4 pb-14 pt-4 sm:px-6 lg:px-10">
+    <main className="mx-auto w-full max-w-[1340px] px-4 pb-14 pt-4 sm:px-6 lg:px-10">
       <div className="rounded-[28px] border border-border/80 bg-background/80 p-3 shadow-sm backdrop-blur-sm sm:p-4">
         
         <section className="mt-4 space-y-6">
