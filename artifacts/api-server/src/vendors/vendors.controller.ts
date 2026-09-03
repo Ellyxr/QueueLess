@@ -26,6 +26,11 @@ export class VendorsController {
     return this.vendorsService.listActiveVendors();
   }
 
+  @Get('mine')
+  async getMyVendor(@Req() request: { user: JwtPayload }) {
+    return this.vendorsService.getVendorForOwner(request.user.sub);
+  }
+
   @Get(':vendorId')
   async getVendorStorefront(@Param('vendorId') vendorId: string) {
     return this.vendorsService.getVendorStorefront(vendorId);
