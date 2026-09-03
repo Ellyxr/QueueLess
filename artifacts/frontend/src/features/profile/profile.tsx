@@ -270,7 +270,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-350 px-4 py-8 sm:px-6 lg:px-6">
+    <main className="mx-auto w-full max-w-[1300px] px-4 py-8 sm:px-6 lg:px-6">
       <div className="grid gap-6 xl:grid-cols-[1.5fr_0.9fr]">
         <section className="space-y-6">
           <Card className="border-card-border/80 bg-card/90 shadow-sm backdrop-blur-sm">

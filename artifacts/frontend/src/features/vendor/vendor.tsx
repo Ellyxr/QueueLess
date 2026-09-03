@@ -1,15 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ArrowDownRight,
   ArrowUpRight,
-  Bell,
-  Inbox,
   Megaphone,
   Menu as MenuIcon,
   PackageCheck,
   ShoppingBag,
   Store,
-  UserCircle2,
   Plus,
   Pencil,
   Trash2,
@@ -17,13 +14,13 @@ import {
   AlertCircle,
   CheckCircle2,
   Upload,
-  Image as ImageIcon,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { createPortal } from 'react-dom';
 import { useRequireAuth } from '@/hooks/use-require-auth';
+import { getMyVendor, updateVendorStorefront, type VendorStorefront } from '@/features/auth/api';
 
 interface Product {
   id: string;
@@ -33,8 +30,6 @@ interface Product {
   category: string;
   image?: string;
 }
-
-const navItems = ['Home', 'Transactions', 'Inbox', 'Profile'];
 
 const performanceCards = [
   { label: 'Today', value: '124', caption: '+12.4%' },
@@ -96,10 +91,60 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   const [imagePreview, setImagePreview] = useState<string>('');
   const [formErrors, setFormErrors] = useState<{ name?: string; price?: string; description?: string }>({});
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [vendor, setVendor] = useState<VendorStorefront | null>(null);
+  const [storefrontData, setStorefrontData] = useState({ name: '', description: '', campusLocation: '' });
+  const [storefrontErrors, setStorefrontErrors] = useState<{ name?: string; description?: string; campusLocation?: string }>({});
+  const [isStorefrontLoading, setIsStorefrontLoading] = useState(true);
+  const [isStorefrontSaving, setIsStorefrontSaving] = useState(false);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
     setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  useEffect(() => {
+    getMyVendor()
+      .then((vendorData) => {
+        setVendor(vendorData);
+        setStorefrontData({
+          name: vendorData.name,
+          description: vendorData.description || '',
+          campusLocation: vendorData.campusLocation || '',
+        });
+      })
+      .catch((error: unknown) => showToast(error instanceof Error ? error.message : 'Unable to load storefront.', 'error'))
+      .finally(() => setIsStorefrontLoading(false));
+  }, []);
+
+  const handleSaveStorefront = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const errors: typeof storefrontErrors = {};
+    if (!storefrontData.name.trim()) errors.name = 'Store name is required.';
+    if (storefrontData.name.trim().length > 100) errors.name = 'Store name must be 100 characters or fewer.';
+    if (storefrontData.description.length > 500) errors.description = 'Description must be 500 characters or fewer.';
+    if (storefrontData.campusLocation.length > 255) errors.campusLocation = 'Location must be 255 characters or fewer.';
+    setStorefrontErrors(errors);
+    if (Object.keys(errors).length > 0 || !vendor) return;
+
+    setIsStorefrontSaving(true);
+    try {
+      const updatedVendor = await updateVendorStorefront(vendor.id, {
+        name: storefrontData.name.trim(),
+        description: storefrontData.description.trim(),
+        campusLocation: storefrontData.campusLocation.trim(),
+      });
+      setVendor(updatedVendor);
+      setStorefrontData({
+        name: updatedVendor.name,
+        description: updatedVendor.description || '',
+        campusLocation: updatedVendor.campusLocation || '',
+      });
+      showToast('Storefront updated successfully.');
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Unable to update storefront.', 'error');
+    } finally {
+      setIsStorefrontSaving(false);
+    }
   };
 
   const handleOpenModal = (product?: Product) => {
@@ -199,7 +244,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   };
 
   return (
-    <main className="mx-auto w-full max-w-[1200px] px-4 py-8 sm:px-6 lg:px-10 relative">
+    <main className="mx-auto w-full max-w-[1300px] px-4 py-8 sm:px-6 lg:px-10 relative">
       {/* Feedback Toast Notification */}
       {toastMessage && (
         <div
@@ -219,42 +264,6 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
       )}
 
       <div className="rounded-[28px] border border-border/80 bg-background/80 p-3 shadow-sm backdrop-blur-sm sm:p-4">
-        <header className="flex items-center justify-between gap-3 rounded-[22px] border border-border/80 bg-card/80 px-3 py-3 sm:px-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-              <span className="h-4 w-4 rounded-full border-[1.5px] border-current" />
-            </div>
-            <div className="hidden sm:block">
-              <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">QueueLess</p>
-            </div>
-          </div>
-
-          <nav className="hidden items-center gap-2 md:flex">
-            {navItems.map((item) => (
-              <Button
-                key={item}
-                variant={item === 'Home' ? 'default' : 'ghost'}
-                className={item === 'Home' ? 'rounded-full px-4 py-2' : 'rounded-full px-4 py-2 text-foreground hover:bg-secondary'}
-              >
-                {item}
-              </Button>
-            ))}
-          </nav>
-
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" className="rounded-full border border-border/80 bg-background text-foreground">
-              <Inbox className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" className="rounded-full border border-border/80 bg-background text-foreground">
-              <Bell className="h-4 w-4" />
-            </Button>
-            <Button variant="secondary" className="gap-2 rounded-full px-3 py-2 sm:px-4">
-              <UserCircle2 className="h-4 w-4" />
-              <span className="hidden sm:inline">{username}</span>
-            </Button>
-          </div>
-        </header>
-
         <section className="mt-6 flex flex-col gap-5">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
@@ -307,6 +316,44 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                   <span>Sun</span>
                 </div>
               </div>
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Quick Actions */}
+        <section className="mt-8">
+          <div className="mb-4">
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Storefront settings</p>
+            <h2 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">Keep your vendor details current</h2>
+          </div>
+          <Card className="border-card-border/80 bg-card/90 shadow-sm">
+            <CardContent className="p-5 sm:p-6">
+              {isStorefrontLoading ? (
+                <p className="text-sm text-muted-foreground">Loading storefront details...</p>
+              ) : (
+                <form onSubmit={handleSaveStorefront} className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="text-sm font-medium text-foreground" htmlFor="storefront-name">Store name</label>
+                    <input id="storefront-name" value={storefrontData.name} onChange={(event) => setStorefrontData({ ...storefrontData, name: event.target.value })} className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm" />
+                    {storefrontErrors.name && <p className="mt-1 text-xs text-destructive">{storefrontErrors.name}</p>}
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-foreground" htmlFor="storefront-location">Campus location</label>
+                    <input id="storefront-location" value={storefrontData.campusLocation} onChange={(event) => setStorefrontData({ ...storefrontData, campusLocation: event.target.value })} className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm" />
+                    {storefrontErrors.campusLocation && <p className="mt-1 text-xs text-destructive">{storefrontErrors.campusLocation}</p>}
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-sm font-medium text-foreground" htmlFor="storefront-description">Description</label>
+                    <textarea id="storefront-description" rows={3} value={storefrontData.description} onChange={(event) => setStorefrontData({ ...storefrontData, description: event.target.value })} className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm" />
+                    {storefrontErrors.description && <p className="mt-1 text-xs text-destructive">{storefrontErrors.description}</p>}
+                  </div>
+                  <div className="md:col-span-2">
+                    <Button type="submit" disabled={isStorefrontSaving} className="rounded-full px-5">
+                      {isStorefrontSaving ? 'Saving...' : 'Save storefront'}
+                    </Button>
+                  </div>
+                </form>
+              )}
             </CardContent>
           </Card>
         </section>

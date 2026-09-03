@@ -2,6 +2,42 @@ import { LoginInput, RegisterInput, AuthResponse } from '../../types/auth';
 
 const API_BASE_URL = '/api/v1';
 
+export const AUTH_STATE_CHANGED_EVENT = 'queueless-auth-state-changed';
+export const PORTAL_CHANGED_EVENT = 'queueless-portal-changed';
+
+export type Portal = 'buyer' | 'vendor';
+
+export function notifyAuthStateChanged(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(AUTH_STATE_CHANGED_EVENT));
+  }
+}
+
+export interface VendorProduct {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  category: string | null;
+  isAvailable: boolean;
+}
+
+export interface VendorStorefront {
+  id: string;
+  name: string;
+  description: string | null;
+  campusLocation: string | null;
+  vendorType: string;
+  status: string;
+  products?: VendorProduct[];
+}
+
+export interface UpdateVendorInput {
+  name?: string;
+  description?: string;
+  campusLocation?: string;
+}
+
 export async function loginUser(data: LoginInput): Promise<AuthResponse> {
   const response = await fetch(`${API_BASE_URL}/auth/login`, {
     method: 'POST',
@@ -44,6 +80,7 @@ export function logoutUser(): void {
   if (typeof window !== 'undefined') {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    notifyAuthStateChanged();
     window.location.replace('/login');
   }
 }
@@ -80,4 +117,33 @@ export async function fetchWithAuth(endpoint: string, options: RequestInit = {})
   }
 
   return response.json();
+}
+
+export function listVendors(): Promise<VendorStorefront[]> {
+  return fetchWithAuth('/vendors');
+}
+
+export function getMyVendor(): Promise<VendorStorefront> {
+  return fetchWithAuth('/vendors/mine');
+}
+
+export function getVendorStorefront(vendorId: string): Promise<VendorStorefront> {
+  return fetchWithAuth(`/vendors/${vendorId}`);
+}
+
+export function updateVendorStorefront(
+  vendorId: string,
+  data: UpdateVendorInput,
+): Promise<VendorStorefront> {
+  return fetchWithAuth(`/vendors/${vendorId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export function setActivePortal(portal: Portal): void {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('active-portal', portal);
+    window.dispatchEvent(new Event(PORTAL_CHANGED_EVENT));
+  }
 }
