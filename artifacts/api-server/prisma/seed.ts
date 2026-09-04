@@ -158,6 +158,88 @@ async function seed() {
     },
   });
 
+  // --- Products for vendor@test.queueless.dev ('Test Vendor Stall') ---
+  const vendorStall = await prisma.vendor.findUniqueOrThrow({
+    where: { ownerUserId: vendorOwner.id },
+  });
+
+  await prisma.product.upsert({
+    where: { vendorId_name: { vendorId: vendorStall.id, name: 'Chicken Adobo Rice Bowl' } },
+    update: {},
+    create: {
+      vendorId: vendorStall.id,
+      name: 'Chicken Adobo Rice Bowl',
+      description: 'Classic adobo over steamed rice.',
+      price: 85.0,
+      category: 'Rice Meals',
+      isAvailable: true,
+    },
+  });
+
+  await prisma.product.upsert({
+    where: { vendorId_name: { vendorId: vendorStall.id, name: 'Iced Milk Tea' } },
+    update: {},
+    create: {
+      vendorId: vendorStall.id,
+      name: 'Iced Milk Tea',
+      description: 'Classic milk tea, served cold.',
+      price: 55.0,
+      category: 'Drinks',
+      isAvailable: true,
+    },
+  });
+
+  await prisma.product.upsert({
+    where: { vendorId_name: { vendorId: vendorStall.id, name: 'Seasonal Halo-Halo' } },
+    update: {},
+    create: {
+      vendorId: vendorStall.id,
+      name: 'Seasonal Halo-Halo',
+      description: 'Currently out of season ingredients.',
+      price: 95.0,
+      category: 'Desserts',
+      isAvailable: false, // tests "unavailable products are handled" (US-010/US-014)
+    },
+  });
+
+  // --- Products for student-vendor@test.queueless.dev ('Student Vendor Stall') ---
+  const studentVendorStall = await prisma.vendor.findUniqueOrThrow({
+    where: { ownerUserId: studentVendor.id },
+  });
+
+  await prisma.product.upsert({
+    where: { vendorId_name: { vendorId: studentVendorStall.id, name: 'Homemade Brownies' } },
+    update: {},
+    create: {
+      vendorId: studentVendorStall.id,
+      name: 'Homemade Brownies',
+      description: 'Fudgy, baked in small batches.',
+      price: 40.0,
+      category: 'Desserts',
+      isAvailable: true,
+    },
+  });
+
+  // --- Products for external-vendor@test.queueless.dev ('External Vendor Stall') ---
+  // Used to test cross-vendor ownership rejection: vendorOwner should NOT be
+  // able to edit/delete this product, and vice versa.
+  const externalVendorStall = await prisma.vendor.findUniqueOrThrow({
+    where: { ownerUserId: externalVendor.id },
+  });
+
+  await prisma.product.upsert({
+    where: { vendorId_name: { vendorId: externalVendorStall.id, name: 'Siomai Rice' } },
+    update: {},
+    create: {
+      vendorId: externalVendorStall.id,
+      name: 'Siomai Rice',
+      description: 'Steamed siomai with garlic rice.',
+      price: 65.0,
+      category: 'Rice Meals',
+      isAvailable: true,
+    },
+  });
+
   // --- ADMIN test account ---
   const admin = await prisma.user.upsert({
     where: { email: 'admin@test.queueless.dev' },
