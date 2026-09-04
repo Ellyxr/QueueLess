@@ -355,6 +355,7 @@ model Product {
   // per vendor should be allowed.
   @@unique([vendorId, name])
   @@index([vendorId])
+  @@index([vendorId, isAvailable])
   @@map("products")
 }
 
