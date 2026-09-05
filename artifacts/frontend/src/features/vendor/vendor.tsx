@@ -14,13 +14,25 @@ import {
   AlertCircle,
   CheckCircle2,
   Upload,
+  Search,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { createPortal } from 'react-dom';
 import { useRequireAuth } from '@/hooks/use-require-auth';
-import { getMyVendor, updateVendorStorefront, type VendorStorefront } from '@/features/auth/api';
+import {
+  createProduct,
+  deleteProduct,
+  getVendorDashboard,
+  getMyVendor,
+  getVendorStorefront,
+  updateProduct,
+  updateVendorStorefront,
+  type VendorProduct,
+  type VendorDashboard,
+  type VendorStorefront,
+} from '@/features/auth/api';
 
 interface Product {
   id: string;
@@ -29,53 +41,14 @@ interface Product {
   description: string;
   category: string;
   image?: string;
+  isAvailable: boolean;
 }
-
-const performanceCards = [
-  { label: 'Today', value: '124', caption: '+12.4%' },
-  { label: 'Avg. ticket', value: '$18.40', caption: '+3.1%' },
-  { label: 'Pending', value: '18', caption: '-5.2%' },
-];
-
-const recentOrders = [
-  { id: '#1048', customer: 'Alicia M.', item: 'Burrito Bowl', total: '$18.50', status: 'Preparing' },
-  { id: '#1047', customer: 'Daniel R.', item: 'Pesto Pasta', total: '$21.00', status: 'Out for delivery' },
-  { id: '#1046', customer: 'Nina P.', item: 'Salad Wrap', total: '$15.75', status: 'Completed' },
-  { id: '#1045', customer: 'Victor S.', item: 'Smoothie', total: '$8.00', status: 'Pending' },
-];
-
-const initialProducts: Product[] = [
-  {
-    id: 'prod-1',
-    name: 'Banh Mi Combo',
-    price: 165,
-    description: 'Savory, fresh, crunchy baguette sandwich with iced tea.',
-    category: 'Sandwiches',
-    image: 'https://images.unsplash.com/photo-1559847844-5315695dadae?auto=format&fit=crop&w=800&q=80',
-  },
-  {
-    id: 'prod-2',
-    name: 'Gochujang Chicken Bowl',
-    price: 210,
-    description: 'Spicy, smoky, umami glazed chicken over warm rice.',
-    category: 'Rice Bowls',
-    image: 'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80',
-  },
-  {
-    id: 'prod-3',
-    name: 'Crispy Tofu Wrap',
-    price: 175,
-    description: 'Citrusy, crunchy, vibrant plant-based wrap.',
-    category: 'Wraps',
-    image: 'https://images.unsplash.com/photo-1604908176997-125f25cc6f3d?auto=format&fit=crop&w=800&q=80',
-  },
-];
 
 export default function VendorPage({ username = 'Jordan' }: { username?: string }) {
   useRequireAuth(['vendor', 'student_vendor', 'admin']);
 
   // US-012 State Management
-  const [products, setProducts] = useState<Product[]>(initialProducts);
+  const [products, setProducts] = useState<Product[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
@@ -96,6 +69,10 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   const [storefrontErrors, setStorefrontErrors] = useState<{ name?: string; description?: string; campusLocation?: string }>({});
   const [isStorefrontLoading, setIsStorefrontLoading] = useState(true);
   const [isStorefrontSaving, setIsStorefrontSaving] = useState(false);
+  const [isProductSaving, setIsProductSaving] = useState(false);
+  const [isProductDeleting, setIsProductDeleting] = useState(false);
+  const [productSearch, setProductSearch] = useState('');
+  const [dashboard, setDashboard] = useState<VendorDashboard | null>(null);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
@@ -111,9 +88,19 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
           description: vendorData.description || '',
           campusLocation: vendorData.campusLocation || '',
         });
+        return getVendorStorefront(vendorData.id);
+      })
+      .then((vendorData) => {
+        if (vendorData) setProducts(vendorData.products?.map(toProduct) || []);
       })
       .catch((error: unknown) => showToast(error instanceof Error ? error.message : 'Unable to load storefront.', 'error'))
       .finally(() => setIsStorefrontLoading(false));
+
+    getVendorDashboard()
+      .then(setDashboard)
+      .catch((error: unknown) =>
+        showToast(error instanceof Error ? error.message : 'Unable to load dashboard.', 'error'),
+      );
   }, []);
 
   const handleSaveStorefront = async (event: React.FormEvent) => {
@@ -146,6 +133,16 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
       setIsStorefrontSaving(false);
     }
   };
+
+  const toProduct = (product: VendorProduct): Product => ({
+    id: product.id,
+    name: product.name,
+    price: Number(product.price),
+    description: product.description || '',
+    category: product.category || 'General',
+    image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
+    isAvailable: product.isAvailable,
+  });
 
   const handleOpenModal = (product?: Product) => {
     if (product) {
@@ -195,53 +192,66 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     return Object.keys(errors).length === 0;
   };
 
-  const handleSaveProduct = (e: React.FormEvent) => {
+  const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateForm()) return;
 
     const finalCategory = formData.category.trim() ? formData.category.trim() : 'General';
-    const finalImage = formData.image.trim()
-      ? formData.image.trim()
-      : 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80';
-
-    if (editingProduct) {
-      setProducts((prev) =>
-        prev.map((p) =>
-          p.id === editingProduct.id
-            ? {
-                ...p,
-                name: formData.name.trim(),
-                price: Number(formData.price),
-                description: formData.description.trim(),
-                category: finalCategory,
-                image: finalImage,
-              }
-            : p
-        )
-      );
-      showToast('Product updated successfully!');
-    } else {
-      const newProd: Product = {
-        id: `prod-${Date.now()}`,
+    setIsProductSaving(true);
+    try {
+      const data = {
         name: formData.name.trim(),
         price: Number(formData.price),
         description: formData.description.trim(),
         category: finalCategory,
-        image: finalImage,
+        isAvailable: true,
       };
-      setProducts((prev) => [newProd, ...prev]);
-      showToast('New product added to store!');
+      const savedProduct = editingProduct
+        ? await updateProduct(editingProduct.id, data)
+        : await createProduct(data);
+      const mappedProduct = toProduct(savedProduct);
+      setProducts((prev) =>
+        editingProduct
+          ? prev.map((product) =>
+              product.id === editingProduct.id ? mappedProduct : product,
+            )
+          : [mappedProduct, ...prev],
+      );
+      showToast(editingProduct ? 'Product updated successfully!' : 'New product added to store!');
+      setIsModalOpen(false);
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Unable to save product.', 'error');
+    } finally {
+      setIsProductSaving(false);
     }
-
-    setIsModalOpen(false);
   };
 
-  const handleDeleteProduct = () => {
+  const handleDeleteProduct = async () => {
     if (!deleteTargetId) return;
-    setProducts((prev) => prev.filter((p) => p.id !== deleteTargetId));
-    setDeleteTargetId(null);
-    showToast('Product deleted from menu', 'error');
+    setIsProductDeleting(true);
+    try {
+      await deleteProduct(deleteTargetId);
+      setProducts((prev) => prev.filter((product) => product.id !== deleteTargetId));
+      setDeleteTargetId(null);
+      showToast('Product deleted from menu');
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Unable to delete product.', 'error');
+    } finally {
+      setIsProductDeleting(false);
+    }
   };
+
+  const filteredProducts = products.filter((product) => {
+    const query = productSearch.trim().toLowerCase();
+    return !query || [product.name, product.description, product.category]
+      .some((value) => value.toLowerCase().includes(query));
+  });
+
+  const performanceCards = [
+    { label: 'Today', value: `₱${Number(dashboard?.todaySales || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, caption: '' },
+    { label: 'Avg. ticket', value: `₱${Number(dashboard?.averageTicket || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, caption: '' },
+    { label: 'Pending', value: String(dashboard?.pendingOrders || 0), caption: '' },
+  ];
 
   return (
     <main className="mx-auto w-full max-w-[1300px] px-4 py-8 sm:px-6 lg:px-10 relative">
@@ -269,13 +279,13 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
             <div>
               <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Good afternoon</p>
               <h1 className="mt-3 text-4xl font-extrabold tracking-[-0.07em] text-foreground sm:text-5xl lg:text-[4rem]">
-                Hello, {username}
+                Hello, <span className=" text-primary"> {username} </span>
               </h1>
             </div>
 
             <div className="flex items-center gap-3 rounded-full border border-border bg-secondary/60 px-3 py-2 text-sm text-muted-foreground">
               <ShoppingBag className="h-4 w-4 text-primary" />
-              <span>North Courtyard Kitchen</span>
+              <span>{storefrontData.campusLocation || 'No Location'}</span>
             </div>
           </div>
 
@@ -284,11 +294,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
               <div className="max-w-md">
                 <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary-foreground/80">Total sales</p>
                 <div className="mt-3 flex items-end gap-3">
-                  <span className="text-4xl font-bold tracking-[-0.07em] sm:text-5xl">$24,560</span>
-                  <span className="mb-1 inline-flex items-center gap-1 rounded-full bg-primary-foreground/10 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-primary-foreground">
-                    <ArrowUpRight className="h-3.5 w-3.5" />
-                    +12.4%
-                  </span>
+                  <span className="text-4xl font-bold tracking-[-0.07em] sm:text-5xl">₱{Number(dashboard?.todaySales || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
                 </div>
               </div>
 
@@ -326,7 +332,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
             <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Storefront settings</p>
             <h2 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">Keep your vendor details current</h2>
           </div>
-          <Card className="border-card-border/80 bg-card/90 shadow-sm">
+          <Card className={`bg-card/90 shadow-sm ${!storefrontData.campusLocation.trim() ? 'border-2 border-destructive' : 'border-card-border/80'}`}>
             <CardContent className="p-5 sm:p-6">
               {isStorefrontLoading ? (
                 <p className="text-sm text-muted-foreground">Loading storefront details...</p>
@@ -360,7 +366,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
 
         {/* Quick Actions */}
         <section className="mt-8">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
               <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Quick actions</p>
               <h2 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">Manage your store</h2>
@@ -402,16 +408,24 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
         <section id="menu-management-section" className="mt-10">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Catalog CRUD</p>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Store Item</p>
               <h2 className="mt-1 text-2xl font-semibold tracking-[-0.05em] text-foreground">Menu Products</h2>
             </div>
-            <Button
-              onClick={() => handleOpenModal()}
-              className="gap-2 rounded-full px-4 py-2 font-medium"
-            >
-              <Plus className="h-4 w-4" />
-              Add Item
-            </Button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  value={productSearch}
+                  onChange={(event) => setProductSearch(event.target.value)}
+                  placeholder="Search products"
+                  className="h-10 w-full rounded-full border border-border bg-background pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 sm:w-56"
+                />
+              </div>
+              <Button onClick={() => handleOpenModal()} className="gap-2 rounded-full px-4 py-2 font-medium">
+                <Plus className="h-4 w-4" />
+                Add Item
+              </Button>
+            </div>
           </div>
 
           <Card className="border-card-border/80 bg-card/90 shadow-sm overflow-hidden">
@@ -423,12 +437,12 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                 <span className="text-right">Actions</span>
               </div>
 
-              {products.length === 0 ? (
+              {filteredProducts.length === 0 ? (
                 <div className="p-8 text-center text-muted-foreground text-sm">
-                  No products in your catalog yet. Click "Add Item" to create one.
+                  {products.length === 0 ? 'No products in your catalog yet. Click "Add Item" to create one.' : 'No products match your search.'}
                 </div>
               ) : (
-                products.map((product) => (
+                filteredProducts.map((product) => (
                   <div
                     key={product.id}
                     className="grid grid-cols-[1.5fr_1fr_2fr_1fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
@@ -510,7 +524,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                   <span className="text-right">Status</span>
                 </div>
 
-                {recentOrders.map((order) => (
+                {dashboard?.recentOrders.length ? dashboard.recentOrders.map((order) => (
                   <div
                     key={order.id}
                     className="grid grid-cols-[0.8fr_1.2fr_0.8fr_0.8fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
@@ -525,17 +539,21 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                       <span
                         className={[
                           'inline-flex rounded-full px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.12em]',
-                          order.status === 'Completed' && 'bg-emerald-500/10 text-emerald-600',
-                          order.status === 'Preparing' && 'bg-amber-500/10 text-amber-600',
-                          order.status === 'Out for delivery' && 'bg-blue-500/10 text-blue-600',
-                          order.status === 'Pending' && 'bg-slate-500/10 text-slate-600',
+                          order.status === 'DELIVERED' && 'bg-emerald-500/10 text-emerald-600',
+                          order.status === 'COOKING' && 'bg-amber-500/10 text-amber-600',
+                          order.status === 'OUT_FOR_DELIVERY' && 'bg-blue-500/10 text-blue-600',
+                          order.status === 'PENDING' && 'bg-slate-500/10 text-slate-600',
                         ].join(' ')}
                       >
                         {order.status}
                       </span>
                     </div>
                   </div>
-                ))}
+                )) : (
+                  <div className="bg-gray-100/70 p-8 text-center text-sm text-muted-foreground">
+                    No recent orders.
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>

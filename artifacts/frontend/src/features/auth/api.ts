@@ -15,11 +15,20 @@ export function notifyAuthStateChanged(): void {
 
 export interface VendorProduct {
   id: string;
+  vendorId?: string;
   name: string;
-  description: string;
+  description: string | null;
   price: number;
   category: string | null;
   isAvailable: boolean;
+}
+
+export interface ProductInput {
+  name: string;
+  description?: string;
+  price: number;
+  category?: string;
+  isAvailable?: boolean;
 }
 
 export interface VendorStorefront {
@@ -30,6 +39,20 @@ export interface VendorStorefront {
   vendorType: string;
   status: string;
   products?: VendorProduct[];
+}
+
+export interface VendorDashboard {
+  todaySales: string;
+  averageTicket: string;
+  pendingOrders: number;
+  recentOrders: Array<{
+    id: string;
+    customer: string;
+    item: string;
+    total: string;
+    status: string;
+    createdAt: string;
+  }>;
 }
 
 export interface UpdateVendorInput {
@@ -54,7 +77,7 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
 }
 
 export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
-  const { fullName, email, password, phoneNumber } = data;
+  const { fullName, email, password,role, businessName, phoneNumber } = data;
 
   const response = await fetch(`${API_BASE_URL}/auth/register`, {
     method: 'POST',
@@ -63,6 +86,8 @@ export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
       fullName,
       email,
       password,
+      role,
+      businessName,
       phone: phoneNumber,
     }),
   });
@@ -86,7 +111,7 @@ export function logoutUser(): void {
 }
 
 // US-006 & US-008: Authenticated fetch helper for handling 401 & 403 status responses
-export async function fetchWithAuth(endpoint: string, options: RequestInit = {}): Promise<any> {
+export async function fetchWithAuth<T = unknown>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
 
   const headers: HeadersInit = {
@@ -116,7 +141,7 @@ export async function fetchWithAuth(endpoint: string, options: RequestInit = {})
     throw new Error(errorData.message || 'An error occurred.');
   }
 
-  return response.json();
+  return response.json() as Promise<T>;
 }
 
 export function listVendors(): Promise<VendorStorefront[]> {
@@ -129,6 +154,31 @@ export function getMyVendor(): Promise<VendorStorefront> {
 
 export function getVendorStorefront(vendorId: string): Promise<VendorStorefront> {
   return fetchWithAuth(`/vendors/${vendorId}`);
+}
+
+export function createProduct(data: ProductInput): Promise<VendorProduct> {
+  return fetchWithAuth('/products', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateProduct(
+  productId: string,
+  data: ProductInput,
+): Promise<VendorProduct> {
+  return fetchWithAuth(`/products/${productId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export function deleteProduct(productId: string): Promise<{ message: string }> {
+  return fetchWithAuth(`/products/${productId}`, { method: 'DELETE' });
+}
+
+export function getVendorDashboard(): Promise<VendorDashboard> {
+  return fetchWithAuth('/orders/vendor/dashboard');
 }
 
 export function updateVendorStorefront(

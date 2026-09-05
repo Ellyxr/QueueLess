@@ -17,8 +17,10 @@ interface StoreCategory {
   items: MenuItem[];
 }
 
-interface StorePageProps {
+export interface StorePageProps {
   storeName: string;
+  description?: string | null;
+  campusLocation?: string | null;
   rating: number;
   eta: string;
   storeType: string;
@@ -29,6 +31,8 @@ interface StorePageProps {
 
 export default function StorePage({
   storeName,
+    description,
+    campusLocation,
   rating,
   eta,
   storeType,
@@ -113,6 +117,14 @@ export default function StorePage({
 
                 <span className="text-sm text-muted-foreground">{storeType}</span>
               </div>
+              {description && (
+                <p className="mx-auto mt-4 p-6 max-w-xl text-sm rounded-sm bg-gray-100 text-muted-foreground">
+                  {description}
+                </p>
+              )}
+              <p className="mt-2 text-sm text-muted-foreground">
+                {campusLocation || "No Location"}
+              </p>
             </div>
           </div>
 

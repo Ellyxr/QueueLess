@@ -21,6 +21,16 @@ function RoutedErrorBoundary({ children }: { children: ReactNode }) {
   return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>;
 }
 
+function getStoredUserName(fallback: string) {
+  try {
+    const storedUser = localStorage.getItem('user');
+    const user = storedUser ? (JSON.parse(storedUser) as { fullName?: string }) : null;
+    return user?.fullName || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function MarketplaceRoute() {
   const [, setLocation] = useLocation();
 
@@ -49,7 +59,7 @@ function MarketplaceRoute() {
     }
   }
 
-  return <MarketplacePage username="Jamie" isLoggedIn />;
+  return <MarketplacePage username={getStoredUserName('Buyer')} isLoggedIn />;
 }
 
 function StoreRoute() {
@@ -83,7 +93,7 @@ function StoreRoute() {
 }
 
 function VendorRoute() {
-  return <Vendor username="Jamie" />;
+  return <Vendor username={getStoredUserName('Vendor')} />;
 }
 
 export function AppRouter() {
