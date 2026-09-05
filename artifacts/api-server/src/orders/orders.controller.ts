@@ -63,6 +63,11 @@ export class OrdersController {
     );
   }
 
+  @Get('vendor/dashboard')
+  async getVendorDashboard(@CurrentUser() user: JwtPayload) {
+    return this.ordersService.getVendorDashboard(user.sub);
+  }
+
   @Get(':id')
   @ApiOperation({
     summary: 'Get one of the authenticated user’s orders',

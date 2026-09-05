@@ -350,6 +350,60 @@ export class OrdersService {
     return this.buildOrderResponse(order);
   }
 
+  async getVendorDashboard(userId: string) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { ownerUserId: userId },
+      select: { id: true },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found for this user');
+    }
+
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const orders = await this.prisma.order.findMany({
+      where: { vendorId: vendor.id },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+        customer: { select: { fullName: true } },
+        items: {
+          take: 1,
+          select: { product: { select: { name: true } } },
+        },
+      },
+    });
+
+    const todayOrders = orders.filter((order) => order.createdAt >= startOfToday);
+    const todaySales = todayOrders.reduce(
+      (total, order) => total.add(order.totalAmount),
+      new Prisma.Decimal(0),
+    );
+    const pendingStatuses = new Set(['PENDING', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY']);
+    const pendingOrders = orders.filter((order) => pendingStatuses.has(order.status)).length;
+
+    return {
+      todaySales: todaySales.toFixed(2),
+      averageTicket: todayOrders.length
+        ? todaySales.div(todayOrders.length).toFixed(2)
+        : '0.00',
+      pendingOrders,
+      recentOrders: orders.slice(0, 5).map((order) => ({
+        id: order.id,
+        customer: order.customer.fullName,
+        item: order.items[0]?.product.name ?? 'No items',
+        total: order.totalAmount.toFixed(2),
+        status: order.status,
+        createdAt: order.createdAt,
+      })),
+    };
+  }
+
   private getMarketplaceFeeRate(): Prisma.Decimal {
     const rawRate =
       this.configService.get<string>(

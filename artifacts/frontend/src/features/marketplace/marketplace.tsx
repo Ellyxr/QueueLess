@@ -539,19 +539,21 @@ function toMarketplaceVendor(vendor: VendorStorefront): MarketplaceVendor {
       .map((product) => ({
         image: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80",
         name: product.name,
-        flavorProfile: product.description,
+        flavorProfile: product.description || "Freshly prepared",
         price: Number(product.price),
       })),
   };
 }
 
 function VendorCard({
+  id,
   menuItems,
   name,
   eta,
   rating,
   type,
 }: {
+  id: string;
   menuItems: Array<{ image: string; name: string; flavorProfile: string; price: number }>;
   name: string;
   eta: string;
@@ -630,7 +632,7 @@ function VendorCard({
                     />
                   ))}
                   {menuItems.length === 0 && (
-                    <div className="col-span-2 flex min-h-28 items-center justify-center rounded-[20px] border border-dashed border-border bg-card p-3 text-center text-xs text-muted-foreground">
+                    <div className="col-span-2 flex min-h-69 items-center justify-center rounded-[20px] bg-gray-100/70 p-3 text-center text-xs text-muted-foreground">
                       No menu items available
                     </div>
                   )}
@@ -709,7 +711,7 @@ function VendorCard({
                     className="gap-1.5 rounded-full px-3 py-1.5 text-xs"
                     onClick={(event) => {
                       event.stopPropagation();
-                      window.location.href = `/store/${encodeURIComponent(name)}`;
+                      window.location.href = `/store/${encodeURIComponent(id)}`;
                     }}
                   >
                     View Page

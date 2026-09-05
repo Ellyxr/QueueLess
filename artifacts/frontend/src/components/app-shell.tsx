@@ -50,7 +50,9 @@ export function AppShell({
   const [activePortal, setActivePortalState] = useState<Portal>("buyer");
   const [isLoginPage, setIsLoginPage] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [cartCount, setCartCount] = useState(() => getCartItems().reduce((sum, item) => sum + item.quantity, 0));
+  const [cartCount, setCartCount] = useState(() =>
+    getCartItems().reduce((sum, item) => sum + item.quantity, 0),
+  );
   const searchInputRef = useRef<HTMLInputElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
@@ -76,7 +78,10 @@ export function AppShell({
     window.addEventListener(AUTH_STATE_CHANGED_EVENT, syncAuthState);
     window.addEventListener(PORTAL_CHANGED_EVENT, syncAuthState);
     window.addEventListener("popstate", syncAuthState);
-    const syncCart = () => setCartCount(getCartItems().reduce((sum, item) => sum + item.quantity, 0));
+    const syncCart = () =>
+      setCartCount(
+        getCartItems().reduce((sum, item) => sum + item.quantity, 0),
+      );
     window.addEventListener(CART_CHANGED_EVENT, syncCart);
     return () => {
       window.removeEventListener(AUTH_STATE_CHANGED_EVENT, syncAuthState);
@@ -88,7 +93,8 @@ export function AppShell({
 
   const isExternalVendor = user?.role === "vendor";
   const isStudentVendor = user?.role === "student_vendor";
-  const isVendorPortal = isExternalVendor || (isStudentVendor && activePortal === "vendor");
+  const isVendorPortal =
+    isExternalVendor || (isStudentVendor && activePortal === "vendor");
   const showCartBadge =
     !isLoginPage &&
     user !== null &&
@@ -131,7 +137,7 @@ export function AppShell({
       url.searchParams.delete("search");
     }
     window.history.replaceState({}, "", url.toString());
-    
+
     // Trigger custom event so page listens to instant input updates
     window.dispatchEvent(new Event("popstate"));
   };
@@ -153,9 +159,11 @@ export function AppShell({
         }`}
       >
         <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 cursor-pointer" onClick={() => (window.location.href = "/")}>
+          <div
+            className="flex items-center gap-3 cursor-pointer"
+            onClick={() => (window.location.href = "/")}
+          >
             <div className="flex h-10 w-10 items-center justify-center rounded-xl text-primary-foreground">
-             
               <img src="/favicon.svg" alt="logo" />
             </div>
             <div className="hidden sm:block">
@@ -175,10 +183,24 @@ export function AppShell({
             >
               {isVendorPortal ? (
                 [
-                  { label: "Home", icon: navIcons["Browse"], onClick: () => (window.location.href = "/") },
-                  { label: "Transactions", icon: <ShoppingBag className="h-4 w-4" /> },
+                  {
+                    label: "Home",
+                    icon: navIcons["Browse"],
+                    onClick: () => (window.location.href = "/"),
+                  },
+                  { label: "Store", icon: <Store className="h-4 w-4" /> },
+                  {
+                    label: "Transactions",
+                    icon: <ShoppingBag className="h-4 w-4" />,
+                  },
                   { label: "Inbox", icon: <Inbox className="h-4 w-4" /> },
-                  { label: "Profile", icon: <UserCircle2 className="h-4 w-4" />, onClick: () => (window.location.href = "/profile") },
+                  
+                  
+                  {
+                    label: "Profile",
+                    icon: <UserCircle2 className="h-4 w-4" />,
+                    onClick: () => (window.location.href = "/profile"),
+                  },
                 ].map(({ label, icon, onClick }) => (
                   <Button
                     key={label}
@@ -214,7 +236,14 @@ export function AppShell({
                     <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
                       {navIcons["Cart"]}
                     </span>
-                    <span className="relative">Cart{showCartBadge && <span className="absolute -right-4 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">{cartCount > 9 ? "9+" : cartCount}</span>}</span>
+                    <span className="relative">
+                      Cart
+                      {showCartBadge && (
+                        <span className="absolute -right-4 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">
+                          {cartCount > 9 ? "9+" : cartCount}
+                        </span>
+                      )}
+                    </span>
                   </Button>
 
                   <Button
@@ -287,7 +316,9 @@ export function AppShell({
             {isStudentVendor && (
               <Button
                 variant="ghost"
-                onClick={() => switchPortal(isVendorPortal ? "buyer" : "vendor")}
+                onClick={() =>
+                  switchPortal(isVendorPortal ? "buyer" : "vendor")
+                }
                 className="rounded-full px-4 py-2 font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30"
               >
                 {isVendorPortal ? "Buyer Portal" : "Vendor Portal"}
@@ -381,6 +412,7 @@ export function AppShell({
             {(isVendorPortal
               ? [
                   { label: "Home", icon: Compass },
+                  { label: "Store", icon: Store },
                   { label: "Transactions", icon: ShoppingBag },
                   { label: "Inbox", icon: Inbox },
                   { label: "Profile", icon: UserCircle2 },
@@ -409,7 +441,14 @@ export function AppShell({
                 className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2 text-left font-medium"
               >
                 <Icon className="h-4 w-4" />
-                <span className="relative">{label}{label === "Cart" && showCartBadge && <span className="absolute -right-5 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">{cartCount > 9 ? "9+" : cartCount}</span>}</span>
+                <span className="relative">
+                  {label}
+                  {label === "Cart" && showCartBadge && (
+                    <span className="absolute -right-5 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">
+                      {cartCount > 9 ? "9+" : cartCount}
+                    </span>
+                  )}
+                </span>
               </Button>
             ))}
 
