@@ -349,7 +349,102 @@ export class OrdersService {
 
     return this.buildOrderResponse(order);
   }
+  async getVendorOrderQueue(userId: string) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: {
+        ownerUserId: userId,
+      },
+      select: {
+        id: true,
+        name: true,
+        status: true,
+      },
+    });
 
+    if (!vendor) {
+      throw new NotFoundException(
+        'Vendor not found for this user',
+      );
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where: {
+        vendorId: vendor.id,
+        status: {
+          in: ['PENDING', 'PAID', 'COOKING'],
+        },
+      },
+      orderBy: {
+        createdAt: 'asc',
+      },
+      select: {
+        id: true,
+        customerId: true,
+        orderType: true,
+        status: true,
+        subtotal: true,
+        marketplaceFee: true,
+        totalAmount: true,
+        eventId: true,
+        createdAt: true,
+        updatedAt: true,
+        customer: {
+          select: {
+            fullName: true,
+          },
+        },
+        items: {
+          select: {
+            id: true,
+            productId: true,
+            quantity: true,
+            unitPriceSnapshot: true,
+            lineSubtotal: true,
+            product: {
+              select: {
+                name: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return {
+      vendor: {
+        id: vendor.id,
+        name: vendor.name,
+        status: vendor.status,
+      },
+      queueCount: orders.length,
+      orders: orders.map((order) => ({
+        id: order.id,
+        customer: {
+          id: order.customerId,
+          fullName: order.customer.fullName,
+        },
+        orderType: order.orderType,
+        status: order.status,
+        eventId: order.eventId,
+        subtotal: order.subtotal.toFixed(2),
+        marketplaceFee:
+          order.marketplaceFee.toFixed(2),
+        totalAmount: order.totalAmount.toFixed(2),
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+        items: order.items.map((item) => ({
+          id: item.id,
+          productId: item.productId,
+          name: item.product.name,
+          quantity: item.quantity,
+          unitPrice:
+            item.unitPriceSnapshot.toFixed(2),
+          lineSubtotal:
+            item.lineSubtotal.toFixed(2),
+        })),
+      })),
+    };
+  }
   async getVendorDashboard(userId: string) {
     const vendor = await this.prisma.vendor.findUnique({
       where: { ownerUserId: userId },
