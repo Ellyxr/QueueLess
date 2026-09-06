@@ -17,6 +17,8 @@ import {
 
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -61,6 +63,28 @@ export class OrdersController {
       dto,
       idempotencyKey,
     );
+  }
+
+  @Get('vendor/queue')
+  @UseGuards(RolesGuard)
+  @Roles('VENDOR_OWNER')
+  @ApiOperation({
+    summary: 'Get the authenticated vendor order queue',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Vendor order queue returned successfully',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Authenticated user is not a vendor owner',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Vendor not found for authenticated user',
+  })
+  async getVendorOrderQueue(@CurrentUser() user: JwtPayload) {
+    return this.ordersService.getVendorOrderQueue(user.sub);
   }
 
   @Get('vendor/dashboard')
