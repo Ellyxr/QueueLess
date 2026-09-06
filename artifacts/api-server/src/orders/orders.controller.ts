@@ -128,6 +128,30 @@ export class OrdersController {
     return this.ordersService.getVendorDashboard(user.sub);
   }
 
+  @Get(':orderId/status')
+  @UseGuards(RolesGuard)
+  @Roles('BUYER')
+  @ApiOperation({
+    summary: 'Get the authenticated student order status',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Current authoritative order status returned successfully',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Order not found',
+  })
+  async getOrderStatus(
+    @CurrentUser() user: JwtPayload,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.ordersService.getOrderStatus(
+      user.sub,
+      orderId,
+    );
+  }
+
   @Get(':id')
   @ApiOperation({
     summary: 'Get one of the authenticated user’s orders',

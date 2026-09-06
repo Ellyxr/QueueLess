@@ -350,6 +350,52 @@ export class OrdersService {
 
     return this.buildOrderResponse(order);
   }
+
+  async getOrderStatus(
+    userId: string,
+    orderId: string,
+  ) {
+    const order = await this.prisma.order.findFirst({
+      where: {
+        id: orderId,
+        customerId: userId,
+      },
+      select: {
+        id: true,
+        status: true,
+        updatedAt: true,
+        vendor: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        statusHistory: {
+          orderBy: {
+            changedAt: 'asc',
+          },
+          select: {
+            status: true,
+            note: true,
+            changedAt: true,
+          },
+        },
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    return {
+      orderId: order.id,
+      status: order.status,
+      updatedAt: order.updatedAt,
+      vendor: order.vendor,
+      history: order.statusHistory,
+    };
+  }
+
   async getVendorOrderQueue(userId: string) {
     const vendor = await this.prisma.vendor.findUnique({
       where: {
