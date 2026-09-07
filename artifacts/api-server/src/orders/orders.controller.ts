@@ -4,6 +4,7 @@ import {
   Get,
   Headers,
   Param,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -20,6 +21,7 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 
 import { CreateOrderDto } from './dto/create-order.dto';
 import { OrdersService } from './orders.service';
@@ -87,9 +89,67 @@ export class OrdersController {
     return this.ordersService.getVendorOrderQueue(user.sub);
   }
 
+  @Patch('vendor/:orderId/status')
+  @UseGuards(RolesGuard)
+  @Roles('VENDOR_OWNER')
+  @ApiOperation({
+    summary: 'Update the status of an order belonging to the authenticated vendor',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Order status updated successfully',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid order status transition',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Authenticated user is not authorized to update this order',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Order or vendor not found',
+  })
+  async updateVendorOrderStatus(
+    @CurrentUser() user: JwtPayload,
+    @Param('orderId') orderId: string,
+    @Body() dto: UpdateOrderStatusDto,
+  ) {
+    return this.ordersService.updateVendorOrderStatus(
+      user.sub,
+      orderId,
+      dto,
+    );
+  }
+
   @Get('vendor/dashboard')
   async getVendorDashboard(@CurrentUser() user: JwtPayload) {
     return this.ordersService.getVendorDashboard(user.sub);
+  }
+
+  @Get(':orderId/status')
+  @UseGuards(RolesGuard)
+  @Roles('BUYER')
+  @ApiOperation({
+    summary: 'Get the authenticated student order status',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Current authoritative order status returned successfully',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Order not found',
+  })
+  async getOrderStatus(
+    @CurrentUser() user: JwtPayload,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.ordersService.getOrderStatus(
+      user.sub,
+      orderId,
+    );
   }
 
   @Get(':id')
