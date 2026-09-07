@@ -28,6 +28,12 @@ export class UpdateProductDto {
   price?: number;
 
   @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 0 })
+  @Min(1)
+  @Max(180)
+  preparationTimeMinutes?: number;
+
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(50)
