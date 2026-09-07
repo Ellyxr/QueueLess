@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   Upload,
   Search,
+  Eye,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -27,11 +28,13 @@ import {
   getVendorDashboard,
   getMyVendor,
   getVendorStorefront,
+  getVendorOrderQueue,
   updateProduct,
   updateVendorStorefront,
   type VendorProduct,
   type VendorDashboard,
   type VendorStorefront,
+  type VendorQueueOrder,
 } from '@/features/auth/api';
 
 interface Product {
@@ -74,6 +77,11 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   const [productSearch, setProductSearch] = useState('');
   const [dashboard, setDashboard] = useState<VendorDashboard | null>(null);
 
+  // US-017 State Management (Vendor Queue & Order Details)
+  const [orderQueue, setOrderQueue] = useState<VendorQueueOrder[]>([]);
+  const [selectedOrder, setSelectedOrder] = useState<VendorQueueOrder | null>(null);
+  const [isQueueLoading, setIsQueueLoading] = useState(true);
+
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
     setTimeout(() => setToastMessage(null), 3000);
@@ -101,6 +109,29 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
       .catch((error: unknown) =>
         showToast(error instanceof Error ? error.message : 'Unable to load dashboard.', 'error'),
       );
+
+    // US-017: Fetch Incoming Order Queue
+    getVendorOrderQueue()
+      .then((data: any) => {
+        const list = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.orders)
+          ? data.orders
+          : Array.isArray(data?.data)
+          ? data.data
+          : [];
+        setOrderQueue(list);
+      })
+      .catch((error: unknown) => {
+        setOrderQueue([]);
+        showToast(
+          error instanceof Error ? error.message : 'Unable to load incoming order queue.',
+          'error'
+        );
+      })
+      .finally(() => {
+        setIsQueueLoading(false); // Ito ang kulang na nagtatapos sa loading status!
+      });
   }, []);
 
   const handleSaveStorefront = async (event: React.FormEvent) => {
@@ -375,7 +406,13 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {[
-              { label: 'Orders', icon: PackageCheck, onClick: () => {} },
+              {
+                label: 'Orders',
+                icon: PackageCheck,
+                onClick: () => {
+                  document.getElementById('incoming-orders-queue-section')?.scrollIntoView({ behavior: 'smooth' });
+                },
+              },
               {
                 label: 'Menu',
                 icon: MenuIcon,
@@ -402,6 +439,109 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
               </Button>
             ))}
           </div>
+        </section>
+
+        {/* US-017: Incoming Order Queue Section */}
+        <section id="incoming-orders-queue-section" className="mt-10">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Incoming Queue</p>
+              <h2 className="mt-1 text-2xl font-semibold tracking-[-0.05em] text-foreground">Order Queue & Status</h2>
+            </div>
+          </div>
+
+          <Card className="border-card-border/80 bg-card/90 shadow-sm overflow-hidden">
+            <CardContent className="p-0">
+              <div className="grid grid-cols-[1fr_1.2fr_1.5fr_1fr_1fr_0.8fr] gap-3 border-b border-border bg-secondary/40 px-4 py-3 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                <span>Order Ref</span>
+                <span>Customer</span>
+                <span>Items & Quantity</span>
+                <span>Payment</span>
+                <span>Status</span>
+                <span className="text-right">Action</span>
+              </div>
+
+              {isQueueLoading ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">
+                  Loading order queue...
+                </div>
+              ) : !Array.isArray(orderQueue) || orderQueue.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">
+                  No active orders in queue.
+                </div>
+              ) : (
+                orderQueue.map((order) => (
+                  <div
+                    key={order.id}
+                    className="grid grid-cols-[1fr_1.2fr_1.5fr_1fr_1fr_0.8fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
+                  >
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">#{order.id.slice(-6).toUpperCase()}</p>
+                      <p className="text-xs text-muted-foreground">₱{Number(order.totalAmount).toFixed(2)}</p>
+                    </div>
+
+                    <div>
+                      <p className="text-sm font-medium text-foreground">{order.customerName || order.userId || 'Guest'}</p>
+                      <p className="text-xs text-muted-foreground">{order.customerEmail || ''}</p>
+                    </div>
+
+                    <div className="text-sm text-foreground truncate">
+                      {order.items && order.items.length > 0 ? (() => {
+                        const firstItem = order.items[0] as any;
+                        const itemName = firstItem.productName || firstItem.name || firstItem.product?.name || 'Item';
+                        return (
+                          <span>
+                            {itemName} (x{firstItem.quantity})
+                            {order.items.length > 1 ? ` +${order.items.length - 1} more` : ''}
+                          </span>
+                        );
+                      })() : (
+                        <span className="text-muted-foreground">No item details</span>
+                      )}
+                    </div>
+
+                    <div>
+                      <span
+                        className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                          order.paymentStatus === 'PAID'
+                            ? 'bg-emerald-500/10 text-emerald-600'
+                            : 'bg-amber-500/10 text-amber-600'
+                        }`}
+                      >
+                        {order.paymentStatus || 'PENDING'}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span
+                        className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] ${
+                          order.status === 'DELIVERED' || order.status === 'COMPLETED'
+                            ? 'bg-emerald-500/10 text-emerald-600'
+                            : order.status === 'PREPARING' || order.status === 'COOKING'
+                            ? 'bg-amber-500/10 text-amber-600'
+                            : 'bg-blue-500/10 text-blue-600'
+                        }`}
+                      >
+                        {order.status}
+                      </span>
+                    </div>
+
+                    <div className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setSelectedOrder(order)}
+                        className="h-8 w-8 rounded-full border border-border/80 hover:bg-secondary"
+                        title="View order detail"
+                      >
+                        <Eye className="h-3.5 w-3.5 text-foreground" />
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
         </section>
 
         {/* US-012: Product Management Section */}
@@ -559,6 +699,81 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
           </Card>
         </section>
       </div>
+
+      {/* US-017: Order Details Display Modal */}
+      {selectedOrder &&
+        createPortal(
+          <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
+            <div className="w-full max-w-lg rounded-3xl border border-border bg-card p-6 shadow-2xl">
+              <div className="flex items-center justify-between border-b border-border pb-3">
+                <div>
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Order Details</p>
+                  <h3 className="text-lg font-bold text-foreground">
+                    Ref #{selectedOrder.id}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setSelectedOrder(null)}
+                  className="rounded-full p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="mt-4 space-y-4 text-sm">
+                <div className="grid grid-cols-2 gap-2 rounded-2xl bg-secondary/30 p-3">
+                  <div>
+                    <span className="text-xs text-muted-foreground block">Customer Reference</span>
+                    <span className="font-semibold text-foreground">{selectedOrder.customerName || selectedOrder.userId || 'Guest'}</span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-muted-foreground block">Payment State</span>
+                    <span className="font-semibold text-emerald-600">{selectedOrder.paymentStatus || 'PENDING'}</span>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="font-semibold text-foreground mb-2">Order Items</h4>
+                  <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                    {selectedOrder.items && selectedOrder.items.length > 0 ? (
+                      (selectedOrder.items as any[]).map((rawItem, idx) => {
+                        const item = rawItem;
+                        const itemName = item.productName || item.name || item.product?.name || 'Product';
+                        const itemPrice = Number(item.price || item.unitPrice || item.product?.price || 0);
+                        return (
+                          <div key={idx} className="flex justify-between items-center border-b border-border/50 pb-1.5">
+                            <div>
+                              <p className="font-medium text-foreground">{itemName}</p>
+                              <p className="text-xs text-muted-foreground">Quantity: {item.quantity}</p>
+                            </div>
+                            <p className="font-medium text-primary">₱{(itemPrice * (item.quantity || 1)).toFixed(2)}</p>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <p className="text-xs text-muted-foreground">No items listed.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center border-t border-border pt-3">
+                  <span className="font-semibold text-foreground">Total Amount</span>
+                  <span className="text-lg font-bold text-primary">₱{Number(selectedOrder.totalAmount || 0).toFixed(2)}</span>
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end">
+                <Button
+                  onClick={() => setSelectedOrder(null)}
+                  className="rounded-full px-6"
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
 
       {/* US-012: Add/Edit Product Modal */}
       {isModalOpen &&

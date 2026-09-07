@@ -12,6 +12,7 @@ import {
   Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { createOrder, fetchWithAuth } from "@/features/auth/api";
 
 export interface CartOption {
   name: string;
@@ -20,7 +21,8 @@ export interface CartOption {
 
 export interface CartItem {
   id: string;
-  storeName: string;
+  storeName?: string;
+  vendorId?: string;
   name: string;
   image: string;
   price: number;
@@ -65,20 +67,21 @@ export function saveCartItems(items: CartItem[]) {
 }
 
 export function addCartItem(
-  item: Omit<CartItem, "id" | "quantity" | "options">,
+  item: Omit<CartItem, "quantity" | "options">, 
 ) {
   const items = getCartItems();
   const existingItem = items.find(
-    (cartItem) =>
-      cartItem.name === item.name && cartItem.storeName === item.storeName,
+    (cartItem) => cartItem.id === item.id, 
   );
 
   if (existingItem) {
     existingItem.quantity += 1;
+    existingItem.vendorId = item.vendorId || existingItem.vendorId;
+    existingItem.storeName = item.storeName || existingItem.storeName;
   } else {
     items.push({
       ...item,
-      id: `${item.storeName}-${item.name}`,
+      id: item.id, 
       quantity: 1,
       options: [],
     });
@@ -105,6 +108,8 @@ export default function CartPage() {
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isConfirmed, setIsConfirmed] = useState(false);
+  const [finalTotal, setFinalTotal] = useState(0);
+  const [finalStoreName, setFinalStoreName] = useState("Campus Shop");
 
   useEffect(() => {
     const refreshCart = () => setItems(getCartItems());
@@ -120,7 +125,9 @@ export default function CartPage() {
   const convenienceFee = items.length ? 5 : 0;
   const deliveryFee = delivery && items.length ? 35 : 0;
   const total = subtotal - promoDiscount + convenienceFee + deliveryFee;
-  const storeName = items[0]?.storeName ?? "North Loop Kitchen";
+  const storeName = items[0]?.storeName && items[0].storeName.trim() !== "" 
+    ? items[0].storeName 
+    : "North Loop Kitchen";
 
   const updateQuantity = (id: string, change: number) => {
     const nextItems = items
@@ -152,9 +159,44 @@ export default function CartPage() {
   const submitOrder = async () => {
     if (isSubmitting || !items.length) return;
     setIsSubmitting(true);
-    await new Promise((resolve) => window.setTimeout(resolve, 700));
-    setIsConfirmed(true);
-    saveCartItems([]);
+    try {
+      let activeCartId = "";
+      for (const item of items) {
+        console.log("Debugging item object:", item);
+        console.log("Current item id:", item.id);
+
+        const cartResponse: any = await fetchWithAuth('/carts/items', {
+          method: 'POST',
+          body: JSON.stringify({
+            productId: item.id, 
+            quantity: item.quantity,
+          }),
+        });
+        
+        if (cartResponse?.cartId || cartResponse?.id) {
+          activeCartId = cartResponse.cartId || cartResponse.id;
+        }
+      }
+
+      if (!activeCartId) {
+        throw new Error("Could not retrieve active cart ID.");
+      }
+
+      await createOrder({
+        cartId: activeCartId,
+      });
+
+      // I-save muna ang total at storeName bago i-clear ang cart items
+      setFinalTotal(total);
+      setFinalStoreName(storeName);
+      setIsConfirmed(true);
+      saveCartItems([]);
+    } catch (error) {
+      console.error("Failed to submit order:", error);
+      alert("Failed to submit order. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (isConfirmed) {
@@ -171,13 +213,13 @@ export default function CartPage() {
             Your food is on its way.
           </h1>
           <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted-foreground">
-            {storeName} has received your order. Pick it up at the Student
+            {finalStoreName} has received your order. Pick it up at the Student
             Center when it is ready.
           </p>
           <div className="mx-auto mt-8 max-w-sm rounded-2xl bg-secondary/60 p-4 text-left text-sm">
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Order total</span>
-              <strong>{currency(total)}</strong>
+              <strong>{currency(finalTotal)}</strong>
             </div>
             <div className="mt-2 flex items-center justify-between">
               <span className="text-muted-foreground">Estimated wait</span>
