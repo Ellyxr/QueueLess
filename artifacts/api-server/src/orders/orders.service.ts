@@ -1,12 +1,13 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Prisma } from '@prisma/client';
-
+import { OrderStatus, Prisma } from '@prisma/client';
+import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 
@@ -349,6 +350,52 @@ export class OrdersService {
 
     return this.buildOrderResponse(order);
   }
+
+  async getOrderStatus(
+    userId: string,
+    orderId: string,
+  ) {
+    const order = await this.prisma.order.findFirst({
+      where: {
+        id: orderId,
+        customerId: userId,
+      },
+      select: {
+        id: true,
+        status: true,
+        updatedAt: true,
+        vendor: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        statusHistory: {
+          orderBy: {
+            changedAt: 'asc',
+          },
+          select: {
+            status: true,
+            note: true,
+            changedAt: true,
+          },
+        },
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    return {
+      orderId: order.id,
+      status: order.status,
+      updatedAt: order.updatedAt,
+      vendor: order.vendor,
+      history: order.statusHistory,
+    };
+  }
+
   async getVendorOrderQueue(userId: string) {
     const vendor = await this.prisma.vendor.findUnique({
       where: {
@@ -445,6 +492,90 @@ export class OrdersService {
       })),
     };
   }
+
+  async updateVendorOrderStatus(
+    userId: string,
+    orderId: string,
+    dto: UpdateOrderStatusDto,
+  ) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: {
+        ownerUserId: userId,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException(
+        'Vendor not found for this user',
+      );
+    }
+
+    const note = dto.note?.trim() || null;
+
+    const updatedOrder = await this.prisma.$transaction(
+      async (tx) => {
+        const order = await tx.order.findUnique({
+          where: {
+            id: orderId,
+          },
+          select: {
+            id: true,
+            vendorId: true,
+            status: true,
+          },
+        });
+
+        if (!order) {
+          throw new NotFoundException('Order not found');
+        }
+
+        if (order.vendorId !== vendor.id) {
+          throw new ForbiddenException(
+            'You do not have permission to update this order',
+          );
+        }
+
+        this.validateOrderStatusTransition(
+          order.status,
+          dto.status,
+        );
+
+        const updated = await tx.order.update({
+          where: {
+            id: order.id,
+          },
+          data: {
+            status: dto.status,
+          },
+          include: {
+            vendor: true,
+            items: {
+              include: {
+                product: true,
+              },
+            },
+          },
+        });
+
+        await tx.orderStatusHistory.create({
+          data: {
+            orderId: order.id,
+            status: dto.status,
+            changedByUserId: userId,
+            note,
+          },
+        });
+
+        return updated;
+      },
+    );
+
+    return this.buildOrderResponse(updatedOrder);
+  }
+
   async getVendorDashboard(userId: string) {
     const vendor = await this.prisma.vendor.findUnique({
       where: { ownerUserId: userId },
@@ -497,6 +628,44 @@ export class OrdersService {
         createdAt: order.createdAt,
       })),
     };
+  }
+
+  private validateOrderStatusTransition(
+    currentStatus: OrderStatus,
+    nextStatus: OrderStatus,
+  ) {
+    const allowedTransitions: Record<
+      OrderStatus,
+      OrderStatus[]
+    > = {
+      PENDING: [
+        OrderStatus.PAID,
+        OrderStatus.CANCELLED,
+      ],
+      PAID: [
+        OrderStatus.COOKING,
+        OrderStatus.CANCELLED,
+      ],
+      COOKING: [
+        OrderStatus.OUT_FOR_DELIVERY,
+        OrderStatus.CANCELLED,
+      ],
+      OUT_FOR_DELIVERY: [
+        OrderStatus.DELIVERED,
+      ],
+      DELIVERED: [],
+      CANCELLED: [],
+    };
+
+    if (
+      !allowedTransitions[currentStatus].includes(
+        nextStatus,
+      )
+    ) {
+      throw new BadRequestException(
+        `Invalid order status transition from ${currentStatus} to ${nextStatus}`,
+      );
+    }
   }
 
   private getMarketplaceFeeRate(): Prisma.Decimal {
