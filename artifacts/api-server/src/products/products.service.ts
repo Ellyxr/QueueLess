@@ -52,6 +52,7 @@ export class ProductsService {
         name: true,
         description: true,
         price: true,
+        preparationTimeMinutes: true,
         category: true,
         isAvailable: true,
       },
@@ -73,6 +74,7 @@ export class ProductsService {
         name: true,
         description: true,
         price: true,
+        preparationTimeMinutes: true,
         category: true,
         isAvailable: true,
         createdAt: true,
@@ -120,6 +122,7 @@ export class ProductsService {
           name,
           description,
           price: dto.price,
+          preparationTimeMinutes: dto.preparationTimeMinutes ?? 15,
           category,
           isAvailable: dto.isAvailable ?? true,
         },
@@ -129,6 +132,7 @@ export class ProductsService {
           name: true,
           description: true,
           price: true,
+          preparationTimeMinutes: true,
           category: true,
           isAvailable: true,
           createdAt: true,
@@ -180,6 +184,7 @@ export class ProductsService {
       name?: string;
       description?: string | null;
       price?: number;
+      preparationTimeMinutes?: number;
       category?: string | null;
       isAvailable?: boolean;
     } = {};
@@ -194,6 +199,11 @@ export class ProductsService {
 
     if (dto.price !== undefined) {
       data.price = dto.price;
+    }
+
+    if (dto.preparationTimeMinutes !== undefined) {
+      data.preparationTimeMinutes =
+        dto.preparationTimeMinutes;
     }
 
     if (dto.category !== undefined) {
@@ -216,6 +226,7 @@ export class ProductsService {
           name: true,
           description: true,
           price: true,
+          preparationTimeMinutes: true,
           category: true,
           isAvailable: true,
           createdAt: true,
