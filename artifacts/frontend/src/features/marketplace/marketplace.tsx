@@ -521,7 +521,7 @@ type MarketplaceVendor = {
   vendorType: string;
   eta: string;
   rating: number;
-  menuItems: Array<{ image: string; name: string; flavorProfile: string; price: number }>;
+  menuItems: Array<{ id: string; image: string; name: string; flavorProfile: string; price: number }>;
 };
 
 function toMarketplaceVendor(vendor: VendorStorefront): MarketplaceVendor {
@@ -537,6 +537,7 @@ function toMarketplaceVendor(vendor: VendorStorefront): MarketplaceVendor {
     menuItems: (vendor.products || [])
       .filter((product) => product.isAvailable)
       .map((product) => ({
+        id: product.id,
         image: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80",
         name: product.name,
         flavorProfile: product.description || "Freshly prepared",
@@ -554,7 +555,7 @@ function VendorCard({
   type,
 }: {
   id: string;
-  menuItems: Array<{ image: string; name: string; flavorProfile: string; price: number }>;
+  menuItems: Array<{ id: string; image: string; name: string; flavorProfile: string; price: number }>;
   name: string;
   eta: string;
   rating: number;
@@ -624,11 +625,14 @@ function VendorCard({
                 <div className="grid grid-cols-2 gap-2">
                   {menuItems.slice(0, 2).map((item) => (
                     <StoreItemCard
+                      id={item.id}
                       key={item.name}
                       image={item.image}
                       name={item.name}
                       flavorProfile={item.flavorProfile}
                       price={item.price}
+                      storeName={name}
+                      vendorId={id}
                     />
                   ))}
                   {menuItems.length === 0 && (
@@ -691,10 +695,13 @@ function VendorCard({
                       )}
                     >
                       <StoreItemCard
+                        id={item.id}
                         image={item.image}
                         name={item.name}
                         flavorProfile={item.flavorProfile}
                         price={item.price}
+                        storeName={name}
+                        vendorId={id}
                       />
                     </motion.div>
                   ))}

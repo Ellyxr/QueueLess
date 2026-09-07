@@ -4,19 +4,23 @@ import { Heart, Plus, Star } from "lucide-react";
 import { addCartItem } from "@/features/cart/cart";
 
 interface StoreItemCardProps {
+  id: string;
   image: string;
   name: string;
   flavorProfile: string;
   price: number;
   storeName?: string;
+  vendorId?: string;
 }
 
 export function StoreItemCard({
+  id,
   image,
   name,
   flavorProfile,
   price,
-  storeName = "North Loop Kitchen",
+  storeName,
+  vendorId,
 }: StoreItemCardProps) {
   const [isFavorited, setIsFavorited] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
@@ -25,7 +29,7 @@ export function StoreItemCard({
     if (isAdding) return;
 
     setIsAdding(true);
-    addCartItem({ image, name, price, storeName });
+    addCartItem({ id, image, name, price, storeName, vendorId });
 
     // Find the cart button in the AppShell.
     const cart = document.querySelector(
