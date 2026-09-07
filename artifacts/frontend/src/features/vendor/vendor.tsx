@@ -31,6 +31,7 @@ import {
   getVendorOrderQueue,
   updateProduct,
   updateVendorStorefront,
+  updateOrderStatus,
   type VendorProduct,
   type VendorDashboard,
   type VendorStorefront,
@@ -81,6 +82,9 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   const [orderQueue, setOrderQueue] = useState<VendorQueueOrder[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<VendorQueueOrder | null>(null);
   const [isQueueLoading, setIsQueueLoading] = useState(true);
+
+  // US-018 State Management
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
@@ -269,6 +273,31 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
       showToast(error instanceof Error ? error.message : 'Unable to delete product.', 'error');
     } finally {
       setIsProductDeleting(false);
+    }
+  };
+
+  // US-018: Handle Order Status Update & Invalid Transition Feedback
+  const handleStatusChange = async (newStatus: string) => {
+    if (!selectedOrder) return;
+    setIsUpdatingStatus(true);
+    try {
+      await updateOrderStatus(selectedOrder.id, newStatus);
+      showToast(`Order status updated to ${newStatus}`);
+      
+      setOrderQueue((prev) =>
+        prev.map((o) => 
+          o.id === selectedOrder.id 
+            ? { ...o, status: newStatus, ...(newStatus === 'PAID' ? { paymentStatus: 'PAID' } : {}) } 
+            : o
+        )
+      );
+      setSelectedOrder((prev) => 
+        prev ? { ...prev, status: newStatus, ...(newStatus === 'PAID' ? { paymentStatus: 'PAID' } : {}) } : null
+      );
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Invalid status transition.', 'error');
+    } finally {
+      setIsUpdatingStatus(false);
     }
   };
 
@@ -759,6 +788,28 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                 <div className="flex justify-between items-center border-t border-border pt-3">
                   <span className="font-semibold text-foreground">Total Amount</span>
                   <span className="text-lg font-bold text-primary">₱{Number(selectedOrder.totalAmount || 0).toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* US-018: Order Status Controls & Transition Buttons */}
+              <div className="mt-4 border-t border-border pt-4">
+                <span className="text-xs font-mono uppercase tracking-wider text-muted-foreground block mb-2">
+                  Update Order Status (US-018)
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {['PENDING', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'].map((statusOption) => (
+                    <Button
+                      key={statusOption}
+                      type="button"
+                      variant={selectedOrder.status === statusOption ? 'default' : 'outline'}
+                      size="sm"
+                      disabled={isUpdatingStatus || selectedOrder.status === statusOption}
+                      onClick={() => handleStatusChange(statusOption)}
+                      className="rounded-full text-xs"
+                    >
+                      {statusOption}
+                    </Button>
+                  ))}
                 </div>
               </div>
 
