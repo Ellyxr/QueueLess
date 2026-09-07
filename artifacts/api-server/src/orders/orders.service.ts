@@ -227,6 +227,16 @@ export class OrdersService {
             );
           }
 
+          const estimatedWaitMinutes = Math.max(
+            ...cart.items.map(
+              (item) => item.product.preparationTimeMinutes,
+            ),
+          );
+
+          const estimatedReadyAt = new Date(
+            Date.now() + estimatedWaitMinutes * 60_000,
+          );
+
           const order = await tx.order.create({
             data: {
               customerId: userId,
@@ -236,6 +246,7 @@ export class OrdersService {
               status: 'PENDING',
               subtotal,
               marketplaceFee,
+              estimatedReadyAt,
               totalAmount,
               items: {
                 create: orderItems,
@@ -363,6 +374,7 @@ export class OrdersService {
       select: {
         id: true,
         status: true,
+        estimatedReadyAt: true,
         updatedAt: true,
         vendor: {
           select: {
@@ -387,9 +399,23 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
+    const estimatedWaitMinutes =
+      order.estimatedReadyAt &&
+      order.status !== OrderStatus.DELIVERED &&
+      order.status !== OrderStatus.CANCELLED
+        ? Math.max(
+            0,
+            Math.ceil(
+              (order.estimatedReadyAt.getTime() - Date.now()) /
+                60_000,
+            ),
+          )
+        : null;
     return {
       orderId: order.id,
       status: order.status,
+      estimatedReadyAt: order.estimatedReadyAt,
+      estimatedWaitMinutes,
       updatedAt: order.updatedAt,
       vendor: order.vendor,
       history: order.statusHistory,
@@ -696,7 +722,6 @@ export class OrdersService {
 
     return rate;
   }
-
   private buildOrderResponse(
     order: Prisma.OrderGetPayload<{
       include: {
@@ -709,6 +734,19 @@ export class OrdersService {
       };
     }>,
   ) {
+    const estimatedWaitMinutes =
+      order.estimatedReadyAt &&
+      order.status !== OrderStatus.DELIVERED &&
+      order.status !== OrderStatus.CANCELLED
+        ? Math.max(
+            0,
+            Math.ceil(
+              (order.estimatedReadyAt.getTime() - Date.now()) /
+                60_000,
+            ),
+          )
+        : null;
+
     return {
       id: order.id,
       customerId: order.customerId,
@@ -720,11 +758,11 @@ export class OrdersService {
       eventId: order.eventId,
       orderType: order.orderType,
       status: order.status,
+      estimatedReadyAt: order.estimatedReadyAt,
+      estimatedWaitMinutes,
       subtotal: order.subtotal.toFixed(2),
-      marketplaceFee:
-        order.marketplaceFee.toFixed(2),
-      totalAmount:
-        order.totalAmount.toFixed(2),
+      marketplaceFee: order.marketplaceFee.toFixed(2),
+      totalAmount: order.totalAmount.toFixed(2),
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
       items: order.items.map((item) => ({
@@ -732,11 +770,9 @@ export class OrdersService {
         productId: item.productId,
         name: item.product.name,
         quantity: item.quantity,
-        unitPrice:
-          item.unitPriceSnapshot.toFixed(2),
-        subtotal:
-          item.lineSubtotal.toFixed(2),
+        unitPrice: item.unitPriceSnapshot.toFixed(2),
+        subtotal: item.lineSubtotal.toFixed(2),
       })),
     };
   }
-}
+  }

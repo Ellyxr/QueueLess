@@ -25,6 +25,11 @@ export class CreateProductDto {
   @Max(99999999.99)
   price!: number;
 
+  @IsNumber({ maxDecimalPlaces: 0 })
+  @Min(1)
+  @Max(180)
+  preparationTimeMinutes?: number;
+
   @IsOptional()
   @IsString()
   @MinLength(1)
