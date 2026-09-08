@@ -223,9 +223,17 @@ export function createOrder(data: CreateOrderInput): Promise<any> {
   return fetchWithAuth('/orders', {
     method: 'POST',
     headers: {
-      'Idempotency-Key': crypto.randomUUID(), // <--- Idagdag itong header na ito!
+      'Idempotency-Key': crypto.randomUUID(),
     },
     body: JSON.stringify(data),
+  });
+}
+
+// US-018: Update Vendor Order Status
+export function updateOrderStatus(orderId: string, status: string): Promise<any> {
+  return fetchWithAuth(`/orders/vendor/${orderId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
   });
 }
 
