@@ -61,6 +61,29 @@ export interface UpdateVendorInput {
   campusLocation?: string;
 }
 
+// US-017 Types for Vendor Incoming Order Queue
+export interface VendorOrderItem {
+  productName?: string;
+  quantity: number;
+  price?: number;
+}
+
+export interface VendorQueueOrder {
+  id: string;
+  totalAmount: number;
+  customerName?: string;
+  customerEmail?: string;
+  userId?: string;
+  paymentStatus?: string;
+  status: string;
+  items?: VendorOrderItem[];
+}
+
+// US-017: Create/Submit Order from Cart
+export interface CreateOrderInput {
+  cartId: string;
+}
+
 export async function loginUser(data: LoginInput): Promise<AuthResponse> {
   const response = await fetch(`${API_BASE_URL}/auth/login`, {
     method: 'POST',
@@ -77,7 +100,7 @@ export async function loginUser(data: LoginInput): Promise<AuthResponse> {
 }
 
 export async function registerUser(data: RegisterInput): Promise<AuthResponse> {
-  const { fullName, email, password,role, businessName, phoneNumber } = data;
+  const { fullName, email, password, role, businessName, phoneNumber } = data;
 
   const response = await fetch(`${API_BASE_URL}/auth/register`, {
     method: 'POST',
@@ -187,6 +210,21 @@ export function updateVendorStorefront(
 ): Promise<VendorStorefront> {
   return fetchWithAuth(`/vendors/${vendorId}`, {
     method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+// US-017: Get Vendor Incoming Order Queue
+export function getVendorOrderQueue(): Promise<VendorQueueOrder[]> {
+  return fetchWithAuth('/orders/vendor/queue');
+}
+
+export function createOrder(data: CreateOrderInput): Promise<any> {
+  return fetchWithAuth('/orders', {
+    method: 'POST',
+    headers: {
+      'Idempotency-Key': crypto.randomUUID(), // <--- Idagdag itong header na ito!
+    },
     body: JSON.stringify(data),
   });
 }
