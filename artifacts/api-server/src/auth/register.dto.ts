@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEmail,
+  IsIn,
   IsOptional,
   IsString,
   MinLength,
@@ -34,4 +35,20 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   phone?: string;
+
+  @ApiProperty({
+    example: 'student',
+    enum: ['student', 'vendor'],
+  })
+  @IsIn(['student', 'vendor'])
+  role!: 'student' | 'vendor';
+
+  @ApiPropertyOptional({
+    example: 'Avril Snacks',
+    description: 'Required when registering as a vendor',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  businessName?: string;
 }

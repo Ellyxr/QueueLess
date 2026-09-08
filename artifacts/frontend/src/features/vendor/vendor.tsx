@@ -1,0 +1,1013 @@
+import { useEffect, useState } from 'react';
+import {
+  ArrowDownRight,
+  ArrowUpRight,
+  Megaphone,
+  Menu as MenuIcon,
+  PackageCheck,
+  ShoppingBag,
+  Store,
+  Plus,
+  Pencil,
+  Trash2,
+  X,
+  AlertCircle,
+  CheckCircle2,
+  Upload,
+  Search,
+  Eye,
+} from 'lucide-react';
+
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { createPortal } from 'react-dom';
+import { useRequireAuth } from '@/hooks/use-require-auth';
+import {
+  createProduct,
+  deleteProduct,
+  getVendorDashboard,
+  getMyVendor,
+  getVendorStorefront,
+  getVendorOrderQueue,
+  updateProduct,
+  updateVendorStorefront,
+  updateOrderStatus,
+  type VendorProduct,
+  type VendorDashboard,
+  type VendorStorefront,
+  type VendorQueueOrder,
+} from '@/features/auth/api';
+
+interface Product {
+  id: string;
+  name: string;
+  price: number;
+  description: string;
+  category: string;
+  image?: string;
+  isAvailable: boolean;
+}
+
+export default function VendorPage({ username = 'Jordan' }: { username?: string }) {
+  useRequireAuth(['vendor', 'student_vendor', 'admin']);
+
+  // US-012 State Management
+  const [products, setProducts] = useState<Product[]>([]);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+
+  // Form State
+  const [formData, setFormData] = useState({
+    name: '',
+    price: '',
+    description: '',
+    category: '',
+    image: '',
+  });
+  const [imagePreview, setImagePreview] = useState<string>('');
+  const [formErrors, setFormErrors] = useState<{ name?: string; price?: string; description?: string }>({});
+  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [vendor, setVendor] = useState<VendorStorefront | null>(null);
+  const [storefrontData, setStorefrontData] = useState({ name: '', description: '', campusLocation: '' });
+  const [storefrontErrors, setStorefrontErrors] = useState<{ name?: string; description?: string; campusLocation?: string }>({});
+  const [isStorefrontLoading, setIsStorefrontLoading] = useState(true);
+  const [isStorefrontSaving, setIsStorefrontSaving] = useState(false);
+  const [isProductSaving, setIsProductSaving] = useState(false);
+  const [isProductDeleting, setIsProductDeleting] = useState(false);
+  const [productSearch, setProductSearch] = useState('');
+  const [dashboard, setDashboard] = useState<VendorDashboard | null>(null);
+
+  // US-017 State Management (Vendor Queue & Order Details)
+  const [orderQueue, setOrderQueue] = useState<VendorQueueOrder[]>([]);
+  const [selectedOrder, setSelectedOrder] = useState<VendorQueueOrder | null>(null);
+  const [isQueueLoading, setIsQueueLoading] = useState(true);
+
+  // US-018 State Management
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+
+  const showToast = (text: string, type: 'success' | 'error' = 'success') => {
+    setToastMessage({ text, type });
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  useEffect(() => {
+    getMyVendor()
+      .then((vendorData) => {
+        setVendor(vendorData);
+        setStorefrontData({
+          name: vendorData.name,
+          description: vendorData.description || '',
+          campusLocation: vendorData.campusLocation || '',
+        });
+        return getVendorStorefront(vendorData.id);
+      })
+      .then((vendorData) => {
+        if (vendorData) setProducts(vendorData.products?.map(toProduct) || []);
+      })
+      .catch((error: unknown) => showToast(error instanceof Error ? error.message : 'Unable to load storefront.', 'error'))
+      .finally(() => setIsStorefrontLoading(false));
+
+    getVendorDashboard()
+      .then(setDashboard)
+      .catch((error: unknown) =>
+        showToast(error instanceof Error ? error.message : 'Unable to load dashboard.', 'error'),
+      );
+
+    // US-017: Fetch Incoming Order Queue
+    getVendorOrderQueue()
+      .then((data: any) => {
+        const list = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.orders)
+          ? data.orders
+          : Array.isArray(data?.data)
+          ? data.data
+          : [];
+        setOrderQueue(list);
+      })
+      .catch((error: unknown) => {
+        setOrderQueue([]);
+        showToast(
+          error instanceof Error ? error.message : 'Unable to load incoming order queue.',
+          'error'
+        );
+      })
+      .finally(() => {
+        setIsQueueLoading(false); // Ito ang kulang na nagtatapos sa loading status!
+      });
+  }, []);
+
+  const handleSaveStorefront = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const errors: typeof storefrontErrors = {};
+    if (!storefrontData.name.trim()) errors.name = 'Store name is required.';
+    if (storefrontData.name.trim().length > 100) errors.name = 'Store name must be 100 characters or fewer.';
+    if (storefrontData.description.length > 500) errors.description = 'Description must be 500 characters or fewer.';
+    if (storefrontData.campusLocation.length > 255) errors.campusLocation = 'Location must be 255 characters or fewer.';
+    setStorefrontErrors(errors);
+    if (Object.keys(errors).length > 0 || !vendor) return;
+
+    setIsStorefrontSaving(true);
+    try {
+      const updatedVendor = await updateVendorStorefront(vendor.id, {
+        name: storefrontData.name.trim(),
+        description: storefrontData.description.trim(),
+        campusLocation: storefrontData.campusLocation.trim(),
+      });
+      setVendor(updatedVendor);
+      setStorefrontData({
+        name: updatedVendor.name,
+        description: updatedVendor.description || '',
+        campusLocation: updatedVendor.campusLocation || '',
+      });
+      showToast('Storefront updated successfully.');
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Unable to update storefront.', 'error');
+    } finally {
+      setIsStorefrontSaving(false);
+    }
+  };
+
+  const toProduct = (product: VendorProduct): Product => ({
+    id: product.id,
+    name: product.name,
+    price: Number(product.price),
+    description: product.description || '',
+    category: product.category || 'General',
+    image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
+    isAvailable: product.isAvailable,
+  });
+
+  const handleOpenModal = (product?: Product) => {
+    if (product) {
+      setEditingProduct(product);
+      setFormData({
+        name: product.name,
+        price: product.price.toString(),
+        description: product.description,
+        category: product.category || 'General',
+        image: product.image || '',
+      });
+      setImagePreview(product.image || '');
+    } else {
+      setEditingProduct(null);
+      setFormData({ name: '', price: '', description: '', category: '', image: '' });
+      setImagePreview('');
+    }
+    setFormErrors({});
+    setIsModalOpen(true);
+  };
+
+  // Handle Local File Upload from File Explorer / Gallery
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        setFormData((prev) => ({ ...prev, image: result }));
+        setImagePreview(result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const validateForm = () => {
+    const errors: { name?: string; price?: string; description?: string } = {};
+    if (!formData.name.trim()) errors.name = 'Product name is required';
+    if (!formData.price.trim()) {
+      errors.price = 'Price is required';
+    } else if (isNaN(Number(formData.price)) || Number(formData.price) <= 0) {
+      errors.price = 'Price must be a valid positive number';
+    }
+    if (!formData.description.trim()) errors.description = 'Description is required';
+
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleSaveProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!validateForm()) return;
+
+    const finalCategory = formData.category.trim() ? formData.category.trim() : 'General';
+    setIsProductSaving(true);
+    try {
+      const data = {
+        name: formData.name.trim(),
+        price: Number(formData.price),
+        description: formData.description.trim(),
+        category: finalCategory,
+        isAvailable: true,
+      };
+      const savedProduct = editingProduct
+        ? await updateProduct(editingProduct.id, data)
+        : await createProduct(data);
+      const mappedProduct = toProduct(savedProduct);
+      setProducts((prev) =>
+        editingProduct
+          ? prev.map((product) =>
+              product.id === editingProduct.id ? mappedProduct : product,
+            )
+          : [mappedProduct, ...prev],
+      );
+      showToast(editingProduct ? 'Product updated successfully!' : 'New product added to store!');
+      setIsModalOpen(false);
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Unable to save product.', 'error');
+    } finally {
+      setIsProductSaving(false);
+    }
+  };
+
+  const handleDeleteProduct = async () => {
+    if (!deleteTargetId) return;
+    setIsProductDeleting(true);
+    try {
+      await deleteProduct(deleteTargetId);
+      setProducts((prev) => prev.filter((product) => product.id !== deleteTargetId));
+      setDeleteTargetId(null);
+      showToast('Product deleted from menu');
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Unable to delete product.', 'error');
+    } finally {
+      setIsProductDeleting(false);
+    }
+  };
+
+  // US-018: Handle Order Status Update & Invalid Transition Feedback
+  const handleStatusChange = async (newStatus: string) => {
+    if (!selectedOrder) return;
+    setIsUpdatingStatus(true);
+    try {
+      await updateOrderStatus(selectedOrder.id, newStatus);
+      showToast(`Order status updated to ${newStatus}`);
+      
+      setOrderQueue((prev) =>
+        prev.map((o) => 
+          o.id === selectedOrder.id 
+            ? { ...o, status: newStatus, ...(newStatus === 'PAID' ? { paymentStatus: 'PAID' } : {}) } 
+            : o
+        )
+      );
+      setSelectedOrder((prev) => 
+        prev ? { ...prev, status: newStatus, ...(newStatus === 'PAID' ? { paymentStatus: 'PAID' } : {}) } : null
+      );
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Invalid status transition.', 'error');
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  };
+
+  const filteredProducts = products.filter((product) => {
+    const query = productSearch.trim().toLowerCase();
+    return !query || [product.name, product.description, product.category]
+      .some((value) => value.toLowerCase().includes(query));
+  });
+
+  const performanceCards = [
+    { label: 'Today', value: `₱${Number(dashboard?.todaySales || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, caption: '' },
+    { label: 'Avg. ticket', value: `₱${Number(dashboard?.averageTicket || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, caption: '' },
+    { label: 'Pending', value: String(dashboard?.pendingOrders || 0), caption: '' },
+  ];
+
+  return (
+    <main className="mx-auto w-full max-w-[1300px] px-4 py-8 sm:px-6 lg:px-10 relative">
+      {/* Feedback Toast Notification */}
+      {toastMessage && (
+        <div
+          className={`fixed bottom-6 right-6 z-50 flex items-center gap-2.5 rounded-2xl px-4 py-3 shadow-xl backdrop-blur-md transition-all ${
+            toastMessage.type === 'success'
+              ? 'border border-emerald-500/30 bg-emerald-950/80 text-emerald-200'
+              : 'border border-destructive/30 bg-destructive/90 text-destructive-foreground'
+          }`}
+        >
+          {toastMessage.type === 'success' ? (
+            <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+          ) : (
+            <AlertCircle className="h-5 w-5" />
+          )}
+          <span className="text-sm font-medium">{toastMessage.text}</span>
+        </div>
+      )}
+
+      <div className="rounded-[28px] border border-border/80 bg-background/80 p-3 shadow-sm backdrop-blur-sm sm:p-4">
+        <section className="mt-6 flex flex-col gap-5">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Good afternoon</p>
+              <h1 className="mt-3 text-4xl font-extrabold tracking-[-0.07em] text-foreground sm:text-5xl lg:text-[4rem]">
+                Hello, <span className=" text-primary"> {username} </span>
+              </h1>
+            </div>
+
+            <div className="flex items-center gap-3 rounded-full border border-border bg-secondary/60 px-3 py-2 text-sm text-muted-foreground">
+              <ShoppingBag className="h-4 w-4 text-primary" />
+              <span>{storefrontData.campusLocation || 'No Location'}</span>
+            </div>
+          </div>
+
+          <Card className="overflow-hidden border-primary/20 bg-gradient-to-br from-primary via-primary to-primary/85 text-primary-foreground shadow-md">
+            <CardContent className="flex flex-col gap-6 p-5 sm:p-8 lg:flex-row lg:items-center lg:justify-between">
+              <div className="max-w-md">
+                <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary-foreground/80">Total sales</p>
+                <div className="mt-3 flex items-end gap-3">
+                  <span className="text-4xl font-bold tracking-[-0.07em] sm:text-5xl">₱{Number(dashboard?.todaySales || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
+                </div>
+              </div>
+
+              <div className="flex min-w-[210px] flex-col gap-4 rounded-[22px] border border-primary-foreground/15 bg-primary-foreground/5 p-4 backdrop-blur-sm">
+                <div className="flex items-center justify-between text-sm text-primary-foreground/80">
+                  <span>vs last week</span>
+                  <span className="font-mono text-[10px] uppercase tracking-[0.12em]">+8.6k</span>
+                </div>
+                <div className="flex items-end gap-2">
+                  {[42, 58, 46, 78, 68, 90, 100].map((height, index) => (
+                    <div
+                      key={height + index}
+                      className="w-full rounded-t-full bg-primary-foreground/85"
+                      style={{ height: `${height}px` }}
+                    />
+                  ))}
+                </div>
+                <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.12em] text-primary-foreground/80">
+                  <span>Mon</span>
+                  <span>Tue</span>
+                  <span>Wed</span>
+                  <span>Thu</span>
+                  <span>Fri</span>
+                  <span>Sat</span>
+                  <span>Sun</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Quick Actions */}
+        <section className="mt-8">
+          <div className="mb-4">
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Storefront settings</p>
+            <h2 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">Keep your vendor details current</h2>
+          </div>
+          <Card className={`bg-card/90 shadow-sm ${!storefrontData.campusLocation.trim() ? 'border-2 border-destructive' : 'border-card-border/80'}`}>
+            <CardContent className="p-5 sm:p-6">
+              {isStorefrontLoading ? (
+                <p className="text-sm text-muted-foreground">Loading storefront details...</p>
+              ) : (
+                <form onSubmit={handleSaveStorefront} className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="text-sm font-medium text-foreground" htmlFor="storefront-name">Store name</label>
+                    <input id="storefront-name" value={storefrontData.name} onChange={(event) => setStorefrontData({ ...storefrontData, name: event.target.value })} className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm" />
+                    {storefrontErrors.name && <p className="mt-1 text-xs text-destructive">{storefrontErrors.name}</p>}
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-foreground" htmlFor="storefront-location">Campus location</label>
+                    <input id="storefront-location" value={storefrontData.campusLocation} onChange={(event) => setStorefrontData({ ...storefrontData, campusLocation: event.target.value })} className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm" />
+                    {storefrontErrors.campusLocation && <p className="mt-1 text-xs text-destructive">{storefrontErrors.campusLocation}</p>}
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-sm font-medium text-foreground" htmlFor="storefront-description">Description</label>
+                    <textarea id="storefront-description" rows={3} value={storefrontData.description} onChange={(event) => setStorefrontData({ ...storefrontData, description: event.target.value })} className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm" />
+                    {storefrontErrors.description && <p className="mt-1 text-xs text-destructive">{storefrontErrors.description}</p>}
+                  </div>
+                  <div className="md:col-span-2">
+                    <Button type="submit" disabled={isStorefrontSaving} className="rounded-full px-5">
+                      {isStorefrontSaving ? 'Saving...' : 'Save storefront'}
+                    </Button>
+                  </div>
+                </form>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Quick Actions */}
+        <section className="mt-8">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Quick actions</p>
+              <h2 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">Manage your store</h2>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              {
+                label: 'Orders',
+                icon: PackageCheck,
+                onClick: () => {
+                  document.getElementById('incoming-orders-queue-section')?.scrollIntoView({ behavior: 'smooth' });
+                },
+              },
+              {
+                label: 'Menu',
+                icon: MenuIcon,
+                onClick: () => {
+                  document.getElementById('menu-management-section')?.scrollIntoView({ behavior: 'smooth' });
+                },
+              },
+              { label: 'Store', icon: Store, onClick: () => {} },
+              { label: 'Promotion', icon: Megaphone, onClick: () => {} },
+            ].map(({ label, icon: Icon, onClick }) => (
+              <Button
+                key={label}
+                variant="secondary"
+                onClick={onClick}
+                className="flex h-20 items-center justify-between rounded-[22px] border border-border bg-secondary/60 px-4 py-4 text-left shadow-sm hover:bg-secondary"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-background text-primary shadow-sm">
+                    <Icon className="h-4 w-4" />
+                  </div>
+                  <span className="text-base font-medium text-foreground">{label}</span>
+                </div>
+                <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
+              </Button>
+            ))}
+          </div>
+        </section>
+
+        {/* US-017: Incoming Order Queue Section */}
+        <section id="incoming-orders-queue-section" className="mt-10">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Incoming Queue</p>
+              <h2 className="mt-1 text-2xl font-semibold tracking-[-0.05em] text-foreground">Order Queue & Status</h2>
+            </div>
+          </div>
+
+          <Card className="border-card-border/80 bg-card/90 shadow-sm overflow-hidden">
+            <CardContent className="p-0">
+              <div className="grid grid-cols-[1fr_1.2fr_1.5fr_1fr_1fr_0.8fr] gap-3 border-b border-border bg-secondary/40 px-4 py-3 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                <span>Order Ref</span>
+                <span>Customer</span>
+                <span>Items & Quantity</span>
+                <span>Payment</span>
+                <span>Status</span>
+                <span className="text-right">Action</span>
+              </div>
+
+              {isQueueLoading ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">
+                  Loading order queue...
+                </div>
+              ) : !Array.isArray(orderQueue) || orderQueue.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">
+                  No active orders in queue.
+                </div>
+              ) : (
+                orderQueue.map((order) => (
+                  <div
+                    key={order.id}
+                    className="grid grid-cols-[1fr_1.2fr_1.5fr_1fr_1fr_0.8fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
+                  >
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">#{order.id.slice(-6).toUpperCase()}</p>
+                      <p className="text-xs text-muted-foreground">₱{Number(order.totalAmount).toFixed(2)}</p>
+                    </div>
+
+                    <div>
+                      <p className="text-sm font-medium text-foreground">{order.customerName || order.userId || 'Guest'}</p>
+                      <p className="text-xs text-muted-foreground">{order.customerEmail || ''}</p>
+                    </div>
+
+                    <div className="text-sm text-foreground truncate">
+                      {order.items && order.items.length > 0 ? (() => {
+                        const firstItem = order.items[0] as any;
+                        const itemName = firstItem.productName || firstItem.name || firstItem.product?.name || 'Item';
+                        return (
+                          <span>
+                            {itemName} (x{firstItem.quantity})
+                            {order.items.length > 1 ? ` +${order.items.length - 1} more` : ''}
+                          </span>
+                        );
+                      })() : (
+                        <span className="text-muted-foreground">No item details</span>
+                      )}
+                    </div>
+
+                    <div>
+                      <span
+                        className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                          order.paymentStatus === 'PAID'
+                            ? 'bg-emerald-500/10 text-emerald-600'
+                            : 'bg-amber-500/10 text-amber-600'
+                        }`}
+                      >
+                        {order.paymentStatus || 'PENDING'}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span
+                        className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] ${
+                          order.status === 'DELIVERED' || order.status === 'COMPLETED'
+                            ? 'bg-emerald-500/10 text-emerald-600'
+                            : order.status === 'PREPARING' || order.status === 'COOKING'
+                            ? 'bg-amber-500/10 text-amber-600'
+                            : 'bg-blue-500/10 text-blue-600'
+                        }`}
+                      >
+                        {order.status}
+                      </span>
+                    </div>
+
+                    <div className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setSelectedOrder(order)}
+                        className="h-8 w-8 rounded-full border border-border/80 hover:bg-secondary"
+                        title="View order detail"
+                      >
+                        <Eye className="h-3.5 w-3.5 text-foreground" />
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* US-012: Product Management Section */}
+        <section id="menu-management-section" className="mt-10">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Store Item</p>
+              <h2 className="mt-1 text-2xl font-semibold tracking-[-0.05em] text-foreground">Menu Products</h2>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  value={productSearch}
+                  onChange={(event) => setProductSearch(event.target.value)}
+                  placeholder="Search products"
+                  className="h-10 w-full rounded-full border border-border bg-background pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 sm:w-56"
+                />
+              </div>
+              <Button onClick={() => handleOpenModal()} className="gap-2 rounded-full px-4 py-2 font-medium">
+                <Plus className="h-4 w-4" />
+                Add Item
+              </Button>
+            </div>
+          </div>
+
+          <Card className="border-card-border/80 bg-card/90 shadow-sm overflow-hidden">
+            <CardContent className="p-0">
+              <div className="grid grid-cols-[1.5fr_1fr_2fr_1fr] gap-3 border-b border-border bg-secondary/40 px-4 py-3 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                <span>Product Name</span>
+                <span>Price</span>
+                <span>Description</span>
+                <span className="text-right">Actions</span>
+              </div>
+
+              {filteredProducts.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">
+                  {products.length === 0 ? 'No products in your catalog yet. Click "Add Item" to create one.' : 'No products match your search.'}
+                </div>
+              ) : (
+                filteredProducts.map((product) => (
+                  <div
+                    key={product.id}
+                    className="grid grid-cols-[1.5fr_1fr_2fr_1fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
+                  >
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">{product.name}</p>
+                      <span className="inline-block rounded-full bg-secondary px-2 py-0.5 text-[9px] font-mono text-muted-foreground uppercase">
+                        {product.category}
+                      </span>
+                    </div>
+
+                    <p className="text-sm font-semibold text-primary">₱{product.price}</p>
+                    <p className="text-sm text-muted-foreground line-clamp-1">{product.description}</p>
+
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleOpenModal(product)}
+                        className="h-8 w-8 rounded-full border border-border/80 hover:bg-secondary"
+                        title="Edit product"
+                      >
+                        <Pencil className="h-3.5 w-3.5 text-foreground" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setDeleteTargetId(product.id)}
+                        className="h-8 w-8 rounded-full border border-destructive/30 text-destructive hover:bg-destructive/10"
+                        title="Delete product"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Performance Cards */}
+        <section className="mt-8 grid gap-4 md:grid-cols-3">
+          {performanceCards.map((card) => (
+            <Card key={card.label} className="border-card-border/80 bg-card/90 shadow-sm">
+              <CardContent className="flex items-center justify-between gap-4 p-4">
+                <div>
+                  <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground">{card.label}</p>
+                  <p className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">{card.value}</p>
+                </div>
+                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-secondary text-primary">
+                  {card.caption.startsWith('-') ? (
+                    <ArrowDownRight className="h-4 w-4" />
+                  ) : (
+                    <ArrowUpRight className="h-4 w-4" />
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </section>
+
+        {/* Recent Orders */}
+        <section className="mt-8">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Recent activity</p>
+              <h2 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">Recent orders</h2>
+            </div>
+          </div>
+
+          <Card className="border-card-border/80 bg-card/90 shadow-sm">
+            <CardContent className="p-0">
+              <div className="overflow-hidden rounded-[20px]">
+                <div className="grid grid-cols-[0.8fr_1.2fr_0.8fr_0.8fr] gap-3 border-b border-border bg-secondary/40 px-4 py-3 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                  <span>Order</span>
+                  <span>Customer</span>
+                  <span>Item</span>
+                  <span className="text-right">Status</span>
+                </div>
+
+                {dashboard?.recentOrders.length ? dashboard.recentOrders.map((order) => (
+                  <div
+                    key={order.id}
+                    className="grid grid-cols-[0.8fr_1.2fr_0.8fr_0.8fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
+                  >
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">{order.id}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{order.total}</p>
+                    </div>
+                    <p className="text-sm text-foreground">{order.customer}</p>
+                    <p className="text-sm text-muted-foreground">{order.item}</p>
+                    <div className="text-right">
+                      <span
+                        className={[
+                          'inline-flex rounded-full px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.12em]',
+                          order.status === 'DELIVERED' && 'bg-emerald-500/10 text-emerald-600',
+                          order.status === 'COOKING' && 'bg-amber-500/10 text-amber-600',
+                          order.status === 'OUT_FOR_DELIVERY' && 'bg-blue-500/10 text-blue-600',
+                          order.status === 'PENDING' && 'bg-slate-500/10 text-slate-600',
+                        ].join(' ')}
+                      >
+                        {order.status}
+                      </span>
+                    </div>
+                  </div>
+                )) : (
+                  <div className="bg-gray-100/70 p-8 text-center text-sm text-muted-foreground">
+                    No recent orders.
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+      </div>
+
+      {/* US-017: Order Details Display Modal */}
+      {selectedOrder &&
+        createPortal(
+          <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
+            <div className="w-full max-w-lg rounded-3xl border border-border bg-card p-6 shadow-2xl">
+              <div className="flex items-center justify-between border-b border-border pb-3">
+                <div>
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Order Details</p>
+                  <h3 className="text-lg font-bold text-foreground">
+                    Ref #{selectedOrder.id}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setSelectedOrder(null)}
+                  className="rounded-full p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="mt-4 space-y-4 text-sm">
+                <div className="grid grid-cols-2 gap-2 rounded-2xl bg-secondary/30 p-3">
+                  <div>
+                    <span className="text-xs text-muted-foreground block">Customer Reference</span>
+                    <span className="font-semibold text-foreground">{selectedOrder.customerName || selectedOrder.userId || 'Guest'}</span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-muted-foreground block">Payment State</span>
+                    <span className="font-semibold text-emerald-600">{selectedOrder.paymentStatus || 'PENDING'}</span>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="font-semibold text-foreground mb-2">Order Items</h4>
+                  <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                    {selectedOrder.items && selectedOrder.items.length > 0 ? (
+                      (selectedOrder.items as any[]).map((rawItem, idx) => {
+                        const item = rawItem;
+                        const itemName = item.productName || item.name || item.product?.name || 'Product';
+                        const itemPrice = Number(item.price || item.unitPrice || item.product?.price || 0);
+                        return (
+                          <div key={idx} className="flex justify-between items-center border-b border-border/50 pb-1.5">
+                            <div>
+                              <p className="font-medium text-foreground">{itemName}</p>
+                              <p className="text-xs text-muted-foreground">Quantity: {item.quantity}</p>
+                            </div>
+                            <p className="font-medium text-primary">₱{(itemPrice * (item.quantity || 1)).toFixed(2)}</p>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <p className="text-xs text-muted-foreground">No items listed.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center border-t border-border pt-3">
+                  <span className="font-semibold text-foreground">Total Amount</span>
+                  <span className="text-lg font-bold text-primary">₱{Number(selectedOrder.totalAmount || 0).toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* US-018: Order Status Controls & Transition Buttons */}
+              <div className="mt-4 border-t border-border pt-4">
+                <span className="text-xs font-mono uppercase tracking-wider text-muted-foreground block mb-2">
+                  Update Order Status (US-018)
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {['PENDING', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'].map((statusOption) => (
+                    <Button
+                      key={statusOption}
+                      type="button"
+                      variant={selectedOrder.status === statusOption ? 'default' : 'outline'}
+                      size="sm"
+                      disabled={isUpdatingStatus || selectedOrder.status === statusOption}
+                      onClick={() => handleStatusChange(statusOption)}
+                      className="rounded-full text-xs"
+                    >
+                      {statusOption}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end">
+                <Button
+                  onClick={() => setSelectedOrder(null)}
+                  className="rounded-full px-6"
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* US-012: Add/Edit Product Modal */}
+      {isModalOpen &&
+        createPortal(
+          <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 p-4 pt-10 backdrop-blur-md overflow-y-auto">
+            <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl my-8">
+              <div className="flex items-center justify-between border-b border-border pb-3">
+                <h3 className="text-lg font-bold text-foreground">
+                  {editingProduct ? 'Edit Product' : 'Add New Product'}
+                </h3>
+                <button
+                  onClick={() => setIsModalOpen(false)}
+                  className="rounded-full p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveProduct} className="mt-4 space-y-4">
+                <div>
+                  <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
+                    Product Name
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="e.g. Banh Mi Combo"
+                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                  {formErrors.name && <p className="mt-1 text-xs text-destructive">{formErrors.name}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
+                    Price (₱)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={formData.price}
+                    onChange={(e) => setFormData({ ...formData, price: e.target.value })}
+                    placeholder="150"
+                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                  {formErrors.price && <p className="mt-1 text-xs text-destructive">{formErrors.price}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
+                    Category <span className="text-[10px] text-muted-foreground/70 font-normal">(Optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.category}
+                    onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                    placeholder="e.g. Rice Bowls, Drinks, Snacks"
+                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+
+                {/* File Explorer / Gallery Picker */}
+                <div>
+                  <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
+                    Product Photo <span className="text-[10px] text-muted-foreground/70 font-normal">(Optional)</span>
+                  </label>
+
+                  <div className="relative flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border bg-secondary/30 p-4 transition-colors hover:bg-secondary/50">
+                    {imagePreview ? (
+                      <div className="relative w-full h-32 overflow-hidden rounded-xl">
+                        <img src={imagePreview} alt="Preview" className="h-full w-full object-cover" />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setImagePreview('');
+                            setFormData((prev) => ({ ...prev, image: '' }));
+                          }}
+                          className="absolute top-2 right-2 rounded-full bg-black/60 p-1 text-white hover:bg-black"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="flex flex-col items-center justify-center cursor-pointer w-full py-2">
+                        <Upload className="h-6 w-6 text-muted-foreground mb-1" />
+                        <span className="text-xs font-medium text-foreground">Upload from Device / Gallery</span>
+                        <span className="text-[10px] text-muted-foreground mt-0.5">PNG, JPG, WEBP up to 5MB</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleFileChange}
+                          className="hidden"
+                        />
+                      </label>
+                    )}
+                  </div>
+
+                  <div className="mt-2 flex items-center gap-2">
+                    <div className="h-[1px] flex-1 bg-border" />
+                    <span className="text-[10px] uppercase font-mono text-muted-foreground">or image url</span>
+                    <div className="h-[1px] flex-1 bg-border" />
+                  </div>
+
+                  <input
+                    type="url"
+                    value={formData.image.startsWith('data:') ? '' : formData.image}
+                    onChange={(e) => {
+                      const url = e.target.value;
+                      setFormData({ ...formData, image: url });
+                      setImagePreview(url);
+                    }}
+                    placeholder="https://images.unsplash.com/..."
+                    className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
+                    Description / Flavor Profile
+                  </label>
+                  <textarea
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                    placeholder="Short description of ingredients or taste..."
+                    rows={3}
+                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 resize-none"
+                  />
+                  {formErrors.description && (
+                    <p className="mt-1 text-xs text-destructive">{formErrors.description}</p>
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setIsModalOpen(false)}
+                    className="rounded-full px-4"
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" className="rounded-full px-5">
+                    {editingProduct ? 'Save Changes' : 'Create Product'}
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* US-012: Delete Confirmation Modal */}
+      {deleteTargetId &&
+        createPortal(
+          <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
+            <div className="w-full max-w-sm rounded-3xl border border-border bg-card p-6 shadow-2xl text-center">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10 text-destructive mb-3">
+                <Trash2 className="h-6 w-6" />
+              </div>
+              <h3 className="text-lg font-bold text-foreground">Delete Product</h3>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Are you sure you want to remove this item from your menu catalog? This action cannot be undone.
+              </p>
+              <div className="mt-6 flex justify-center gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setDeleteTargetId(null)}
+                  className="rounded-full px-5"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={handleDeleteProduct}
+                  className="rounded-full px-5"
+                >
+                  Delete
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+    </main>
+  );
+}

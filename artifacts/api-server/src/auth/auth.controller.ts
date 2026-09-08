@@ -22,6 +22,8 @@ export class AuthController {
       dto.password,
       dto.fullName,
       dto.phone,
+      dto.role,
+      dto.businessName,
     );
   }
 
@@ -36,7 +38,7 @@ export class AuthController {
 
   @Post('switch-profile')
   @HttpCode(HttpStatus.NOT_IMPLEMENTED)
-  switchProfile() {
+  async switchProfile() {
     return {
       statusCode: HttpStatus.NOT_IMPLEMENTED,
       message: 'Not implemented',

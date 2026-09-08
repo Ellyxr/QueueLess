@@ -2,11 +2,14 @@ import {
   ConflictException,
   Injectable,
   UnauthorizedException,
+  BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { VendorType } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import * as jwt from 'jsonwebtoken';
 import type { SignOptions } from 'jsonwebtoken';
+import type { FrontendRole } from './roles';
 
 @Injectable()
 export class AuthService {
@@ -17,6 +20,8 @@ export class AuthService {
     password: string,
     fullName: string,
     phone?: string,
+    role: FrontendRole = 'student',
+    businessName?: string,
   ) {
     const normalizedEmail = email.trim().toLowerCase();
 
@@ -30,27 +35,59 @@ export class AuthService {
       throw new ConflictException('Email is already registered');
     }
 
+    if (role === 'vendor' && !businessName?.trim()) {
+      throw new BadRequestException(
+        'Business name is required for vendor registration',
+      );
+    }
+
     const passwordHash = await bcrypt.hash(password, 12);
 
-    const user = await this.prisma.user.create({
-      data: {
-        email: normalizedEmail,
-        passwordHash,
-        fullName: fullName.trim(),
-        phone: phone?.trim() || null,
-        roleAssignments: {
-          create: {
-            role: 'BUYER',
+    const user = await this.prisma.$transaction(async (tx) => {
+      const createdUser = await tx.user.create({
+        data: {
+          email: normalizedEmail,
+          passwordHash,
+          fullName: fullName.trim(),
+          phone: phone?.trim() || null,
+          roleAssignments: {
+            create:
+              role === 'vendor'
+                ? [
+                    {
+                      role: 'BUYER',
+                    },
+                    {
+                      role: 'VENDOR_OWNER',
+                    },
+                  ]
+                : [
+                    {
+                      role: 'BUYER',
+                    },
+                  ],
           },
         },
-      },
-      include: {
-        roleAssignments: {
-          where: {
-            revokedAt: null,
+        include: {
+          roleAssignments: {
+            where: {
+              revokedAt: null,
+            },
           },
         },
-      },
+      });
+
+      if (role === 'vendor') {
+        await tx.vendor.create({
+          data: {
+            ownerUserId: createdUser.id,
+            name: businessName!.trim(),
+            vendorType: VendorType.STUDENT,
+          },
+        });
+      }
+
+      return createdUser;
     });
 
     return {
