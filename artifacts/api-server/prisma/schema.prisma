@@ -110,20 +110,21 @@ model Vendor {
 
 /// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
 model Product {
-  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  vendorId         String            @db.Uuid
-  name             String
-  description      String?
-  price            Decimal           @db.Decimal(10, 2)
-  category         String?
-  isAvailable      Boolean           @default(true)
-  createdAt        DateTime          @default(now()) @db.Timestamptz(6)
-  updatedAt        DateTime          @updatedAt @db.Timestamptz(6)
-  cartItems        CartItem[]
-  featuredListings FeaturedListing[]
-  orderItems       OrderItem[]
-  vendor           Vendor            @relation(fields: [vendorId], references: [id], onDelete: Cascade)
-  reportsTargeting Report[]          @relation("ReportTargetProduct")
+  id                     String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId               String            @db.Uuid
+  name                   String
+  description            String?
+  price                  Decimal           @db.Decimal(10, 2)
+  preparationTimeMinutes Int               @default(15)
+  category               String?
+  isAvailable            Boolean           @default(true)
+  createdAt              DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime          @updatedAt @db.Timestamptz(6)
+  cartItems              CartItem[]
+  featuredListings       FeaturedListing[]
+  orderItems             OrderItem[]
+  vendor                 Vendor            @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  reportsTargeting       Report[]          @relation("ReportTargetProduct")
 
   @@unique([vendorId, name])
   @@index([vendorId])
@@ -223,6 +224,7 @@ model Order {
   subtotal         Decimal               @db.Decimal(10, 2)
   marketplaceFee   Decimal               @db.Decimal(10, 2)
   totalAmount      Decimal               @db.Decimal(10, 2)
+  estimatedReadyAt DateTime?             @db.Timestamptz(6)
   createdAt        DateTime              @default(now()) @db.Timestamptz(6)
   updatedAt        DateTime              @updatedAt @db.Timestamptz(6)
   idempotencyKeys  OrderIdempotencyKey[]
