@@ -1,4 +1,4 @@
-#NOTICE: Schema changes from time to time. Pls practice:
+# NOTICE: Schema changes from time to time. Pls practice:
 
 pnpm --filter @workspace/api-server prisma:generate
 pnpm --filter @workspace/api-server build
