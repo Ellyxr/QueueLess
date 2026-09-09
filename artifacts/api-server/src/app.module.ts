@@ -17,6 +17,7 @@ import { PasabuyModule } from './pasabuy/pasabuy.module';
 import { ReportsModule } from './reports/reports.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { FeaturedListingsModule } from './featured-listings/featured-listings.module';
+import { QrModule } from './qr/qr.module';
 import { AdminModule } from './admin/admin.module';
 
 @Module({
@@ -32,6 +33,10 @@ import { AdminModule } from './admin/admin.module';
     ProductsModule,
     EventsModule,
     CartsModule,
+    CartsModule,
+    OrdersModule,
+    QrModule,
+    RefundsModule,
     OrdersModule,
     RefundsModule,
     NotificationsModule,
