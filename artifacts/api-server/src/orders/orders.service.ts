@@ -376,6 +376,7 @@ export class OrdersService {
         status: true,
         estimatedReadyAt: true,
         updatedAt: true,
+        pickupConfirmedAt: true,
         vendor: {
           select: {
             id: true,
@@ -602,6 +603,89 @@ export class OrdersService {
     return this.buildOrderResponse(updatedOrder);
   }
 
+  async confirmPickup(
+    userId: string,
+    orderId: string,
+  ) {
+    const pickupConfirmedAt = new Date();
+
+    const updatedOrder = await this.prisma.$transaction(
+      async (tx) => {
+        const order = await tx.order.findFirst({
+          where: {
+            id: orderId,
+            customerId: userId,
+          },
+          select: {
+            id: true,
+            status: true,
+            pickupConfirmedAt: true,
+          },
+        });
+
+        if (!order) {
+          throw new NotFoundException('Order not found');
+        }
+
+        if (order.pickupConfirmedAt) {
+          throw new ConflictException(
+            'Order pickup has already been confirmed',
+          );
+        }
+
+        if (order.status !== OrderStatus.OUT_FOR_DELIVERY) {
+          throw new BadRequestException(
+            'Order is not ready for pickup',
+          );
+        }
+
+        const updateResult = await tx.order.updateMany({
+          where: {
+            id: order.id,
+            customerId: userId,
+            status: OrderStatus.OUT_FOR_DELIVERY,
+            pickupConfirmedAt: null,
+          },
+          data: {
+            status: OrderStatus.DELIVERED,
+            pickupConfirmedAt,
+          },
+        });
+
+        if (updateResult.count !== 1) {
+          throw new ConflictException(
+            'Order pickup has already been confirmed',
+          );
+        }
+
+        await tx.orderStatusHistory.create({
+          data: {
+            orderId: order.id,
+            status: OrderStatus.DELIVERED,
+            changedByUserId: userId,
+            note: 'Pickup confirmed by customer',
+          },
+        });
+
+        return tx.order.findUniqueOrThrow({
+          where: {
+            id: order.id,
+          },
+          include: {
+            vendor: true,
+            items: {
+              include: {
+                product: true,
+              },
+            },
+          },
+        });
+      },
+    );
+
+    return this.buildOrderResponse(updatedOrder);
+  }
+
   async getVendorDashboard(userId: string) {
     const vendor = await this.prisma.vendor.findUnique({
       where: { ownerUserId: userId },
@@ -759,20 +843,9 @@ export class OrdersService {
       orderType: order.orderType,
       status: order.status,
       estimatedReadyAt: order.estimatedReadyAt,
+      pickupConfirmedAt: order.pickupConfirmedAt,
       estimatedWaitMinutes,
       subtotal: order.subtotal.toFixed(2),
-      marketplaceFee: order.marketplaceFee.toFixed(2),
-      totalAmount: order.totalAmount.toFixed(2),
-      createdAt: order.createdAt,
-      updatedAt: order.updatedAt,
-      items: order.items.map((item) => ({
-        id: item.id,
-        productId: item.productId,
-        name: item.product.name,
-        quantity: item.quantity,
-        unitPrice: item.unitPriceSnapshot.toFixed(2),
-        subtotal: item.lineSubtotal.toFixed(2),
-      })),
     };
   }
   }

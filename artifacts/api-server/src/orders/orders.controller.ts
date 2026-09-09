@@ -152,6 +152,39 @@ export class OrdersController {
     );
   }
 
+
+    @Patch(':orderId/pickup')
+  @UseGuards(RolesGuard)
+  @Roles('BUYER')
+  @ApiOperation({
+    summary: 'Confirm pickup of an eligible order',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Order pickup confirmed successfully',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Order is not eligible for pickup',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Order not found',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Order pickup has already been confirmed',
+  })
+  async confirmPickup(
+    @CurrentUser() user: JwtPayload,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.ordersService.confirmPickup(
+      user.sub,
+      orderId,
+    );
+  }
+
   @Get(':id')
   @ApiOperation({
     summary: 'Get one of the authenticated user’s orders',
