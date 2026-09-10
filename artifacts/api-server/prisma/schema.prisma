@@ -11,7 +11,7 @@ model User {
   id                       String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email                    String                  @unique
   passwordHash             String
-  fullName                 String
+  fullName                 String                  @unique
   phone                    String?
   isActive                 Boolean                 @default(true)
   studentEmailVerifiedAt   DateTime?               @db.Timestamptz(6)
@@ -99,6 +99,7 @@ model Vendor {
   groupOrders         GroupOrder[]
   orders              Order[]
   products            Product[]
+  qrCodes             VendorQrCode[]
   reportsTargeting    Report[]                   @relation("ReportTargetVendor")
   subscriptions       VendorSubscription[]
   owner               User                       @relation("VendorOwner", fields: [ownerUserId], references: [id])
@@ -106,6 +107,22 @@ model Vendor {
   @@index([ownerUserId])
   @@index([status])
   @@map("vendors")
+}
+
+model VendorQrCode {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId  String    @db.Uuid
+  token     String    @unique
+  isActive  Boolean   @default(true)
+  expiresAt DateTime? @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId])
+  @@index([isActive])
+  @@map("vendor_qr_codes")
 }
 
 /// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
@@ -214,29 +231,30 @@ model CartItem {
 }
 
 model Order {
-  id               String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  customerId       String                @db.Uuid
-  vendorId         String                @db.Uuid
-  eventId          String?               @db.Uuid
-  groupOrderId     String?               @unique @db.Uuid
-  orderType        OrderType
-  status           OrderStatus           @default(PENDING)
-  subtotal         Decimal               @db.Decimal(10, 2)
-  marketplaceFee   Decimal               @db.Decimal(10, 2)
-  totalAmount      Decimal               @db.Decimal(10, 2)
-  estimatedReadyAt DateTime?             @db.Timestamptz(6)
-  createdAt        DateTime              @default(now()) @db.Timestamptz(6)
-  updatedAt        DateTime              @updatedAt @db.Timestamptz(6)
-  idempotencyKeys  OrderIdempotencyKey[]
-  items            OrderItem[]
-  statusHistory    OrderStatusHistory[]
-  customer         User                  @relation("OrderCustomer", fields: [customerId], references: [id])
-  event            Event?                @relation(fields: [eventId], references: [id])
-  groupOrder       GroupOrder?           @relation(fields: [groupOrderId], references: [id])
-  vendor           Vendor                @relation(fields: [vendorId], references: [id])
-  pasabuyRequests  PasabuyRequest[]
-  paymentShares    PaymentShare[]
-  reportsTargeting Report[]              @relation("ReportTargetOrder")
+  id                String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId        String                @db.Uuid
+  vendorId          String                @db.Uuid
+  eventId           String?               @db.Uuid
+  groupOrderId      String?               @unique @db.Uuid
+  orderType         OrderType
+  status            OrderStatus           @default(PENDING)
+  subtotal          Decimal               @db.Decimal(10, 2)
+  marketplaceFee    Decimal               @db.Decimal(10, 2)
+  totalAmount       Decimal               @db.Decimal(10, 2)
+  estimatedReadyAt  DateTime?             @db.Timestamptz(6)
+  pickupConfirmedAt DateTime?             @db.Timestamptz(6)
+  createdAt         DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime              @updatedAt @db.Timestamptz(6)
+  idempotencyKeys   OrderIdempotencyKey[]
+  items             OrderItem[]
+  statusHistory     OrderStatusHistory[]
+  customer          User                  @relation("OrderCustomer", fields: [customerId], references: [id])
+  event             Event?                @relation(fields: [eventId], references: [id])
+  groupOrder        GroupOrder?           @relation(fields: [groupOrderId], references: [id])
+  vendor            Vendor                @relation(fields: [vendorId], references: [id])
+  pasabuyRequests   PasabuyRequest[]
+  paymentShares     PaymentShare[]
+  reportsTargeting  Report[]              @relation("ReportTargetOrder")
 
   @@index([customerId])
   @@index([vendorId])
