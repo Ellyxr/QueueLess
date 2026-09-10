@@ -20,6 +20,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CreateGroupOrderDto } from './dto/create-group-order.dto';
 import { GroupOrdersService } from './group-orders.service';
 import { AddGroupOrderItemDto } from './dto/add-group-order-item.dto';
+import { SetPaymentSplitDto } from './dto/set-payment-split.dto';
 
 @ApiTags('Group Orders')
 @ApiBearerAuth()
@@ -247,4 +248,43 @@ async finalizeGroupOrder(
     groupOrderId,
   );
 }
+
+  @Patch(':groupOrderId/payment-split')
+  @Roles('BUYER')
+  @ApiOperation({
+    summary: 'Set the payment split mode for a finalized group order',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Payment split configured successfully',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Invalid split configuration or group order is not finalized',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized',
+  })
+  @ApiResponse({
+    status: 403,
+    description:
+      'Only the group order initiator can configure the payment split',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Group order not found',
+  })
+  async setPaymentSplit(
+    @CurrentUser() user: { sub: string },
+    @Param('groupOrderId') groupOrderId: string,
+    @Body() dto: SetPaymentSplitDto,
+  ) {
+    return this.groupOrdersService.setPaymentSplit(
+      user.sub,
+      groupOrderId,
+      dto,
+    );
+  }
 }
