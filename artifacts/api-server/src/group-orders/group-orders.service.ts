@@ -10,6 +10,7 @@ import { CreateGroupOrderDto } from './dto/create-group-order.dto';
 import { AddGroupOrderItemDto } from './dto/add-group-order-item.dto';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
+import { SetPaymentSplitDto } from './dto/set-payment-split.dto';
 
 @Injectable()
 export class GroupOrdersService {
@@ -859,8 +860,418 @@ async addGroupOrderItem(
     };
   });
 }
+  async setPaymentSplit(
+    userId: string,
+    groupOrderId: string,
+    dto: SetPaymentSplitDto,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const groupOrder = await tx.groupOrder.findUnique({
+        where: {
+          id: groupOrderId,
+        },
+        include: {
+          participants: true,
+          order: {
+            include: {
+              items: true,
+              paymentShares: true,
+            },
+          },
+        },
+      });
 
-    private getMarketplaceFeeRate(): Prisma.Decimal {
+      if (!groupOrder) {
+        throw new NotFoundException('Group order not found');
+      }
+
+      if (groupOrder.initiatorUserId !== userId) {
+        throw new ForbiddenException(
+          'Only the group order initiator can configure the payment split',
+        );
+      }
+
+      if (
+        groupOrder.status !== 'FINALIZED' ||
+        !groupOrder.order
+      ) {
+        throw new BadRequestException(
+          'Payment split can only be configured after the group order is finalized',
+        );
+      }
+
+      const joinedParticipants =
+        groupOrder.participants.filter(
+          (participant) => participant.status === 'JOINED',
+        );
+
+      if (joinedParticipants.length === 0) {
+        throw new BadRequestException(
+          'Group order has no joined participants',
+        );
+      }
+
+      const existingShares = groupOrder.order.paymentShares;
+
+      const paymentHasStarted = existingShares.some(
+        (share) =>
+          share.status === 'PAID' ||
+          share.paymentId !== null,
+      );
+
+      if (paymentHasStarted) {
+        throw new ConflictException(
+          'Payment split cannot be changed after payment has started',
+        );
+      }
+
+      const orderTotalCents = this.decimalToCents(
+        groupOrder.order.totalAmount,
+      );
+
+      if (orderTotalCents <= 0) {
+        throw new BadRequestException(
+          'Order total must be greater than zero',
+        );
+      }
+
+      let calculatedShares: Array<{
+        payerUserId: string;
+        amountCents: number;
+      }>;
+
+      switch (dto.mode) {
+        case 'ITEM_BASED':
+          calculatedShares = this.calculateItemBasedShares(
+            joinedParticipants,
+            groupOrder.order.items,
+            orderTotalCents,
+          );
+          break;
+
+        case 'EQUAL':
+          calculatedShares = this.calculateEqualShares(
+            joinedParticipants,
+            orderTotalCents,
+          );
+          break;
+
+        case 'CUSTOM':
+          calculatedShares = this.calculateCustomShares(
+            joinedParticipants,
+            dto.customShares,
+            orderTotalCents,
+          );
+          break;
+
+        default:
+          throw new BadRequestException(
+            'Unsupported payment split mode',
+          );
+      }
+
+      const calculatedTotalCents = calculatedShares.reduce(
+        (sum, share) => sum + share.amountCents,
+        0,
+      );
+
+      if (calculatedTotalCents !== orderTotalCents) {
+        throw new BadRequestException(
+          'Participant payment shares do not match the order total',
+        );
+      }
+
+      await tx.paymentShare.deleteMany({
+        where: {
+          orderId: groupOrder.order.id,
+        },
+      });
+
+      await tx.paymentShare.createMany({
+        data: calculatedShares.map((share) => ({
+          orderId: groupOrder.order!.id,
+          payerUserId: share.payerUserId,
+          amountDue: new Prisma.Decimal(
+            share.amountCents,
+          ).div(100),
+          status: 'PENDING',
+        })),
+      });
+
+      await tx.groupOrder.update({
+        where: {
+          id: groupOrder.id,
+        },
+        data: {
+          paymentSplitMode: dto.mode,
+        },
+      });
+
+      const paymentShares = await tx.paymentShare.findMany({
+        where: {
+          orderId: groupOrder.order.id,
+        },
+        include: {
+          payer: {
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: 'asc',
+        },
+      });
+
+      return {
+        groupOrderId: groupOrder.id,
+        orderId: groupOrder.order.id,
+        paymentSplitMode: dto.mode,
+        orderTotal: groupOrder.order.totalAmount.toFixed(2),
+
+        paymentShares: paymentShares.map((share) => ({
+          id: share.id,
+          payer: share.payer,
+          amountDue: share.amountDue.toFixed(2),
+          status: share.status,
+        })),
+
+        totalAllocated: calculatedShares
+          .reduce(
+            (sum, share) =>
+              sum.add(
+                new Prisma.Decimal(
+                  share.amountCents,
+                ).div(100),
+              ),
+            new Prisma.Decimal(0),
+          )
+          .toFixed(2),
+      };
+    });
+  }
+
+  private decimalToCents(
+    value: Prisma.Decimal,
+  ): number {
+    return value
+      .mul(100)
+      .toDecimalPlaces(0)
+      .toNumber();
+  }
+
+  private calculateItemBasedShares(
+  participants: Array<{
+    id: string;
+    userId: string;
+  }>,
+  items: Array<{
+    participantId: string | null;
+    lineSubtotal: Prisma.Decimal;
+  }>,
+  orderTotalCents: number,
+): Array<{
+  payerUserId: string;
+  amountCents: number;
+}> {
+  const sortedParticipants = [...participants].sort((a, b) =>
+    a.id.localeCompare(b.id),
+  );
+
+  const participantSubtotals = sortedParticipants.map(
+    (participant) => {
+      const subtotal = items
+        .filter(
+          (item) =>
+            item.participantId === participant.id,
+        )
+        .reduce(
+          (sum, item) =>
+            sum.add(item.lineSubtotal),
+          new Prisma.Decimal(0),
+        );
+
+      return {
+        payerUserId: participant.userId,
+        subtotalCents: this.decimalToCents(subtotal),
+      };
+    },
+  );
+
+  const totalItemCents = participantSubtotals.reduce(
+    (sum, participant) =>
+      sum + participant.subtotalCents,
+    0,
+  );
+
+  if (totalItemCents <= 0) {
+    throw new BadRequestException(
+      'Cannot calculate item-based shares because the group order has no payable items',
+    );
+  }
+
+  let allocatedCents = 0;
+
+  return participantSubtotals.map(
+    (participant, index) => {
+      let amountCents: number;
+
+      if (
+        index ===
+        participantSubtotals.length - 1
+      ) {
+        amountCents =
+          orderTotalCents - allocatedCents;
+      } else {
+        amountCents = Math.round(
+          (participant.subtotalCents *
+            orderTotalCents) /
+            totalItemCents,
+        );
+
+        allocatedCents += amountCents;
+      }
+
+      return {
+        payerUserId: participant.payerUserId,
+        amountCents,
+      };
+    },
+  );
+}
+
+private calculateEqualShares(
+  participants: Array<{
+    id: string;
+    userId: string;
+  }>,
+  orderTotalCents: number,
+): Array<{
+  payerUserId: string;
+  amountCents: number;
+}> {
+  const sortedParticipants = [...participants].sort((a, b) =>
+    a.id.localeCompare(b.id),
+  );
+
+  const baseAmount = Math.floor(
+    orderTotalCents / sortedParticipants.length,
+  );
+
+  const remainder =
+    orderTotalCents % sortedParticipants.length;
+
+  return sortedParticipants.map(
+    (participant, index) => ({
+      payerUserId: participant.userId,
+      amountCents:
+        baseAmount + (index < remainder ? 1 : 0),
+    }),
+  );
+}
+
+private calculateCustomShares(
+  participants: Array<{
+    id: string;
+    userId: string;
+  }>,
+  customShares:
+    | Array<{
+        participantId: string;
+        amount: number;
+      }>
+    | undefined,
+  orderTotalCents: number,
+): Array<{
+  payerUserId: string;
+  amountCents: number;
+}> {
+  if (!customShares || customShares.length === 0) {
+    throw new BadRequestException(
+      'Custom shares are required when using CUSTOM payment split mode',
+    );
+  }
+
+  if (customShares.length !== participants.length) {
+    throw new BadRequestException(
+      'Custom shares must include every joined participant exactly once',
+    );
+  }
+
+  const participantMap = new Map(
+    participants.map((participant) => [
+      participant.id,
+      participant,
+    ]),
+  );
+
+  const seenParticipantIds = new Set<string>();
+
+  const calculatedShares = customShares.map(
+    (customShare) => {
+      const participant = participantMap.get(
+        customShare.participantId,
+      );
+
+      if (!participant) {
+        throw new BadRequestException(
+          'Custom share contains a participant who is not joined to this group order',
+        );
+      }
+
+      if (
+        seenParticipantIds.has(
+          customShare.participantId,
+        )
+      ) {
+        throw new BadRequestException(
+          'Each participant can only have one custom payment share',
+        );
+      }
+
+      seenParticipantIds.add(
+        customShare.participantId,
+      );
+
+      const amount = new Prisma.Decimal(
+        customShare.amount.toString(),
+      );
+
+      const amountCents =
+        this.decimalToCents(amount);
+
+      if (amountCents <= 0) {
+        throw new BadRequestException(
+          'Custom payment shares must be greater than zero',
+        );
+      }
+
+      return {
+        payerUserId: participant.userId,
+        amountCents,
+      };
+    },
+  );
+
+  const customTotalCents =
+    calculatedShares.reduce(
+      (sum, share) =>
+        sum + share.amountCents,
+      0,
+    );
+
+  if (customTotalCents !== orderTotalCents) {
+    throw new BadRequestException(
+      'Custom payment shares must equal the authoritative order total',
+    );
+  }
+
+  return calculatedShares;
+}
+
+  private getMarketplaceFeeRate(): Prisma.Decimal {
     const rawRate = this.configService.get<string>(
       'MARKETPLACE_FEE_RATE',
       '0',
