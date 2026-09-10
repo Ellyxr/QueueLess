@@ -47,6 +47,9 @@ export function AppShell({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchVal, setSearchVal] = useState("");
   const [user, setUser] = useState<User | null>(null);
+  const [hasToken, setHasToken] = useState(() =>
+    Boolean(localStorage.getItem("token")),
+  );
   const [activePortal, setActivePortalState] = useState<Portal>("buyer");
   const [isLoginPage, setIsLoginPage] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -59,6 +62,7 @@ export function AppShell({
   useEffect(() => {
     const syncAuthState = () => {
       setIsLoginPage(window.location.pathname === "/login");
+      setHasToken(Boolean(localStorage.getItem("token")));
       const storedUser = localStorage.getItem("user");
       try {
         setUser(storedUser ? JSON.parse(storedUser) : null);
@@ -96,10 +100,7 @@ export function AppShell({
   const isVendorPortal =
     isExternalVendor || (isStudentVendor && activePortal === "vendor");
   const showCartBadge =
-    !isLoginPage &&
-    user !== null &&
-    Boolean(localStorage.getItem("token")) &&
-    cartCount > 0;
+    !isLoginPage && user !== null && hasToken && cartCount > 0;
 
   const switchPortal = (portal: Portal) => {
     setActivePortal(portal);
@@ -158,7 +159,11 @@ export function AppShell({
             : "w-full"
         }`}
       >
-        <div className="flex items-center justify-between gap-3">
+        <div
+          className={`flex items-center justify-between gap-3 mx-6 ${
+            isScrolled ? "mx-8" : "mx-26"
+          }`}
+        >
           <div
             className="flex items-center gap-3 cursor-pointer"
             onClick={() => (window.location.href = "/")}
@@ -173,147 +178,137 @@ export function AppShell({
             </div>
           </div>
 
-          <nav className="relative hidden items-center justify-center md:flex md:w-[600px]">
-            <div
-              className={`flex items-center gap-2 transition-all duration-300 ease-in-out ${
-                isSearchOpen
-                  ? "pointer-events-none w-0 translate-x-4 opacity-0"
-                  : "w-auto translate-x-0 opacity-100"
-              }`}
-            >
-              {isVendorPortal ? (
-                [
-                  {
-                    label: "Home",
-                    icon: navIcons["Browse"],
-                    onClick: () => (window.location.href = "/"),
-                  },
-                  { label: "Store", icon: <Store className="h-4 w-4" /> },
-                  {
-                    label: "Transactions",
-                    icon: <ShoppingBag className="h-4 w-4" />,
-                  },
-                  { label: "Inbox", icon: <Inbox className="h-4 w-4" /> },
-                  
-                  
-                  {
-                    label: "Profile",
-                    icon: <UserCircle2 className="h-4 w-4" />,
-                    onClick: () => (window.location.href = "/profile"),
-                  },
-                ].map(({ label, icon, onClick }) => (
-                  <Button
-                    key={label}
-                    variant="ghost"
-                    onClick={onClick}
-                    className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
-                  >
-                    <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
-                      {icon}
-                    </span>
-                    <span>{label}</span>
-                  </Button>
-                ))
-              ) : (
-                <>
-                  <Button
-                    variant="ghost"
-                    onClick={() => (window.location.href = "/")}
-                    className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
-                  >
-                    <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
-                      {navIcons["Browse"]}
-                    </span>
-                    <span>Browse</span>
-                  </Button>
+          {hasToken && (
+            <nav className="relative hidden items-center justify-center md:flex md:w-[600px]">
+              <div
+                className={`flex items-center gap-2 transition-all duration-300 ease-in-out ${
+                  isSearchOpen
+                    ? "pointer-events-none w-0 translate-x-4 opacity-0"
+                    : "w-auto translate-x-0 opacity-100"
+                }`}
+              >
+                {isVendorPortal ? (
+                  [
+                    {
+                      label: "Home",
+                      icon: navIcons["Browse"],
+                      onClick: () => (window.location.href = "/vendor"),
+                    },
+                    { label: "Store", icon: <Store className="h-4 w-4" /> },
+                    {
+                      label: "Transactions",
+                      icon: <ShoppingBag className="h-4 w-4" />,
+                    },
+                    { label: "Inbox", icon: <Inbox className="h-4 w-4" /> },
 
-                  <Button
-                    data-cart-target
-                    variant="ghost"
-                    onClick={() => (window.location.href = "/cart")}
-                    className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
-                  >
-                    <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
-                      {navIcons["Cart"]}
-                    </span>
-                    <span className="relative">
-                      Cart
-                      {showCartBadge && (
-                        <span className="absolute -right-4 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">
-                          {cartCount > 9 ? "9+" : cartCount}
-                        </span>
-                      )}
-                    </span>
-                  </Button>
+                    {
+                      label: "Profile",
+                      icon: <UserCircle2 className="h-4 w-4" />,
+                      onClick: () => (window.location.href = "/profile"),
+                    },
+                  ].map(({ label, icon, onClick }) => (
+                    <Button
+                      key={label}
+                      variant="ghost"
+                      onClick={onClick}
+                      className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+                    >
+                      <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
+                        {icon}
+                      </span>
+                      <span>{label}</span>
+                    </Button>
+                  ))
+                ) : (
+                  <>
+                    <Button
+                      variant="ghost"
+                      onClick={() => (window.location.href = "/")}
+                      className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+                    >
+                      <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
+                        {navIcons["Browse"]}
+                      </span>
+                      <span>Browse</span>
+                    </Button>
 
-                  <Button
-                    variant="ghost"
-                    onClick={() => setIsSearchOpen(true)}
-                    className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
-                  >
-                    <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
-                      <Search className="h-4 w-4" />
-                    </span>
-                    <span>Search</span>
-                  </Button>
-                </>
-              )}
-            </div>
+                    <Button
+                      data-cart-target
+                      variant="ghost"
+                      onClick={() => (window.location.href = "/cart")}
+                      className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+                    >
+                      <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
+                        {navIcons["Cart"]}
+                      </span>
+                      <span className="relative">
+                        Cart
+                        {showCartBadge && (
+                          <span className="absolute -right-4 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">
+                            {cartCount > 9 ? "9+" : cartCount}
+                          </span>
+                        )}
+                      </span>
+                    </Button>
 
-            <div
-              className={`absolute left-1/2 top-1/2 flex w-[80%] -translate-x-1/2 -translate-y-1/2 items-center transition-all duration-300 ease-out will-change-[transform,opacity] ${
-                isSearchOpen
-                  ? "pointer-events-auto opacity-100 scale-100"
-                  : "pointer-events-none opacity-0 scale-95"
-              }`}
-            >
-              <div className="relative flex w-full items-center">
-                <Search className="pointer-events-none absolute left-3.5 h-4 w-4 text-muted-foreground" />
-                <input
-                  ref={searchInputRef}
-                  type="text"
-                  value={searchVal}
-                  onChange={(e) => handleSearchChange(e.target.value)}
-                  placeholder="Search products..."
-                  className="w-full rounded-full border border-border/80 bg-secondary/50 py-2 pl-10 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-                <button
-                  onClick={() => {
-                    handleSearchChange("");
-                    setIsSearchOpen(false);
-                  }}
-                  className="absolute right-3 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => setIsSearchOpen(true)}
+                      className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+                    >
+                      <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
+                        <Search className="h-4 w-4" />
+                      </span>
+                      <span>Search</span>
+                    </Button>
+                  </>
+                )}
               </div>
-            </div>
-          </nav>
+
+              <div
+                className={`absolute left-1/2 top-1/2 flex w-[80%] -translate-x-1/2 -translate-y-1/2 items-center transition-all duration-300 ease-out will-change-[transform,opacity] ${
+                  isSearchOpen
+                    ? "pointer-events-auto opacity-100 scale-100"
+                    : "pointer-events-none opacity-0 scale-95"
+                }`}
+              >
+                <div className="relative flex w-full items-center">
+                  <Search className="pointer-events-none absolute left-3.5 h-4 w-4 text-muted-foreground" />
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    value={searchVal}
+                    onChange={(e) => handleSearchChange(e.target.value)}
+                    placeholder="Search products..."
+                    className="w-full rounded-full border border-border/80 bg-secondary/50 py-2 pl-10 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                  <button
+                    onClick={() => {
+                      handleSearchChange("");
+                      setIsSearchOpen(false);
+                    }}
+                    className="absolute right-3 flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            </nav>
+          )}
 
           <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setIsSearchOpen(!isSearchOpen)}
-              className="rounded-full border border-border/80 bg-background text-foreground md:hidden"
-            >
-              <Search className="h-4 w-4" />
-            </Button>
-
-            {isExternalVendor && (
+            {hasToken && (
               <Button
                 variant="ghost"
-                onClick={() => (window.location.href = "/vendor")}
-                className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+                size="icon"
+                onClick={() => setIsSearchOpen(!isSearchOpen)}
+                className="rounded-full border border-border/80 bg-background text-foreground md:hidden"
               >
-                <span className="w-0 -translate-x-2 opacity-0 overflow-hidden transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100 flex items-center shrink-0">
-                  {navIcons["Vendor"]}
-                </span>
-                <span>Vendor Portal</span>
+                <Search className="h-4 w-4" />
               </Button>
             )}
 
-            {isStudentVendor && (
+            {hasToken && isStudentVendor && (
               <Button
                 variant="ghost"
                 onClick={() =>
@@ -325,7 +320,7 @@ export function AppShell({
               </Button>
             )}
 
-            {user?.role === "admin" && (
+            {hasToken && user?.role === "admin" && (
               <Button
                 variant="ghost"
                 onClick={() => (window.location.href = "/admin")}
@@ -338,76 +333,82 @@ export function AppShell({
               </Button>
             )}
 
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setIsMobileMenuOpen((current) => !current)}
-              className="rounded-full border border-border/80 bg-background text-foreground md:hidden"
-              aria-label="Toggle menu"
-            >
-              <Menu className="h-4 w-4" />
-            </Button>
+            {hasToken && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsMobileMenuOpen((current) => !current)}
+                className="rounded-full border border-border/80 bg-background text-foreground md:hidden"
+                aria-label="Toggle menu"
+              >
+                <Menu className="h-4 w-4" />
+              </Button>
+            )}
 
-            <div className="hidden items-center gap-2 md:flex">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="rounded-full border border-border/80 bg-background text-foreground"
-              >
-                <ShoppingBag className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="rounded-full border border-border/80 bg-background text-foreground"
-              >
-                <Bell className="h-4 w-4" />
-              </Button>
-              {!isLoginPage && (
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="secondary"
-                    onClick={() => (window.location.href = "/profile")}
-                    className="gap-2 rounded-full px-3 py-2 sm:px-4"
-                  >
-                    <UserCircle2 className="h-4 w-4" />
-                    <span className="hidden sm:inline">
-                      {user?.fullName || username}
-                    </span>
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={logoutUser}
-                    title="Log out"
-                    className="rounded-full border border-border/80 text-destructive hover:bg-destructive/10"
-                  >
-                    <LogOut className="h-4 w-4" />
-                  </Button>
-                </div>
-              )}
-            </div>
+            {hasToken && (
+              <div className="hidden items-center gap-2 md:flex">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full border border-border/80 bg-background text-foreground"
+                >
+                  <ShoppingBag className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full border border-border/80 bg-background text-foreground"
+                >
+                  <Bell className="h-4 w-4" />
+                </Button>
+                {!isLoginPage && (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => (window.location.href = "/profile")}
+                      className="gap-2 rounded-full px-3 py-2 sm:px-4"
+                    >
+                      <UserCircle2 className="h-4 w-4" />
+                      <span className="hidden sm:inline">
+                        {user?.fullName || username}
+                      </span>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={logoutUser}
+                      title="Log out"
+                      className="rounded-full border border-border/80 text-destructive hover:bg-destructive/10"
+                    >
+                      <LogOut className="h-4 w-4" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
 
-            <div className="flex items-center gap-2 md:hidden">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="rounded-full border border-border/80 bg-background text-foreground"
-              >
-                <ShoppingBag className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="rounded-full border border-border/80 bg-background text-foreground"
-              >
-                <Bell className="h-4 w-4" />
-              </Button>
-            </div>
+            {hasToken && (
+              <div className="flex items-center gap-2 md:hidden">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full border border-border/80 bg-background text-foreground"
+                >
+                  <ShoppingBag className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full border border-border/80 bg-background text-foreground"
+                >
+                  <Bell className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
           </div>
         </div>
 
-        {isMobileMenuOpen && (
+        {hasToken && isMobileMenuOpen && (
           <div className="mt-3 space-y-2 border-t border-border/80 pt-3 md:hidden">
             {(isVendorPortal
               ? [
@@ -431,8 +432,10 @@ export function AppShell({
                     setIsSearchOpen(true);
                   } else if (label === "Cart") {
                     window.location.href = "/cart";
-                  } else if (label === "Browse" || label === "Home") {
+                  } else if (label === "Browse") {
                     window.location.href = "/";
+                  } else if (label === "Home") {
+                    window.location.href = "/vendor";
                   } else if (label === "Profile") {
                     window.location.href = "/profile";
                   }
