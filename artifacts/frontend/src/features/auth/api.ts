@@ -1,6 +1,6 @@
 import { LoginInput, RegisterInput, AuthResponse } from "../../types/auth";
 
-const API_BASE_URL = "/api/v1";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
 
 export const AUTH_STATE_CHANGED_EVENT = "queueless-auth-state-changed";
 export const PORTAL_CHANGED_EVENT = "queueless-portal-changed";
