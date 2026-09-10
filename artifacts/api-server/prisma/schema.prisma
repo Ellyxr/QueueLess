@@ -201,18 +201,25 @@ model EventVendorParticipation {
 }
 
 model Cart {
-  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId    String     @db.Uuid
-  vendorId  String     @db.Uuid
-  status    CartStatus @default(ACTIVE)
-  createdAt DateTime   @default(now()) @db.Timestamptz(6)
-  updatedAt DateTime   @updatedAt @db.Timestamptz(6)
-  items     CartItem[]
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  vendor    Vendor     @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String     @db.Uuid
+  vendorId     String     @db.Uuid
+  groupOrderId String?    @db.Uuid
+  status       CartStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime   @updatedAt @db.Timestamptz(6)
 
+  items      CartItem[]
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vendor     Vendor      @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  groupOrder GroupOrder? @relation(fields: [groupOrderId], references: [id], onDelete: Cascade)
+  order      Order?      @relation(fields: [orderId], references: [id])
+  orderId    String?     @db.Uuid
+
+  @@unique([groupOrderId, userId])
   @@index([userId])
   @@index([vendorId])
+  @@index([groupOrderId])
   @@map("carts")
 }
 
@@ -248,6 +255,7 @@ model Order {
   idempotencyKeys   OrderIdempotencyKey[]
   items             OrderItem[]
   statusHistory     OrderStatusHistory[]
+  carts             Cart[]
   customer          User                  @relation("OrderCustomer", fields: [customerId], references: [id])
   event             Event?                @relation(fields: [eventId], references: [id])
   groupOrder        GroupOrder?           @relation(fields: [groupOrderId], references: [id])
@@ -326,6 +334,7 @@ model GroupOrder {
   initiator       User                    @relation("GroupOrderInitiator", fields: [initiatorUserId], references: [id])
   vendor          Vendor                  @relation(fields: [vendorId], references: [id])
   order           Order?
+  carts           Cart[]
 
   @@index([initiatorUserId])
   @@index([vendorId])
