@@ -128,6 +128,16 @@ export class OrdersController {
     return this.ordersService.getVendorDashboard(user.sub);
   }
 
+  @Get('mine')
+  @UseGuards(RolesGuard)
+  @Roles('BUYER')
+  @ApiOperation({
+    summary: 'Get the authenticated buyer order history',
+  })
+  async getCustomerOrders(@CurrentUser() user: JwtPayload) {
+    return this.ordersService.getCustomerOrders(user.sub);
+  }
+
   @Get(':orderId/status')
   @UseGuards(RolesGuard)
   @Roles('BUYER')

@@ -12,3 +12,14 @@ export class UpdateProfileDto {
   @MaxLength(30)
   phone?: string;
 }
+
+export class ChangePasswordDto {
+  @IsString()
+  @MinLength(1)
+  currentPassword!: string;
+
+  @IsString()
+  @MinLength(9)
+  @MaxLength(100)
+  newPassword!: string;
+}

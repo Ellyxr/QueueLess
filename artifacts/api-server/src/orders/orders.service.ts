@@ -362,6 +362,41 @@ export class OrdersService {
     return this.buildOrderResponse(order);
   }
 
+  async getCustomerOrders(userId: string) {
+    const orders = await this.prisma.order.findMany({
+      where: { customerId: userId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        createdAt: true,
+        vendor: { select: { id: true, name: true } },
+        items: {
+          orderBy: { createdAt: 'asc' },
+          take: 1,
+          select: {
+            quantity: true,
+            product: { select: { id: true, name: true } },
+          },
+        },
+      },
+    });
+
+    return orders.map((order) => ({
+      id: order.id,
+      status: order.status,
+      total: order.totalAmount.toFixed(2),
+      createdAt: order.createdAt,
+      vendor: order.vendor,
+      items: order.items.map((item) => ({
+        productId: item.product.id,
+        name: item.product.name,
+        quantity: item.quantity,
+      })),
+    }));
+  }
+
   async getOrderStatus(
     userId: string,
     orderId: string,
