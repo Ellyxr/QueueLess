@@ -11,6 +11,7 @@ import { ProductsModule } from './products/products.module';
 import { EventsModule } from './events/events.module';
 import { CartsModule } from './carts/carts.module';
 import { OrdersModule } from './orders/orders.module';
+import { GroupOrdersModule } from './group-orders/group-orders.module';
 import { RefundsModule } from './refunds/refunds.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PasabuyModule } from './pasabuy/pasabuy.module';
@@ -33,11 +34,9 @@ import { AdminModule } from './admin/admin.module';
     ProductsModule,
     EventsModule,
     CartsModule,
-    CartsModule,
     OrdersModule,
+    GroupOrdersModule,
     QrModule,
-    RefundsModule,
-    OrdersModule,
     RefundsModule,
     NotificationsModule,
     PasabuyModule,
