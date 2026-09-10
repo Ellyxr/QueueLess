@@ -1,11 +1,3 @@
-# NOTICE: Schema changes from time to time. Pls practice:
-
-> pnpm --filter @workspace/api-server prisma:generate
-
-> pnpm --filter @workspace/api-server build
-
-> pnpm --filter @workspace/api-server start
-
 # When creating changes and pushing new features,
 > Galing sa google sheets User Story dapat ung branchname. US-# means User Story - Number. Click the badge below and click it again to redirect.
 
