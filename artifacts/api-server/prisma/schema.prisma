@@ -324,17 +324,19 @@ model OrderStatusHistory {
 }
 
 model GroupOrder {
-  id              String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  initiatorUserId String                  @db.Uuid
-  vendorId        String                  @db.Uuid
-  status          GroupOrderStatus        @default(OPEN)
-  createdAt       DateTime                @default(now()) @db.Timestamptz(6)
-  updatedAt       DateTime                @updatedAt @db.Timestamptz(6)
-  participants    GroupOrderParticipant[]
-  initiator       User                    @relation("GroupOrderInitiator", fields: [initiatorUserId], references: [id])
-  vendor          Vendor                  @relation(fields: [vendorId], references: [id])
-  order           Order?
-  carts           Cart[]
+  id               String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  initiatorUserId  String                 @db.Uuid
+  vendorId         String                 @db.Uuid
+  status           GroupOrderStatus       @default(OPEN)
+  paymentSplitMode GroupPaymentSplitMode?
+  createdAt        DateTime               @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime               @updatedAt @db.Timestamptz(6)
+
+  participants GroupOrderParticipant[]
+  initiator    User                    @relation("GroupOrderInitiator", fields: [initiatorUserId], references: [id])
+  vendor       Vendor                  @relation(fields: [vendorId], references: [id])
+  order        Order?
+  carts        Cart[]
 
   @@index([initiatorUserId])
   @@index([vendorId])
@@ -620,6 +622,12 @@ enum GroupOrderStatus {
   LOCKED
   FINALIZED
   CANCELLED
+}
+
+enum GroupPaymentSplitMode {
+  ITEM_BASED
+  EQUAL
+  CUSTOM
 }
 
 enum GroupOrderParticipantStatus {
