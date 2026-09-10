@@ -24,6 +24,7 @@ export class AuthService {
     businessName?: string,
   ) {
     const normalizedEmail = email.trim().toLowerCase();
+    const normalizedFullName = fullName.trim();
 
     const existingUser = await this.prisma.user.findUnique({
       where: {
@@ -33,6 +34,16 @@ export class AuthService {
 
     if (existingUser) {
       throw new ConflictException('Email is already registered');
+    }
+
+    const existingFullName = await this.prisma.user.findFirst({
+      where: {
+        fullName: normalizedFullName,
+      },
+    });
+
+    if (existingFullName) {
+      throw new ConflictException('Full name is already taken');
     }
 
     if (role === 'vendor' && !businessName?.trim()) {
@@ -48,7 +59,7 @@ export class AuthService {
         data: {
           email: normalizedEmail,
           passwordHash,
-          fullName: fullName.trim(),
+          fullName: normalizedFullName,
           phone: phone?.trim() || null,
           roleAssignments: {
             create:
@@ -148,7 +159,8 @@ export class AuthService {
     }
 
     const options: SignOptions = {
-      expiresIn: process.env.JWT_EXPIRES_IN as SignOptions['expiresIn'],
+      expiresIn:
+        process.env.JWT_EXPIRES_IN as SignOptions['expiresIn'],
     };
 
     const accessToken = jwt.sign(payload, secret, options);
