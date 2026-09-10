@@ -9,7 +9,7 @@ import {
 import { ApiBearerAuth } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { UpdateProfileDto } from './dto/update-profile.dto';
+import { ChangePasswordDto, UpdateProfileDto } from './dto/update-profile.dto';
 import { UsersService } from './users.service';
 
 type AuthenticatedRequest = Request & {
@@ -35,5 +35,13 @@ export class UsersController {
     @Body() dto: UpdateProfileDto,
   ) {
     return this.usersService.updateProfile(request.user.sub, dto);
+  }
+
+  @Patch('me/password')
+  changePassword(
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    return this.usersService.changePassword(request.user.sub, dto);
   }
 }

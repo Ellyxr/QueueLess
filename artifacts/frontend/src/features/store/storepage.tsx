@@ -31,8 +31,8 @@ export interface StorePageProps {
 
 export default function StorePage({
   storeName,
-    description,
-    campusLocation,
+  description,
+  campusLocation,
   rating,
   eta,
   storeType,
@@ -55,13 +55,16 @@ export default function StorePage({
     return (
       <main className="min-h-dvh bg-background">
         <div className="flex min-h-dvh items-center justify-center">
-          <div className="text-center text-muted-foreground">Loading store...</div>
+          <div className="text-center text-muted-foreground">
+            Loading store...
+          </div>
         </div>
       </main>
     );
   }
 
-  const hasMenu = categories.length > 0 && categories.some((c) => c.items.length > 0);
+  const hasMenu =
+    categories.length > 0 && categories.some((c) => c.items.length > 0);
 
   return (
     <main className="min-h-dvh bg-background">
@@ -103,7 +106,9 @@ export default function StorePage({
               <div className="mt-4 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
                 <div className="flex items-center gap-1.5 rounded-full bg-secondary/60 px-3 py-1">
                   <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-                  <span className="text-sm font-semibold text-foreground">{rating}</span>
+                  <span className="text-sm font-semibold text-foreground">
+                    {rating}
+                  </span>
                 </div>
 
                 <span className="text-sm text-muted-foreground">•</span>
@@ -115,7 +120,9 @@ export default function StorePage({
 
                 <span className="text-sm text-muted-foreground">•</span>
 
-                <span className="text-sm text-muted-foreground">{storeType}</span>
+                <span className="text-sm text-muted-foreground">
+                  {storeType}
+                </span>
               </div>
               {description && (
                 <p className="mx-auto mt-4 p-6 max-w-xl text-sm rounded-sm bg-gray-100 text-muted-foreground">
@@ -130,40 +137,44 @@ export default function StorePage({
 
           {!hasMenu ? (
             <div className="my-12 flex flex-col items-center justify-center rounded-[24px] border border-border/80 bg-card/50 py-16 text-center backdrop-blur-sm">
-              <p className="text-lg font-medium text-foreground">Menu coming soon</p>
+              <p className="text-lg font-medium text-foreground">
+                Menu coming soon
+              </p>
               <p className="mt-2 text-sm text-muted-foreground">
                 This store doesn't have items available yet.
               </p>
             </div>
           ) : (
             <div className="space-y-10 py-8">
-              {categories.map((category) => (
-                category.items.length > 0 && (
-                  <section key={category.categoryName}>
-                    <div className="mb-4">
-                      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                        {category.categoryName}
-                      </p>
-                      <h2 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">
-                        {category.categoryName}
-                      </h2>
-                    </div>
+              {categories.map(
+                (category) =>
+                  category.items.length > 0 && (
+                    <section key={category.categoryName}>
+                      <div className="mb-4">
+                        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                          {category.categoryName}
+                        </p>
+                        <h2 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">
+                          {category.categoryName}
+                        </h2>
+                      </div>
 
-                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-2">
-                      {category.items.map((item) => (
-                        <StoreItemCard
-                          key={item.name}
-                          image={item.image}
-                          name={item.name}
-                          flavorProfile={item.flavorProfile}
-                          price={item.price}
-                          storeName={storeName}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                )
-              ))}
+                      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-2">
+                        {category.items.map((item) => (
+                          <StoreItemCard
+                            key={item.name}
+                            id={item.name}
+                            image={item.image}
+                            name={item.name}
+                            flavorProfile={item.flavorProfile}
+                            price={item.price}
+                            storeName={storeName}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  ),
+              )}
             </div>
           )}
         </div>
