@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
+    "predev": "pnpm prisma:generate && prisma migrate deploy",
     "dev": "nest start --watch",
     "build": "nest build",
     "start": "node dist/main.js",
