@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createOrder, fetchWithAuth } from "@/features/auth/api";
+import { startOrderTracking } from "@/features/orders/order-tracking";
 
 export interface CartOption {
   name: string;
@@ -110,6 +111,7 @@ export default function CartPage() {
   const [isConfirmed, setIsConfirmed] = useState(false);
   const [finalTotal, setFinalTotal] = useState(0);
   const [finalStoreName, setFinalStoreName] = useState("Campus Shop");
+  const [finalWaitMinutes, setFinalWaitMinutes] = useState<number | null>(null);
 
   useEffect(() => {
     const refreshCart = () => setItems(getCartItems());
@@ -182,13 +184,21 @@ export default function CartPage() {
         throw new Error("Could not retrieve active cart ID.");
       }
 
-      await createOrder({
+      const order = await createOrder({
         cartId: activeCartId,
+        isPasabuyRequest: delivery,
       });
+
+      if (order?.id) {
+        startOrderTracking(order.id);
+      }
 
       // I-save muna ang total at storeName bago i-clear ang cart items
       setFinalTotal(total);
       setFinalStoreName(storeName);
+      setFinalWaitMinutes(
+        typeof order?.estimatedWaitMinutes === "number" ? order.estimatedWaitMinutes : null,
+      );
       setIsConfirmed(true);
       saveCartItems([]);
     } catch (error) {
@@ -223,7 +233,7 @@ export default function CartPage() {
             </div>
             <div className="mt-2 flex items-center justify-between">
               <span className="text-muted-foreground">Estimated wait</span>
-              <strong>12-18 min</strong>
+              <strong>{finalWaitMinutes !== null ? `~${finalWaitMinutes} min` : "Pending confirmation"}</strong>
             </div>
           </div>
           <Button

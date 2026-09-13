@@ -20,6 +20,7 @@ export interface VendorProduct {
   description: string | null;
   price: number;
   category: string | null;
+  preparationTimeMinutes: number;
   isAvailable: boolean;
 }
 
@@ -28,6 +29,7 @@ export interface ProductInput {
   description?: string;
   price: number;
   category?: string;
+  preparationTimeMinutes: number;
   isAvailable?: boolean;
 }
 
@@ -36,9 +38,27 @@ export interface VendorStorefront {
   name: string;
   description: string | null;
   campusLocation: string | null;
+  categoryOrder?: string[];
   vendorType: string;
   status: string;
   products?: VendorProduct[];
+  favoritesCount?: number;
+  isFavoritedByMe?: boolean;
+}
+
+export interface VendorSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  campusLocation: string | null;
+  vendorType: string;
+  status: string;
+}
+
+export interface VendorFavoriteStatus {
+  vendorId: string;
+  favoritesCount: number;
+  isFavoritedByMe: boolean;
 }
 
 export interface VendorDashboard {
@@ -59,10 +79,12 @@ export interface UpdateVendorInput {
   name?: string;
   description?: string;
   campusLocation?: string;
+  categoryOrder?: string[];
 }
 
 // US-017 Types for Vendor Incoming Order Queue
 export interface VendorOrderItem {
+  productId?: string;
   productName?: string;
   quantity: number;
   price?: number;
@@ -75,13 +97,21 @@ export interface VendorQueueOrder {
   customerEmail?: string;
   userId?: string;
   paymentStatus?: string;
+  isPasabuyRequest?: boolean;
   status: string;
   items?: VendorOrderItem[];
 }
 
+export type CancellationReason =
+  | 'NOT_AVAILABLE'
+  | 'CUSTOMER_REQUEST'
+  | 'CLOSING_EARLY'
+  | 'OTHER';
+
 // US-017: Create/Submit Order from Cart
 export interface CreateOrderInput {
   cartId: string;
+  isPasabuyRequest?: boolean;
 }
 
 export interface ProfileData {
@@ -276,9 +306,43 @@ export function updateVendorStorefront(
   });
 }
 
+export function favoriteVendor(vendorId: string): Promise<VendorFavoriteStatus> {
+  return fetchWithAuth(`/vendors/${vendorId}/favorite`, { method: "POST" });
+}
+
+export function unfavoriteVendor(vendorId: string): Promise<VendorFavoriteStatus> {
+  return fetchWithAuth(`/vendors/${vendorId}/favorite`, { method: "DELETE" });
+}
+
+export function getMyFavoriteVendors(): Promise<VendorSummary[]> {
+  return fetchWithAuth("/vendors/favorites/mine");
+}
+
 // US-017: Get Vendor Incoming Order Queue
 export function getVendorOrderQueue(): Promise<VendorQueueOrder[]> {
   return fetchWithAuth("/orders/vendor/queue");
+}
+
+export interface OrderStatusResponse {
+  orderId: string;
+  status: string;
+  isPasabuyRequest: boolean;
+  cancellationReason: CancellationReason | null;
+  cancellationNote: string | null;
+  estimatedReadyAt: string | null;
+  estimatedWaitMinutes: number | null;
+  updatedAt: string;
+  vendor: { id: string; name: string; campusLocation: string | null };
+  items: Array<{ id: string; name: string; quantity: number }>;
+  history: Array<{ status: string; note: string | null; changedAt: string }>;
+}
+
+export function getOrderStatus(orderId: string): Promise<OrderStatusResponse> {
+  return fetchWithAuth(`/orders/${orderId}/status`);
+}
+
+export function confirmOrderPickup(orderId: string): Promise<any> {
+  return fetchWithAuth(`/orders/${orderId}/pickup`, { method: "PATCH" });
 }
 
 export function createOrder(data: CreateOrderInput): Promise<any> {
@@ -295,10 +359,11 @@ export function createOrder(data: CreateOrderInput): Promise<any> {
 export function updateOrderStatus(
   orderId: string,
   status: string,
+  extra?: { note?: string; cancellationReason?: CancellationReason; cancellationNote?: string },
 ): Promise<any> {
   return fetchWithAuth(`/orders/vendor/${orderId}/status`, {
     method: "PATCH",
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({ status, ...extra }),
   });
 }
 

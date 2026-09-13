@@ -38,6 +38,7 @@ model User {
   reportsSubmitted         Report[]                @relation("ReportReporter")
   roleAssignments          RoleAssignment[]
   vendorOwned              Vendor?                 @relation("VendorOwner")
+  favoriteVendors          VendorFavorite[]        @relation("UserFavoriteVendors")
 
   @@map("users")
 }
@@ -88,6 +89,7 @@ model Vendor {
   name                String
   description         String?
   campusLocation      String?
+  categoryOrder       String[]                   @default([])
   vendorType          VendorType
   status              VendorStatus               @default(ACTIVE)
   createdAt           DateTime                   @default(now()) @db.Timestamptz(6)
@@ -103,10 +105,25 @@ model Vendor {
   reportsTargeting    Report[]                   @relation("ReportTargetVendor")
   subscriptions       VendorSubscription[]
   owner               User                       @relation("VendorOwner", fields: [ownerUserId], references: [id])
+  favoritedBy         VendorFavorite[]           @relation("VendorFavoritedBy")
 
   @@index([ownerUserId])
   @@index([status])
   @@map("vendors")
+}
+
+model VendorFavorite {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @db.Uuid
+  vendorId  String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  user   User   @relation("UserFavoriteVendors", fields: [userId], references: [id], onDelete: Cascade)
+  vendor Vendor @relation("VendorFavoritedBy", fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, vendorId])
+  @@index([vendorId])
+  @@map("vendor_favorites")
 }
 
 model VendorQrCode {
@@ -245,6 +262,9 @@ model Order {
   groupOrderId      String?               @unique @db.Uuid
   orderType         OrderType
   status            OrderStatus           @default(PENDING)
+  isPasabuyRequest  Boolean               @default(false)
+  cancellationReason CancellationReason?
+  cancellationNote  String?
   subtotal          Decimal               @db.Decimal(10, 2)
   marketplaceFee    Decimal               @db.Decimal(10, 2)
   totalAmount       Decimal               @db.Decimal(10, 2)
@@ -613,8 +633,16 @@ enum OrderStatus {
   PAID
   COOKING
   OUT_FOR_DELIVERY
-  DELIVERED
+  READY_FOR_PICKUP
+  COMPLETED
   CANCELLED
+}
+
+enum CancellationReason {
+  NOT_AVAILABLE
+  CUSTOMER_REQUEST
+  CLOSING_EARLY
+  OTHER
 }
 
 enum GroupOrderStatus {

@@ -1,5 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsOptional,
   IsString,
   MaxLength,
@@ -35,4 +37,15 @@ export class UpdateVendorDto {
   @IsString()
   @MaxLength(255)
   campusLocation?: string;
+
+  @ApiPropertyOptional({
+    example: ['Rice Bowls', 'Drinks', 'Snacks'],
+    description: 'Ordered list of category names as the vendor wants them displayed.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @IsString({ each: true })
+  @MaxLength(50, { each: true })
+  categoryOrder?: string[];
 }

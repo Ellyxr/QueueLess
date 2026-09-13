@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { OrderStatus, Prisma } from '@prisma/client';
+import { CancellationReason, OrderStatus, Prisma } from '@prisma/client';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -244,6 +244,7 @@ export class OrdersService {
               eventId: dto.eventId ?? null,
               orderType: 'INDIVIDUAL',
               status: 'PENDING',
+              isPasabuyRequest: dto.isPasabuyRequest ?? false,
               subtotal,
               marketplaceFee,
               estimatedReadyAt,
@@ -409,6 +410,9 @@ export class OrdersService {
       select: {
         id: true,
         status: true,
+        isPasabuyRequest: true,
+        cancellationReason: true,
+        cancellationNote: true,
         estimatedReadyAt: true,
         updatedAt: true,
         pickupConfirmedAt: true,
@@ -416,6 +420,18 @@ export class OrdersService {
           select: {
             id: true,
             name: true,
+            campusLocation: true,
+          },
+        },
+        items: {
+          select: {
+            id: true,
+            quantity: true,
+            product: {
+              select: {
+                name: true,
+              },
+            },
           },
         },
         statusHistory: {
@@ -437,7 +453,7 @@ export class OrdersService {
 
     const estimatedWaitMinutes =
       order.estimatedReadyAt &&
-      order.status !== OrderStatus.DELIVERED &&
+      order.status !== OrderStatus.COMPLETED &&
       order.status !== OrderStatus.CANCELLED
         ? Math.max(
             0,
@@ -450,10 +466,18 @@ export class OrdersService {
     return {
       orderId: order.id,
       status: order.status,
+      isPasabuyRequest: order.isPasabuyRequest,
+      cancellationReason: order.cancellationReason,
+      cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
       estimatedWaitMinutes,
       updatedAt: order.updatedAt,
       vendor: order.vendor,
+      items: order.items.map((item) => ({
+        id: item.id,
+        name: item.product.name,
+        quantity: item.quantity,
+      })),
       history: order.statusHistory,
     };
   }
@@ -491,6 +515,7 @@ export class OrdersService {
         customerId: true,
         orderType: true,
         status: true,
+        isPasabuyRequest: true,
         subtotal: true,
         marketplaceFee: true,
         totalAmount: true,
@@ -500,6 +525,7 @@ export class OrdersService {
         customer: {
           select: {
             fullName: true,
+            email: true,
           },
         },
         items: {
@@ -532,6 +558,12 @@ export class OrdersService {
           id: order.customerId,
           fullName: order.customer.fullName,
         },
+        userId: order.customerId,
+        customerName: order.customer.fullName,
+        customerEmail: order.customer.email,
+        paymentStatus:
+          order.status === 'PENDING' ? 'PENDING' : 'PAID',
+        isPasabuyRequest: order.isPasabuyRequest,
         orderType: order.orderType,
         status: order.status,
         eventId: order.eventId,
@@ -576,6 +608,7 @@ export class OrdersService {
     }
 
     const note = dto.note?.trim() || null;
+    const isCancelling = dto.status === OrderStatus.CANCELLED;
 
     const updatedOrder = await this.prisma.$transaction(
       async (tx) => {
@@ -587,6 +620,12 @@ export class OrdersService {
             id: true,
             vendorId: true,
             status: true,
+            isPasabuyRequest: true,
+            items: {
+              select: {
+                productId: true,
+              },
+            },
           },
         });
 
@@ -600,9 +639,24 @@ export class OrdersService {
           );
         }
 
+        if (order.status === dto.status) {
+          return tx.order.findUniqueOrThrow({
+            where: { id: order.id },
+            include: {
+              vendor: true,
+              items: {
+                include: {
+                  product: true,
+                },
+              },
+            },
+          });
+        }
+
         this.validateOrderStatusTransition(
           order.status,
           dto.status,
+          order.isPasabuyRequest,
         );
 
         const updated = await tx.order.update({
@@ -611,6 +665,13 @@ export class OrdersService {
           },
           data: {
             status: dto.status,
+            ...(isCancelling
+              ? {
+                  cancellationReason: dto.cancellationReason,
+                  cancellationNote:
+                    dto.cancellationNote?.trim() || null,
+                }
+              : {}),
           },
           include: {
             vendor: true,
@@ -621,6 +682,24 @@ export class OrdersService {
             },
           },
         });
+
+        if (
+          isCancelling &&
+          dto.cancellationReason ===
+            CancellationReason.NOT_AVAILABLE
+        ) {
+          const productIds = order.items.map(
+            (item) => item.productId,
+          );
+          await tx.product.updateMany({
+            where: {
+              id: { in: productIds },
+            },
+            data: {
+              isAvailable: false,
+            },
+          });
+        }
 
         await tx.orderStatusHistory.create({
           data: {
@@ -668,7 +747,12 @@ export class OrdersService {
           );
         }
 
-        if (order.status !== OrderStatus.OUT_FOR_DELIVERY) {
+        const pickupEligibleStatuses: OrderStatus[] = [
+          OrderStatus.OUT_FOR_DELIVERY,
+          OrderStatus.READY_FOR_PICKUP,
+        ];
+
+        if (!pickupEligibleStatuses.includes(order.status)) {
           throw new BadRequestException(
             'Order is not ready for pickup',
           );
@@ -678,11 +762,11 @@ export class OrdersService {
           where: {
             id: order.id,
             customerId: userId,
-            status: OrderStatus.OUT_FOR_DELIVERY,
+            status: order.status,
             pickupConfirmedAt: null,
           },
           data: {
-            status: OrderStatus.DELIVERED,
+            status: OrderStatus.COMPLETED,
             pickupConfirmedAt,
           },
         });
@@ -696,9 +780,9 @@ export class OrdersService {
         await tx.orderStatusHistory.create({
           data: {
             orderId: order.id,
-            status: OrderStatus.DELIVERED,
+            status: OrderStatus.COMPLETED,
             changedByUserId: userId,
-            note: 'Pickup confirmed by customer',
+            note: 'Order completed by customer',
           },
         });
 
@@ -755,7 +839,13 @@ export class OrdersService {
       (total, order) => total.add(order.totalAmount),
       new Prisma.Decimal(0),
     );
-    const pendingStatuses = new Set(['PENDING', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY']);
+    const pendingStatuses = new Set([
+      'PENDING',
+      'PAID',
+      'COOKING',
+      'OUT_FOR_DELIVERY',
+      'READY_FOR_PICKUP',
+    ]);
     const pendingOrders = orders.filter((order) => pendingStatuses.has(order.status)).length;
 
     return {
@@ -778,6 +868,7 @@ export class OrdersService {
   private validateOrderStatusTransition(
     currentStatus: OrderStatus,
     nextStatus: OrderStatus,
+    isPasabuyRequest: boolean,
   ) {
     const allowedTransitions: Record<
       OrderStatus,
@@ -792,13 +883,18 @@ export class OrdersService {
         OrderStatus.CANCELLED,
       ],
       COOKING: [
-        OrderStatus.OUT_FOR_DELIVERY,
+        isPasabuyRequest
+          ? OrderStatus.OUT_FOR_DELIVERY
+          : OrderStatus.READY_FOR_PICKUP,
         OrderStatus.CANCELLED,
       ],
       OUT_FOR_DELIVERY: [
-        OrderStatus.DELIVERED,
+        OrderStatus.COMPLETED,
       ],
-      DELIVERED: [],
+      READY_FOR_PICKUP: [
+        OrderStatus.COMPLETED,
+      ],
+      COMPLETED: [],
       CANCELLED: [],
     };
 
@@ -855,7 +951,7 @@ export class OrdersService {
   ) {
     const estimatedWaitMinutes =
       order.estimatedReadyAt &&
-      order.status !== OrderStatus.DELIVERED &&
+      order.status !== OrderStatus.COMPLETED &&
       order.status !== OrderStatus.CANCELLED
         ? Math.max(
             0,
@@ -877,6 +973,9 @@ export class OrdersService {
       eventId: order.eventId,
       orderType: order.orderType,
       status: order.status,
+      isPasabuyRequest: order.isPasabuyRequest,
+      cancellationReason: order.cancellationReason,
+      cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
       pickupConfirmedAt: order.pickupConfirmedAt,
       estimatedWaitMinutes,
