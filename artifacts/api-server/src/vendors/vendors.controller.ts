@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
+  Post,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -31,9 +33,36 @@ export class VendorsController {
     return this.vendorsService.getVendorForOwner(request.user.sub);
   }
 
+  @Get('favorites/mine')
+  async getMyFavoriteVendors(@Req() request: { user: JwtPayload }) {
+    return this.vendorsService.getMyFavoriteVendors(request.user.sub);
+  }
+
   @Get(':vendorId')
-  async getVendorStorefront(@Param('vendorId') vendorId: string) {
-    return this.vendorsService.getVendorStorefront(vendorId);
+  async getVendorStorefront(
+    @Param('vendorId') vendorId: string,
+    @Req() request: { user: JwtPayload },
+  ) {
+    return this.vendorsService.getVendorStorefront(
+      vendorId,
+      request.user.sub,
+    );
+  }
+
+  @Post(':vendorId/favorite')
+  async favoriteVendor(
+    @Param('vendorId') vendorId: string,
+    @Req() request: { user: JwtPayload },
+  ) {
+    return this.vendorsService.favoriteVendor(request.user.sub, vendorId);
+  }
+
+  @Delete(':vendorId/favorite')
+  async unfavoriteVendor(
+    @Param('vendorId') vendorId: string,
+    @Req() request: { user: JwtPayload },
+  ) {
+    return this.vendorsService.unfavoriteVendor(request.user.sub, vendorId);
   }
 
   @Patch(':vendorId')
