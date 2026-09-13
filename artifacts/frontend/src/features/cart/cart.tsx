@@ -10,10 +10,18 @@ import {
   ShoppingBag,
   Trash2,
   Truck,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { createOrder, fetchWithAuth } from "@/features/auth/api";
+import { createGroupOrder, createOrder, fetchWithAuth, joinGroupOrderByCode } from "@/features/auth/api";
 import { startOrderTracking } from "@/features/orders/order-tracking";
+import { GroupOrderCartView } from "@/features/group-orders/group-order-cart-view";
+import {
+  GROUP_ORDER_SESSION_CHANGED_EVENT,
+  getGroupOrderSession,
+  setGroupOrderSession,
+  type GroupOrderSession,
+} from "@/features/group-orders/group-order-session";
 
 export interface CartOption {
   name: string;
@@ -112,12 +120,69 @@ export default function CartPage() {
   const [finalTotal, setFinalTotal] = useState(0);
   const [finalStoreName, setFinalStoreName] = useState("Campus Shop");
   const [finalWaitMinutes, setFinalWaitMinutes] = useState<number | null>(null);
+  const [groupSession, setGroupSession] = useState<GroupOrderSession | null>(getGroupOrderSession);
+  const [joinCode, setJoinCode] = useState("");
+  const [isStartingGroupOrder, setIsStartingGroupOrder] = useState(false);
+  const [groupOrderActionError, setGroupOrderActionError] = useState<string | null>(null);
 
   useEffect(() => {
     const refreshCart = () => setItems(getCartItems());
     window.addEventListener(CART_CHANGED_EVENT, refreshCart);
     return () => window.removeEventListener(CART_CHANGED_EVENT, refreshCart);
   }, []);
+
+  useEffect(() => {
+    const refreshGroupSession = () => setGroupSession(getGroupOrderSession());
+    window.addEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, refreshGroupSession);
+    return () =>
+      window.removeEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, refreshGroupSession);
+  }, []);
+
+  const handleCreateGroupOrder = async () => {
+    if (isStartingGroupOrder) return;
+    setIsStartingGroupOrder(true);
+    setGroupOrderActionError(null);
+    try {
+      const groupOrder = await createGroupOrder();
+      setGroupOrderSession({
+        groupOrderId: groupOrder.id,
+        code: groupOrder.code,
+        isOwner: true,
+        vendorId: groupOrder.vendor?.id ?? null,
+        vendorName: groupOrder.vendor?.name ?? null,
+      });
+    } catch (error) {
+      setGroupOrderActionError(
+        error instanceof Error ? error.message : "Could not create a group order.",
+      );
+    } finally {
+      setIsStartingGroupOrder(false);
+    }
+  };
+
+  const handleJoinGroupOrder = async () => {
+    const code = joinCode.trim();
+    if (!code || isStartingGroupOrder) return;
+    setIsStartingGroupOrder(true);
+    setGroupOrderActionError(null);
+    try {
+      const groupOrder = await joinGroupOrderByCode(code);
+      setGroupOrderSession({
+        groupOrderId: groupOrder.id,
+        code: groupOrder.code,
+        isOwner: false,
+        vendorId: groupOrder.vendor?.id ?? null,
+        vendorName: groupOrder.vendor?.name ?? null,
+      });
+      setJoinCode("");
+    } catch (error) {
+      setGroupOrderActionError(
+        error instanceof Error ? error.message : "Could not join that group order.",
+      );
+    } finally {
+      setIsStartingGroupOrder(false);
+    }
+  };
 
   const subtotal = useMemo(
     () => items.reduce((total, item) => total + cartItemTotal(item), 0),
@@ -247,6 +312,10 @@ export default function CartPage() {
     );
   }
 
+  if (groupSession) {
+    return <GroupOrderCartView session={groupSession} />;
+  }
+
   return (
     <main className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 sm:py-10">
       <button
@@ -285,6 +354,47 @@ export default function CartPage() {
           <p className="mt-2 text-sm text-muted-foreground">
             Add something delicious from a campus shop to get started.
           </p>
+
+          <div className="mx-auto mt-6 max-w-sm space-y-3">
+            <Button
+              variant="outline"
+              className="w-full gap-2 rounded-full"
+              disabled={isStartingGroupOrder}
+              onClick={handleCreateGroupOrder}
+            >
+              <Users className="h-4 w-4" />
+              {isStartingGroupOrder ? "Creating..." : "Create Group Order"}
+            </Button>
+
+            <form
+              className="flex items-center rounded-[20px] border border-border bg-card px-4 py-1"
+              onSubmit={(event) => {
+                event.preventDefault();
+                handleJoinGroupOrder();
+              }}
+            >
+              <input
+                value={joinCode}
+                onChange={(event) => setJoinCode(event.target.value)}
+                placeholder="Enter group order code"
+                inputMode="text"
+                enterKeyHint="go"
+                className="h-11 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              />
+              <button
+                type="submit"
+                disabled={isStartingGroupOrder || !joinCode.trim()}
+                className="px-2 py-2 text-xs font-bold text-primary disabled:opacity-50"
+              >
+                Join
+              </button>
+            </form>
+
+            {groupOrderActionError && (
+              <p className="text-xs text-destructive">{groupOrderActionError}</p>
+            )}
+          </div>
+
           <Button
             className="mt-6 rounded-full"
             onClick={() => (window.location.href = "/")}

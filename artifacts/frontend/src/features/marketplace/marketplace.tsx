@@ -35,7 +35,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
-import { listVendors, type VendorStorefront } from "@/features/auth/api";
+import { createGroupOrder, joinGroupOrderByCode, listVendors, type VendorStorefront } from "@/features/auth/api";
+import {
+  GROUP_ORDER_SESSION_CHANGED_EVENT,
+  getGroupOrderSession,
+  setGroupOrderSession,
+  type GroupOrderSession,
+} from "@/features/group-orders/group-order-session";
 
 const categories = [
   "Pizza",
@@ -749,6 +755,66 @@ export default function MarketplacePage({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
+  // Group order mode toggle
+  const [groupSession, setGroupSession] = useState<GroupOrderSession | null>(getGroupOrderSession);
+  const [isTogglingGroupOrder, setIsTogglingGroupOrder] = useState(false);
+  const [groupJoinCode, setGroupJoinCode] = useState("");
+  const [groupOrderError, setGroupOrderError] = useState<string | null>(null);
+  const isGroupMode = groupSession !== null;
+
+  useEffect(() => {
+    const refreshGroupSession = () => setGroupSession(getGroupOrderSession());
+    window.addEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, refreshGroupSession);
+    return () =>
+      window.removeEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, refreshGroupSession);
+  }, []);
+
+  const handleToggleGroupOrder = async () => {
+    if (isGroupMode || isTogglingGroupOrder) return;
+    setIsTogglingGroupOrder(true);
+    setGroupOrderError(null);
+    try {
+      const groupOrder = await createGroupOrder();
+      setGroupOrderSession({
+        groupOrderId: groupOrder.id,
+        code: groupOrder.code,
+        isOwner: true,
+        vendorId: groupOrder.vendor?.id ?? null,
+        vendorName: groupOrder.vendor?.name ?? null,
+      });
+    } catch (error) {
+      setGroupOrderError(
+        error instanceof Error ? error.message : "Could not start a group order.",
+      );
+    } finally {
+      setIsTogglingGroupOrder(false);
+    }
+  };
+
+  const handleJoinGroupOrderByCode = async () => {
+    const code = groupJoinCode.trim();
+    if (!code || isTogglingGroupOrder) return;
+    setIsTogglingGroupOrder(true);
+    setGroupOrderError(null);
+    try {
+      const groupOrder = await joinGroupOrderByCode(code);
+      setGroupOrderSession({
+        groupOrderId: groupOrder.id,
+        code: groupOrder.code,
+        isOwner: false,
+        vendorId: groupOrder.vendor?.id ?? null,
+        vendorName: groupOrder.vendor?.name ?? null,
+      });
+      setGroupJoinCode("");
+    } catch (error) {
+      setGroupOrderError(
+        error instanceof Error ? error.message : "Could not join that group order.",
+      );
+    } finally {
+      setIsTogglingGroupOrder(false);
+    }
+  };
+
   const visibleCategories = showAllCategories ? categories : categories.slice(0, 8);
 
   useEffect(() => {
@@ -1018,7 +1084,7 @@ export default function MarketplacePage({
 
             {filteredLocal.length > 0 && (
               <div>
-                <div className="mb-4 flex items-center justify-between">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
                       Student vendors
@@ -1027,15 +1093,76 @@ export default function MarketplacePage({
                       Quick bites
                     </h3>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="rounded-full bg-secondary px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-secondary-foreground">
-                      24/7
-                    </span>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center rounded-full border border-border bg-secondary/40 p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (isGroupMode) {
+                            setGroupSession(null);
+                          }
+                        }}
+                        className={cn(
+                          "rounded-full px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors",
+                          !isGroupMode
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground",
+                        )}
+                      >
+                        Individual
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleToggleGroupOrder}
+                        disabled={isTogglingGroupOrder}
+                        className={cn(
+                          "rounded-full px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors",
+                          isGroupMode
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground",
+                        )}
+                      >
+                        Group Order
+                      </button>
+                    </div>
+
+                    {isGroupMode && groupSession ? (
+                      <span className="rounded-full bg-secondary px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] text-secondary-foreground">
+                        Code: {groupSession.code}
+                      </span>
+                    ) : (
+                      <form
+                        className="flex items-center rounded-full border border-border bg-card px-3 py-0.5"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          handleJoinGroupOrderByCode();
+                        }}
+                      >
+                        <input
+                          value={groupJoinCode}
+                          onChange={(event) => setGroupJoinCode(event.target.value)}
+                          placeholder="Enter code"
+                          className="h-8 w-28 min-w-0 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+                        />
+                        <button
+                          type="submit"
+                          disabled={isTogglingGroupOrder || !groupJoinCode.trim()}
+                          className="px-1.5 text-[10px] font-bold uppercase text-primary disabled:opacity-50"
+                        >
+                          Join
+                        </button>
+                      </form>
+                    )}
+
                     <Button variant="ghost" className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-secondary">
                       View all
                     </Button>
                   </div>
                 </div>
+
+                {groupOrderError && (
+                  <p className="mb-4 text-xs text-destructive">{groupOrderError}</p>
+                )}
 
                 <div className="md:hidden">
                   <div className="overflow-x-auto pb-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">

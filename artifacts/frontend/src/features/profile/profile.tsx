@@ -87,6 +87,8 @@ export default function ProfilePage() {
   const [seePasabuyRequest, setSeePasabuyRequest] = useState(
     () => localStorage.getItem("see-pasabuy-request") === "true",
   );
+  const [allowParticipantOrderCompletion, setAllowParticipantOrderCompletion] = useState(false);
+  const [isSavingGroupOrderSetting, setIsSavingGroupOrderSetting] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(true);
   const [dyslexicFont, setDyslexicFont] = useState(false);
   const [nameError, setNameError] = useState("");
@@ -105,6 +107,7 @@ export default function ProfilePage() {
           email: user.email,
           phone: user.phone || "",
         });
+        setAllowParticipantOrderCompletion(user.allowParticipantOrderCompletion ?? false);
         setOrders(customerOrders);
         setFavoriteVendors(favoriteVendorList);
       })
@@ -688,6 +691,23 @@ export default function ProfilePage() {
                       "see-pasabuy-request",
                       String(checked),
                     );
+                  }}
+                />
+              </div>
+              <div className="flex items-center justify-between rounded-[18px] border border-border bg-secondary/30 p-3">
+                <span className="text-sm font-medium">
+                  Let group members complete orders for me
+                </span>
+                <Switch
+                  checked={allowParticipantOrderCompletion}
+                  disabled={isSavingGroupOrderSetting}
+                  onCheckedChange={(checked) => {
+                    const previous = allowParticipantOrderCompletion;
+                    setAllowParticipantOrderCompletion(checked);
+                    setIsSavingGroupOrderSetting(true);
+                    updateMyProfile({ allowParticipantOrderCompletion: checked })
+                      .catch(() => setAllowParticipantOrderCompletion(previous))
+                      .finally(() => setIsSavingGroupOrderSetting(false));
                   }}
                 />
               </div>

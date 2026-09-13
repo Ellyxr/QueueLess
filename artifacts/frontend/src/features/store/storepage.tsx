@@ -15,6 +15,8 @@ import { Card } from "@/components/ui/card";
 import { StoreItemCard } from "@/components/store-item-card";
 
 interface MenuItem {
+  id: string;
+  vendorId?: string;
   image: string;
   name: string;
   flavorProfile: string;
@@ -354,8 +356,9 @@ export default function StorePage({
                       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-2">
                         {category.items.map((item) => (
                           <StoreItemCard
-                            key={item.name}
-                            id={item.name}
+                            key={item.id}
+                            id={item.id}
+                            vendorId={item.vendorId}
                             image={item.image}
                             name={item.name}
                             flavorProfile={item.flavorProfile}
@@ -401,6 +404,7 @@ export const singleCategoryStore: StorePageProps = {
       categoryName: "Beverages",
       items: [
         {
+          id: "Honey Cinnamon Latte",
           image:
             "https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=800&q=80",
           name: "Honey Cinnamon Latte",
@@ -408,6 +412,7 @@ export const singleCategoryStore: StorePageProps = {
           price: 125,
         },
         {
+          id: "Iced Caramel Macchiato",
           image:
             "https://images.unsplash.com/photo-1551024601-bec78aea704b?auto=format&fit=crop&w=800&q=80",
           name: "Iced Caramel Macchiato",
@@ -433,6 +438,7 @@ export const dualCategoryStore: StorePageProps = {
       categoryName: "Flatbreads",
       items: [
         {
+          id: "Margherita Flatbread",
           image:
             "https://images.unsplash.com/photo-1548365328-9f547fb9587c?auto=format&fit=crop&w=800&q=80",
           name: "Margherita Flatbread",
@@ -440,6 +446,7 @@ export const dualCategoryStore: StorePageProps = {
           price: 170,
         },
         {
+          id: "Truffle Mushroom Slice",
           image:
             "https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=800&q=80",
           name: "Truffle Mushroom Slice",
@@ -452,6 +459,7 @@ export const dualCategoryStore: StorePageProps = {
       categoryName: "Sides",
       items: [
         {
+          id: "Garlic Breadsticks",
           image:
             "https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?auto=format&fit=crop&w=800&q=80",
           name: "Garlic Breadsticks",
@@ -459,6 +467,7 @@ export const dualCategoryStore: StorePageProps = {
           price: 95,
         },
         {
+          id: "Roasted Vegetables",
           image:
             "https://images.unsplash.com/photo-1599888568694-13b8e9471fdb?auto=format&fit=crop&w=800&q=80",
           name: "Roasted Vegetables",
