@@ -83,5 +83,11 @@
     "vite": "catalog:",
     "wouter": "^3.3.5",
     "zod": "catalog:"
+  },
+  "dependencies": {
+    "html2canvas-pro": "^2.4.2",
+    "jspdf": "^4.2.1",
+    "qrcode.react": "^4.2.0",
+    "react-to-print": "^3.3.0"
   }
 }
