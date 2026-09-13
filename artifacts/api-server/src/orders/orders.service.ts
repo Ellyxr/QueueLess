@@ -405,10 +405,21 @@ export class OrdersService {
     const order = await this.prisma.order.findFirst({
       where: {
         id: orderId,
-        customerId: userId,
+        OR: [
+          { customerId: userId },
+          {
+            groupOrder: {
+              participants: {
+                some: { userId, status: 'JOINED' },
+              },
+            },
+          },
+        ],
       },
       select: {
         id: true,
+        customerId: true,
+        orderType: true,
         status: true,
         isPasabuyRequest: true,
         cancellationReason: true,
@@ -444,6 +455,20 @@ export class OrdersService {
             changedAt: true,
           },
         },
+        groupOrder: {
+          select: {
+            id: true,
+            code: true,
+            initiatorUserId: true,
+            initiator: {
+              select: { allowParticipantOrderCompletion: true },
+            },
+            participants: {
+              where: { status: 'JOINED' },
+              select: { id: true },
+            },
+          },
+        },
       },
     });
 
@@ -463,8 +488,16 @@ export class OrdersService {
             ),
           )
         : null;
+
+    const isOwner = order.customerId === userId;
+    const viewerRole = order.groupOrder ? (isOwner ? 'OWNER' : 'MEMBER') : null;
+    const canComplete = order.groupOrder
+      ? isOwner || order.groupOrder.initiator.allowParticipantOrderCompletion
+      : true;
+
     return {
       orderId: order.id,
+      orderType: order.orderType,
       status: order.status,
       isPasabuyRequest: order.isPasabuyRequest,
       cancellationReason: order.cancellationReason,
@@ -479,6 +512,15 @@ export class OrdersService {
         quantity: item.quantity,
       })),
       history: order.statusHistory,
+      viewerRole,
+      canComplete,
+      groupOrder: order.groupOrder
+        ? {
+            id: order.groupOrder.id,
+            code: order.groupOrder.code,
+            participantCount: order.groupOrder.participants.length,
+          }
+        : null,
     };
   }
 
@@ -728,17 +770,46 @@ export class OrdersService {
         const order = await tx.order.findFirst({
           where: {
             id: orderId,
-            customerId: userId,
+            OR: [
+              { customerId: userId },
+              {
+                groupOrder: {
+                  participants: {
+                    some: { userId, status: 'JOINED' },
+                  },
+                },
+              },
+            ],
           },
           select: {
             id: true,
             status: true,
+            customerId: true,
             pickupConfirmedAt: true,
+            groupOrder: {
+              select: {
+                initiator: {
+                  select: { allowParticipantOrderCompletion: true },
+                },
+              },
+            },
           },
         });
 
         if (!order) {
           throw new NotFoundException('Order not found');
+        }
+
+        const isOwner = order.customerId === userId;
+
+        if (
+          !isOwner &&
+          order.groupOrder &&
+          !order.groupOrder.initiator.allowParticipantOrderCompletion
+        ) {
+          throw new ForbiddenException(
+            'Only the group order owner can complete this order',
+          );
         }
 
         if (order.pickupConfirmedAt) {
@@ -761,7 +832,6 @@ export class OrdersService {
         const updateResult = await tx.order.updateMany({
           where: {
             id: order.id,
-            customerId: userId,
             status: order.status,
             pickupConfirmedAt: null,
           },
@@ -782,7 +852,9 @@ export class OrdersService {
             orderId: order.id,
             status: OrderStatus.COMPLETED,
             changedByUserId: userId,
-            note: 'Order completed by customer',
+            note: isOwner
+              ? 'Order completed by customer'
+              : 'Order completed by group order participant',
           },
         });
 

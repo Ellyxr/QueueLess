@@ -22,6 +22,7 @@ export class UsersService {
         fullName: true,
         phone: true,
         isActive: true,
+        allowParticipantOrderCompletion: true,
         studentEmailVerifiedAt: true,
         createdAt: true,
         updatedAt: true,
@@ -52,6 +53,7 @@ export class UsersService {
     const data: {
       fullName?: string;
       phone?: string | null;
+      allowParticipantOrderCompletion?: boolean;
     } = {};
 
     if (dto.fullName !== undefined) {
@@ -60,6 +62,10 @@ export class UsersService {
 
     if (dto.phone !== undefined) {
       data.phone = dto.phone.trim() || null;
+    }
+
+    if (dto.allowParticipantOrderCompletion !== undefined) {
+      data.allowParticipantOrderCompletion = dto.allowParticipantOrderCompletion;
     }
 
     return this.prisma.user.update({
@@ -73,6 +79,7 @@ export class UsersService {
         fullName: true,
         phone: true,
         isActive: true,
+        allowParticipantOrderCompletion: true,
         studentEmailVerifiedAt: true,
         createdAt: true,
         updatedAt: true,

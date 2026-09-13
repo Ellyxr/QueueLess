@@ -21,6 +21,7 @@ import { CreateGroupOrderDto } from './dto/create-group-order.dto';
 import { GroupOrdersService } from './group-orders.service';
 import { AddGroupOrderItemDto } from './dto/add-group-order-item.dto';
 import { SetPaymentSplitDto } from './dto/set-payment-split.dto';
+import { JoinGroupOrderByCodeDto } from './dto/join-group-order-by-code.dto';
 
 @ApiTags('Group Orders')
 @ApiBearerAuth()
@@ -104,6 +105,34 @@ export class GroupOrdersController {
       user.sub,
       groupOrderId,
     );
+  }
+
+  @Post('join-by-code')
+  @Roles('BUYER')
+  @ApiOperation({
+    summary: 'Join an open group order using its shareable code',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Joined the group order successfully',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Group order is no longer open',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Group order not found',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'User has already joined the group order',
+  })
+  async joinGroupOrderByCode(
+    @CurrentUser() user: { sub: string },
+    @Body() dto: JoinGroupOrderByCodeDto,
+  ) {
+    return this.groupOrdersService.joinGroupOrderByCode(user.sub, dto);
   }
 
     @Get(':groupOrderId')
@@ -286,5 +315,25 @@ async finalizeGroupOrder(
       groupOrderId,
       dto,
     );
+  }
+
+  @Post(':groupOrderId/ping')
+  @Roles('BUYER')
+  @ApiOperation({
+    summary: "Notify the group order owner that a participant is asking about the order",
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Owner notified',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Group order not found or user is not a participant',
+  })
+  async pingOwner(
+    @CurrentUser() user: { sub: string },
+    @Param('groupOrderId') groupOrderId: string,
+  ) {
+    return this.groupOrdersService.pingOwner(user.sub, groupOrderId);
   }
 }
