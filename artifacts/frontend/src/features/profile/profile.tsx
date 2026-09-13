@@ -27,12 +27,12 @@ import { Switch } from "@/components/ui/switch";
 import {
   getMyOrders,
   getMyProfile,
-  listVendors,
+  getMyFavoriteVendors,
   changeMyPassword,
   logoutUser,
   updateMyProfile,
   type CustomerOrder,
-  type VendorStorefront,
+  type VendorSummary,
 } from "@/features/auth/api";
 import { useRequireAuth } from "@/hooks/use-require-auth";
 
@@ -80,10 +80,7 @@ export default function ProfilePage() {
     phone: "",
   });
   const [orders, setOrders] = useState<CustomerOrder[]>([]);
-  const [vendors, setVendors] = useState<VendorStorefront[]>([]);
-  const [favoriteVendorId, setFavoriteVendorId] = useState(
-    () => localStorage.getItem("favorite-vendor-id") || "",
-  );
+  const [favoriteVendors, setFavoriteVendors] = useState<VendorSummary[]>([]);
   const [theme, setThemeState] = useState<Theme>(() =>
     localStorage.getItem("theme") === "dark" ? "dark" : "light",
   );
@@ -101,15 +98,15 @@ export default function ProfilePage() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   useEffect(() => {
-    Promise.all([getMyProfile(), getMyOrders(), listVendors()])
-      .then(([user, customerOrders, vendorList]) => {
+    Promise.all([getMyProfile(), getMyOrders(), getMyFavoriteVendors()])
+      .then(([user, customerOrders, favoriteVendorList]) => {
         setProfile({
           fullName: user.fullName,
           email: user.email,
           phone: user.phone || "",
         });
         setOrders(customerOrders);
-        setVendors(vendorList);
+        setFavoriteVendors(favoriteVendorList);
       })
       .catch((error: unknown) =>
         setMessage({
@@ -131,9 +128,6 @@ export default function ProfilePage() {
   const firstName = nameParts[0] || "";
   const lastName = nameParts.slice(1).join(" ");
   const incomplete = !firstName || !lastName || !profile.phone;
-  const favoriteVendor = vendors.find(
-    (vendor) => vendor.id === favoriteVendorId,
-  );
   const latestOrder = orders[0];
   const mostOrdered = useMemo(() => {
     const counts = new Map<string, { name: string; quantity: number }>();
@@ -198,11 +192,6 @@ export default function ProfilePage() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const chooseFavorite = (vendorId: string) => {
-    setFavoriteVendorId(vendorId);
-    localStorage.setItem("favorite-vendor-id", vendorId);
   };
 
   const savePassword = async () => {
@@ -361,36 +350,29 @@ export default function ProfilePage() {
               <CardContent className="relative z-10 flex min-h-47.5 flex-col justify-between p-5">
                 <div>
                   <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
-                    Favorite Vendor
+                    Favorite Vendors {favoriteVendors.length > 0 && `(${favoriteVendors.length})`}
                   </p>
-                  {favoriteVendor ? (
-                    <>
-                      <h3 className="mt-3 text-xl font-semibold text-foreground">
-                        {favoriteVendor.name}
-                      </h3>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {favoriteVendor.description ||
-                          "Your favorite campus vendor"}
-                      </p>
-                    </>
-                  ) : (
+                  {favoriteVendors.length === 0 && (
                     <p className="mt-8 text-sm text-muted-foreground">
-                      Choose a vendor to save it here
+                      Star a vendor's store to save it here
                     </p>
                   )}
                 </div>
-                <select
-                  value={favoriteVendorId}
-                  onChange={(event) => chooseFavorite(event.target.value)}
-                  className="mt-4 h-9 w-full appearance-none rounded-full border border-border bg-background px-3 pr-8 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring hover:outline hover:outline-primary "
-                >
-                  <option value="">Add favorite vendor</option>
-                  {vendors.map((vendor) => (
-                    <option key={vendor.id} value={vendor.id}>
-                      {vendor.name}
-                    </option>
-                  ))}
-                </select>
+                {favoriteVendors.length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {favoriteVendors.map((vendor) => (
+                      <button
+                        key={vendor.id}
+                        type="button"
+                        title={vendor.name}
+                        onClick={() => (window.location.href = `/store/${vendor.id}`)}
+                        className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-background bg-primary text-sm font-bold text-primary-foreground shadow-sm transition-transform hover:scale-105"
+                      >
+                        {vendor.name.charAt(0).toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>

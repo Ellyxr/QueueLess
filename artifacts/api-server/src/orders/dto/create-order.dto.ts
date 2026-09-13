@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsUUID } from 'class-validator';
+import { IsBoolean, IsOptional, IsUUID } from 'class-validator';
 
 export class CreateOrderDto {
   @ApiProperty({
@@ -16,4 +16,13 @@ export class CreateOrderDto {
   @IsOptional()
   @IsUUID()
   eventId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Whether the buyer wants a Pasabuy runner to deliver the order instead of picking it up themselves',
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isPasabuyRequest?: boolean;
 }
