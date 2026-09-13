@@ -10,6 +10,7 @@ import {
   AUTH_STATE_CHANGED_EVENT,
   confirmOrderPickup,
   getOrderStatus,
+  pingGroupOrder,
   type OrderStatusResponse,
 } from "@/features/auth/api";
 
@@ -122,6 +123,8 @@ export function OrderStatusWidget() {
   const [isMinimized, setIsMinimized] = useState(false);
   const [isItemsExpanded, setIsItemsExpanded] = useState(false);
   const [isCompleting, setIsCompleting] = useState(false);
+  const [isPinging, setIsPinging] = useState(false);
+  const [pingSent, setPingSent] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const dragOffset = useRef({ x: 0, y: 0 });
   const isDragging = useRef(false);
@@ -199,6 +202,20 @@ export function OrderStatusWidget() {
       // leave the widget as-is; the next poll will reconcile
     } finally {
       setIsCompleting(false);
+    }
+  };
+
+  const handlePingOwner = async () => {
+    if (!order?.groupOrder || isPinging) return;
+    setIsPinging(true);
+    try {
+      await pingGroupOrder(order.groupOrder.id);
+      setPingSent(true);
+      window.setTimeout(() => setPingSent(false), 4000);
+    } catch {
+      // ignore — user can try again
+    } finally {
+      setIsPinging(false);
     }
   };
 
@@ -343,7 +360,7 @@ export function OrderStatusWidget() {
             </div>
           )}
 
-          {order.status === "READY_FOR_PICKUP" && (
+          {order.status === "READY_FOR_PICKUP" && order.canComplete && (
             <button
               type="button"
               onClick={handleCompleteOrder}
@@ -353,6 +370,19 @@ export function OrderStatusWidget() {
               {isCompleting ? "Completing..." : "Complete order"}
             </button>
           )}
+
+          {order.orderType === "GROUP" &&
+            order.viewerRole === "MEMBER" &&
+            !order.canComplete && (
+              <button
+                type="button"
+                onClick={handlePingOwner}
+                disabled={isPinging}
+                className="mt-3 w-full rounded-full border border-border py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary disabled:opacity-60"
+              >
+                {pingSent ? "Owner notified" : isPinging ? "Pinging..." : "Ping owner"}
+              </button>
+            )}
 
           <img
             src="/favicon.svg"

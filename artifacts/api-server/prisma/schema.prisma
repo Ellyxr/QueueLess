@@ -14,6 +14,7 @@ model User {
   fullName                 String                  @unique
   phone                    String?
   isActive                 Boolean                 @default(true)
+  allowParticipantOrderCompletion Boolean          @default(false)
   studentEmailVerifiedAt   DateTime?               @db.Timestamptz(6)
   createdAt                DateTime                @default(now()) @db.Timestamptz(6)
   updatedAt                DateTime                @updatedAt @db.Timestamptz(6)
@@ -346,7 +347,8 @@ model OrderStatusHistory {
 model GroupOrder {
   id               String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   initiatorUserId  String                 @db.Uuid
-  vendorId         String                 @db.Uuid
+  vendorId         String?                @db.Uuid
+  code             String                 @unique @db.VarChar(8)
   status           GroupOrderStatus       @default(OPEN)
   paymentSplitMode GroupPaymentSplitMode?
   createdAt        DateTime               @default(now()) @db.Timestamptz(6)
@@ -354,7 +356,7 @@ model GroupOrder {
 
   participants GroupOrderParticipant[]
   initiator    User                    @relation("GroupOrderInitiator", fields: [initiatorUserId], references: [id])
-  vendor       Vendor                  @relation(fields: [vendorId], references: [id])
+  vendor       Vendor?                 @relation(fields: [vendorId], references: [id])
   order        Order?
   carts        Cart[]
 

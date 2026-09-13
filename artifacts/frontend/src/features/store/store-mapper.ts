@@ -36,6 +36,8 @@ export function toStorePageProps(vendor: VendorStorefront): StorePageProps {
     const categoryName = product.category?.trim() || "Menu";
     const items = categories.get(categoryName) ?? [];
     items.push({
+      id: product.id,
+      vendorId: vendor.id,
       image:
         "https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80",
       name: product.name,
