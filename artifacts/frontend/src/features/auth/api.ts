@@ -119,6 +119,7 @@ export interface ProfileData {
   email: string;
   fullName: string;
   phone: string | null;
+  allowParticipantOrderCompletion?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -135,6 +136,7 @@ export interface CustomerOrder {
 export interface UpdateProfileInput {
   fullName?: string;
   phone?: string;
+  allowParticipantOrderCompletion?: boolean;
 }
 
 export interface ChangePasswordInput {
@@ -325,6 +327,7 @@ export function getVendorOrderQueue(): Promise<VendorQueueOrder[]> {
 
 export interface OrderStatusResponse {
   orderId: string;
+  orderType: "INDIVIDUAL" | "GROUP";
   status: string;
   isPasabuyRequest: boolean;
   cancellationReason: CancellationReason | null;
@@ -335,6 +338,9 @@ export interface OrderStatusResponse {
   vendor: { id: string; name: string; campusLocation: string | null };
   items: Array<{ id: string; name: string; quantity: number }>;
   history: Array<{ status: string; note: string | null; changedAt: string }>;
+  viewerRole: "OWNER" | "MEMBER" | null;
+  canComplete: boolean;
+  groupOrder: { id: string; code: string; participantCount: number } | null;
 }
 
 export function getOrderStatus(orderId: string): Promise<OrderStatusResponse> {
@@ -365,6 +371,187 @@ export function updateOrderStatus(
     method: "PATCH",
     body: JSON.stringify({ status, ...extra }),
   });
+}
+
+// Group Orders
+
+export interface GroupOrderVendor {
+  id: string;
+  name: string;
+  status: string;
+  vendorType: string;
+  campusLocation: string | null;
+}
+
+export interface GroupOrderParticipantItem {
+  id: string;
+  productId: string;
+  name: string;
+  quantity: number;
+  unitPrice: string;
+  subtotal: string;
+}
+
+export interface GroupOrderParticipant {
+  participantId: string;
+  user: { id: string; fullName: string; email: string };
+  status: "INVITED" | "JOINED" | "LEFT";
+  joinedAt: string | null;
+  isOwner: boolean;
+  items: GroupOrderParticipantItem[];
+  subtotal: string;
+}
+
+export interface GroupOrderPaymentShare {
+  id: string;
+  payer: { id: string; fullName: string; email: string };
+  amountDue: string;
+  status: "PENDING" | "PAID";
+}
+
+export interface GroupOrderResponse {
+  id: string;
+  code: string;
+  status: "OPEN" | "LOCKED" | "FINALIZED" | "CANCELLED";
+  initiator: { id: string; fullName: string; email: string };
+  vendor: GroupOrderVendor | null;
+  participants: GroupOrderParticipant[];
+  participantCount: number;
+  authoritativeOrder: {
+    id: string;
+    status: string;
+    orderType: string;
+    totalAmount: string;
+    paymentSplitMode: "ITEM_BASED" | "EQUAL" | "CUSTOM" | null;
+    paymentShares: GroupOrderPaymentShare[];
+  } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AddGroupOrderItemResponse {
+  groupOrderId: string;
+  vendorId: string;
+  participantId: string;
+  cartId: string;
+  status: string;
+  items: GroupOrderParticipantItem[];
+  total: string;
+}
+
+export interface FinalizeGroupOrderResponse {
+  groupOrderId: string;
+  groupOrderStatus: string;
+  authoritativeOrder: {
+    id: string;
+    orderType: string;
+    status: string;
+    vendor: { id: string; name: string };
+    subtotal: string;
+    marketplaceFee: string;
+    totalAmount: string;
+    estimatedReadyAt: string | null;
+    items: Array<{
+      id: string;
+      productId: string;
+      name: string;
+      quantity: number;
+      unitPrice: string;
+      subtotal: string;
+      participant: { participantId: string; user: { id: string; fullName: string; email: string } } | null;
+    }>;
+  };
+}
+
+export interface SetPaymentSplitInput {
+  mode: "ITEM_BASED" | "EQUAL" | "CUSTOM";
+  customShares?: Array<{ participantId: string; amount: number }>;
+}
+
+export interface SetPaymentSplitResponse {
+  groupOrderId: string;
+  orderId: string;
+  paymentSplitMode: string;
+  orderTotal: string;
+  paymentShares: GroupOrderPaymentShare[];
+  totalAllocated: string;
+}
+
+export function createGroupOrder(vendorId?: string): Promise<GroupOrderResponse> {
+  return fetchWithAuth("/group-orders", {
+    method: "POST",
+    body: JSON.stringify(vendorId ? { vendorId } : {}),
+  });
+}
+
+export function joinGroupOrderByCode(code: string): Promise<GroupOrderResponse> {
+  return fetchWithAuth("/group-orders/join-by-code", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+}
+
+export function getGroupOrder(groupOrderId: string): Promise<GroupOrderResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}`);
+}
+
+export function lockGroupOrder(groupOrderId: string): Promise<GroupOrderResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/lock`, { method: "PATCH" });
+}
+
+export function addGroupOrderItem(
+  groupOrderId: string,
+  data: { productId: string; quantity: number },
+): Promise<AddGroupOrderItemResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/items`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function finalizeGroupOrder(
+  groupOrderId: string,
+): Promise<FinalizeGroupOrderResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/finalize`, { method: "POST" });
+}
+
+export function setGroupOrderPaymentSplit(
+  groupOrderId: string,
+  data: SetPaymentSplitInput,
+): Promise<SetPaymentSplitResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/payment-split`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export function pingGroupOrder(groupOrderId: string): Promise<{ message: string }> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/ping`, { method: "POST" });
+}
+
+// Notifications
+
+export interface NotificationItem {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  relatedEntityType: string | null;
+  relatedEntityId: string | null;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export function listNotifications(): Promise<NotificationItem[]> {
+  return fetchWithAuth("/notifications");
+}
+
+export function getUnreadNotificationCount(): Promise<{ unreadCount: number }> {
+  return fetchWithAuth("/notifications/unread-count");
+}
+
+export function markNotificationRead(id: string): Promise<{ message: string }> {
+  return fetchWithAuth(`/notifications/${id}/read`, { method: "PATCH" });
 }
 
 export function setActivePortal(portal: Portal): void {

@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, ReactNode } from "react";
 import {
   Search,
   ShoppingBag,
-  Bell,
   Inbox,
   UserCircle2,
   ShoppingCart,
@@ -24,6 +23,7 @@ import {
 } from "@/features/auth/api";
 import { CART_CHANGED_EVENT, getCartItems } from "@/features/cart/cart";
 import { OrderStatusWidget } from "@/components/order-status-widget";
+import { NotificationBell } from "@/components/notification-bell";
 
 interface AppShellProps {
   children: ReactNode;
@@ -359,13 +359,7 @@ export function AppShell({
                 >
                   <ShoppingBag className="h-4 w-4" />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="rounded-full border border-border/80 bg-background text-foreground"
-                >
-                  <Bell className="h-4 w-4" />
-                </Button>
+                <NotificationBell />
                 {!isLoginPage && (
                   <div className="flex items-center gap-2">
                     <Button
@@ -401,13 +395,7 @@ export function AppShell({
                 >
                   <ShoppingBag className="h-4 w-4" />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="rounded-full border border-border/80 bg-background text-foreground"
-                >
-                  <Bell className="h-4 w-4" />
-                </Button>
+                <NotificationBell />
               </div>
             )}
           </div>
