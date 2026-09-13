@@ -7,6 +7,7 @@ import MarketplacePage from '@/features/marketplace/marketplace';
 import Profile from '@/features/profile/profile';
 import Vendor from '@/features/vendor/vendor';
 import VendorStorefrontPage from '@/features/vendor/vendor-storefront';
+import VendorPromotionPage from '@/features/vendor/vendor-promotion';
 import { StoreRouter } from '@/features/store/store-router';
 import CartPage from '@/features/cart/cart';
 import { useLocation } from 'wouter';
@@ -110,6 +111,7 @@ export function AppRouter() {
             <Route path="/profile" component={Profile} />
             <Route path="/vendor" component={VendorRoute} />
             <Route path="/vendor/storefront" component={VendorStorefrontPage} />
+            <Route path="/vendor/promotion" component={VendorPromotionPage} />
             <Route component={NotFound} />
           </Switch>
         </RoutedErrorBoundary>

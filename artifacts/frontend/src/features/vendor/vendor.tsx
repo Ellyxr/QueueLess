@@ -561,7 +561,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                 },
               },
               { label: 'Store', icon: Store, onClick: () => setLocation('/vendor/storefront') },
-              { label: 'Promotion', icon: Megaphone, onClick: () => {} },
+              { label: 'Promotion', icon: Megaphone, onClick: () => setLocation('/vendor/promotion') },
             ].map(({ label, icon: Icon, onClick }) => (
               <Button
                 key={label}
