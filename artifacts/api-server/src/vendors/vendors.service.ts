@@ -22,6 +22,7 @@ export class VendorsService {
         name: true,
         description: true,
         campusLocation: true,
+        categoryOrder: true,
         vendorType: true,
         status: true,
         products: {
@@ -34,6 +35,7 @@ export class VendorsService {
             description: true,
             price: true,
             category: true,
+            preparationTimeMinutes: true,
             isAvailable: true,
           },
           orderBy: {
@@ -47,7 +49,7 @@ export class VendorsService {
     });
   }
 
-  async getVendorStorefront(vendorId: string) {
+  async getVendorStorefront(vendorId: string, userId: string) {
     const vendor = await this.prisma.vendor.findFirst({
       where: {
         id: vendorId,
@@ -58,6 +60,7 @@ export class VendorsService {
         name: true,
         description: true,
         campusLocation: true,
+        categoryOrder: true,
         vendorType: true,
         status: true,
         products: {
@@ -68,11 +71,19 @@ export class VendorsService {
             description: true,
             price: true,
             category: true,
+            preparationTimeMinutes: true,
             isAvailable: true,
           },
           orderBy: {
             name: 'asc',
           },
+        },
+        _count: {
+          select: { favoritedBy: true },
+        },
+        favoritedBy: {
+          where: { userId },
+          select: { id: true },
         },
       },
     });
@@ -81,7 +92,72 @@ export class VendorsService {
       throw new NotFoundException('Vendor not found');
     }
 
-    return vendor;
+    const { _count, favoritedBy, ...rest } = vendor;
+
+    return {
+      ...rest,
+      favoritesCount: _count.favoritedBy,
+      isFavoritedByMe: favoritedBy.length > 0,
+    };
+  }
+
+  async favoriteVendor(userId: string, vendorId: string) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { id: vendorId },
+      select: { id: true },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found');
+    }
+
+    await this.prisma.vendorFavorite.upsert({
+      where: { userId_vendorId: { userId, vendorId } },
+      create: { userId, vendorId },
+      update: {},
+    });
+
+    return this.getFavoriteStatus(userId, vendorId);
+  }
+
+  async unfavoriteVendor(userId: string, vendorId: string) {
+    await this.prisma.vendorFavorite.deleteMany({
+      where: { userId, vendorId },
+    });
+
+    return this.getFavoriteStatus(userId, vendorId);
+  }
+
+  async getMyFavoriteVendors(userId: string) {
+    const favorites = await this.prisma.vendorFavorite.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        vendor: {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            campusLocation: true,
+            vendorType: true,
+            status: true,
+          },
+        },
+      },
+    });
+
+    return favorites.map((favorite) => favorite.vendor);
+  }
+
+  private async getFavoriteStatus(userId: string, vendorId: string) {
+    const [favoritesCount, mine] = await Promise.all([
+      this.prisma.vendorFavorite.count({ where: { vendorId } }),
+      this.prisma.vendorFavorite.findUnique({
+        where: { userId_vendorId: { userId, vendorId } },
+      }),
+    ]);
+
+    return { vendorId, favoritesCount, isFavoritedByMe: Boolean(mine) };
   }
 
   async getVendorForOwner(userId: string) {
@@ -94,6 +170,7 @@ export class VendorsService {
         name: true,
         description: true,
         campusLocation: true,
+        categoryOrder: true,
         vendorType: true,
         status: true,
       },
@@ -139,6 +216,7 @@ export class VendorsService {
       name?: string;
       description?: string | null;
       campusLocation?: string | null;
+      categoryOrder?: string[];
     } = {};
 
     if (dto.name !== undefined) {
@@ -153,6 +231,10 @@ export class VendorsService {
       data.campusLocation = dto.campusLocation.trim() || null;
     }
 
+    if (dto.categoryOrder !== undefined) {
+      data.categoryOrder = dto.categoryOrder.map((category) => category.trim());
+    }
+
     return this.prisma.vendor.update({
       where: {
         id: vendorId,
@@ -164,6 +246,7 @@ export class VendorsService {
         name: true,
         description: true,
         campusLocation: true,
+        categoryOrder: true,
         vendorType: true,
         status: true,
         createdAt: true,

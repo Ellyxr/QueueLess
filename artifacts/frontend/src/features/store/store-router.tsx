@@ -1,57 +1,58 @@
 import { useEffect, useState } from "react";
-import { getVendorStorefront, type VendorStorefront } from "@/features/auth/api";
+import { favoriteVendor, getVendorStorefront, unfavoriteVendor } from "@/features/auth/api";
 import StorePage, { type StorePageProps } from "./storepage";
-
-function toStorePage(vendor: VendorStorefront): StorePageProps {
-  const categories = new Map<string, StorePageProps["categories"][number]["items"]>();
-
-  for (const product of vendor.products ?? []) {
-    const categoryName = product.category?.trim() || "Menu";
-    const items = categories.get(categoryName) ?? [];
-    items.push({
-      image:
-        "https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80",
-      name: product.name,
-      flavorProfile: product.description || "Freshly prepared",
-      price: Number(product.price),
-    });
-    categories.set(categoryName, items);
-  }
-
-  return {
-    storeName: vendor.name,
-      description: vendor.description,
-      campusLocation: vendor.campusLocation,
-    rating: 0,
-    eta: "15-20 min",
-    storeType:
-      vendor.vendorType === "STUDENT" ? "Student vendor" : "Campus vendor",
-    bannerImage:
-      "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1200&q=80",
-    avatarInitial: vendor.name.charAt(0).toUpperCase() || "S",
-    categories: Array.from(categories, ([categoryName, items]) => ({
-      categoryName,
-      items,
-    })),
-  };
-}
+import { toStorePageProps } from "./store-mapper";
 
 export function StoreRouter() {
+  const [vendorId, setVendorId] = useState<string | null>(null);
   const [storeData, setStoreData] = useState<StorePageProps | null>(null);
   const [isNotFound, setIsNotFound] = useState(false);
+  const [isFavoriteBusy, setIsFavoriteBusy] = useState(false);
 
   useEffect(() => {
-    const vendorId = window.location.pathname.split("/").filter(Boolean).at(-1);
+    const id = window.location.pathname.split("/").filter(Boolean).at(-1);
 
-    if (!vendorId) {
+    if (!id) {
       setIsNotFound(true);
       return;
     }
 
-    getVendorStorefront(vendorId)
-      .then((vendor) => setStoreData(toStorePage(vendor)))
+    setVendorId(id);
+    getVendorStorefront(id)
+      .then((vendor) => setStoreData(toStorePageProps(vendor)))
       .catch(() => setIsNotFound(true));
   }, []);
+
+  const handleToggleFavorite = async () => {
+    if (!vendorId || !storeData || isFavoriteBusy) return;
+    setIsFavoriteBusy(true);
+    const wasFavorited = storeData.isFavorited;
+    setStoreData((prev) =>
+      prev
+        ? {
+            ...prev,
+            isFavorited: !wasFavorited,
+            favoritesCount: prev.favoritesCount + (wasFavorited ? -1 : 1),
+          }
+        : prev,
+    );
+    try {
+      const status = wasFavorited
+        ? await unfavoriteVendor(vendorId)
+        : await favoriteVendor(vendorId);
+      setStoreData((prev) =>
+        prev
+          ? { ...prev, isFavorited: status.isFavoritedByMe, favoritesCount: status.favoritesCount }
+          : prev,
+      );
+    } catch {
+      setStoreData((prev) =>
+        prev ? { ...prev, isFavorited: wasFavorited, favoritesCount: storeData.favoritesCount } : prev,
+      );
+    } finally {
+      setIsFavoriteBusy(false);
+    }
+  };
 
   if (isNotFound) {
     return (
@@ -81,5 +82,11 @@ export function StoreRouter() {
     );
   }
 
-  return <StorePage {...storeData} />;
+  return (
+    <StorePage
+      {...storeData}
+      onToggleFavorite={handleToggleFavorite}
+      isFavoriteBusy={isFavoriteBusy}
+    />
+  );
 }
