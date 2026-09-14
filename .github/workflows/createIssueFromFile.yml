@@ -1,0 +1,81 @@
+name: Create Issue From AddressMe
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'artifacts/frontend/AddressMe.md'
+      - 'artifacts/api-server/AddressMe.md'
+
+jobs:
+  create-issue:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Detect which AddressMe.md changed
+      - name: Detect changed files
+        uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - 'artifacts/frontend/AddressMe.md'
+            api-server:
+              - 'artifacts/api-server/AddressMe.md'
+
+      # ---------- FRONTEND ----------
+      - name: Read frontend assignee
+        id: read-frontend
+        if: steps.filter.outputs.frontend == 'true'
+        run: |
+          FILE="artifacts/frontend/AddressMe.md"
+          ASSIGNEE=$(head -n 1 "$FILE" | xargs)
+          BODY=$(tail -n +2 "$FILE")
+          if [ -z "$ASSIGNEE" ] || [ "$ASSIGNEE" = "none" ]; then
+            echo "has_content=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_content=true" >> $GITHUB_OUTPUT
+            echo "assignee=$ASSIGNEE" >> $GITHUB_OUTPUT
+          fi
+          # Write body to a temp file for the next step
+          printf '%s' "$BODY" > /tmp/frontend-body.md
+
+      - name: Create frontend issue
+        if: steps.filter.outputs.frontend == 'true' && steps.read-frontend.outputs.has_content == 'true'
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: "New frontend task from AddressMe.md"
+          content-filepath: /tmp/frontend-body.md
+          assignees: ${{ steps.read-frontend.outputs.assignee }}
+          labels: "automated, frontend"
+
+      # ---------- API SERVER ----------
+      - name: Read api-server assignee
+        id: read-api
+        if: steps.filter.outputs.api-server == 'true'
+        run: |
+          FILE="artifacts/api-server/AddressMe.md"
+          ASSIGNEE=$(head -n 1 "$FILE" | xargs)
+          BODY=$(tail -n +2 "$FILE")
+          if [ -z "$ASSIGNEE" ] || [ "$ASSIGNEE" = "none" ]; then
+            echo "has_content=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_content=true" >> $GITHUB_OUTPUT
+            echo "assignee=$ASSIGNEE" >> $GITHUB_OUTPUT
+          fi
+          printf '%s' "$BODY" > /tmp/api-body.md
+
+      - name: Create api-server issue
+        if: steps.filter.outputs.api-server == 'true' && steps.read-api.outputs.has_content == 'true'
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: "New api-server task from AddressMe.md"
+          content-filepath: /tmp/api-body.md
+          assignees: ${{ steps.read-api.outputs.assignee }}
+          labels: "automated, api-server"
