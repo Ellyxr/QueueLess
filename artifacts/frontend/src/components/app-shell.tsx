@@ -24,6 +24,10 @@ import {
 import { CART_CHANGED_EVENT, getCartItems } from "@/features/cart/cart";
 import { OrderStatusWidget } from "@/components/order-status-widget";
 import { NotificationBell } from "@/components/notification-bell";
+import {
+  hasSavedPaymentMethod,
+  PAYMENT_METHOD_CHANGED_EVENT,
+} from "@/features/payments/payment-method";
 
 interface AppShellProps {
   children: ReactNode;
@@ -57,6 +61,9 @@ export function AppShell({
   const [cartCount, setCartCount] = useState(() =>
     getCartItems().reduce((sum, item) => sum + item.quantity, 0),
   );
+  const [paymentMethodMissing, setPaymentMethodMissing] = useState(
+    () => !hasSavedPaymentMethod(),
+  );
   const searchInputRef = useRef<HTMLInputElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
@@ -88,11 +95,16 @@ export function AppShell({
         getCartItems().reduce((sum, item) => sum + item.quantity, 0),
       );
     window.addEventListener(CART_CHANGED_EVENT, syncCart);
+    const syncPaymentMethod = () => setPaymentMethodMissing(!hasSavedPaymentMethod());
+    window.addEventListener(PAYMENT_METHOD_CHANGED_EVENT, syncPaymentMethod);
+    window.addEventListener(AUTH_STATE_CHANGED_EVENT, syncPaymentMethod);
     return () => {
       window.removeEventListener(AUTH_STATE_CHANGED_EVENT, syncAuthState);
       window.removeEventListener(PORTAL_CHANGED_EVENT, syncAuthState);
       window.removeEventListener("popstate", syncAuthState);
       window.removeEventListener(CART_CHANGED_EVENT, syncCart);
+      window.removeEventListener(PAYMENT_METHOD_CHANGED_EVENT, syncPaymentMethod);
+      window.removeEventListener(AUTH_STATE_CHANGED_EVENT, syncPaymentMethod);
     };
   }, []);
 
@@ -102,6 +114,8 @@ export function AppShell({
     isExternalVendor || (isStudentVendor && activePortal === "vendor");
   const showCartBadge =
     !isLoginPage && user !== null && hasToken && cartCount > 0;
+  const showPaymentMethodBadge =
+    !isLoginPage && user !== null && hasToken && !isVendorPortal && paymentMethodMissing;
 
   const switchPortal = (portal: Portal) => {
     setActivePortal(portal);
@@ -365,9 +379,14 @@ export function AppShell({
                     <Button
                       variant="secondary"
                       onClick={() => (window.location.href = "/profile")}
-                      className="gap-2 rounded-full px-3 py-2 sm:px-4"
+                      className="relative gap-2 rounded-full px-3 py-2 sm:px-4"
                     >
-                      <UserCircle2 className="h-4 w-4" />
+                      <span className="relative">
+                        <UserCircle2 className="h-4 w-4" />
+                        {showPaymentMethodBadge && (
+                          <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border border-card bg-destructive" />
+                        )}
+                      </span>
                       <span className="hidden sm:inline">
                         {user?.fullName || username}
                       </span>
@@ -456,7 +475,12 @@ export function AppShell({
                 onClick={() => (window.location.href = "/profile")}
                 className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2"
               >
-                <UserCircle2 className="h-4 w-4" />
+                <span className="relative">
+                  <UserCircle2 className="h-4 w-4" />
+                  {showPaymentMethodBadge && (
+                    <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border border-card bg-destructive" />
+                  )}
+                </span>
                 {username}
               </Button>
             ) : (
