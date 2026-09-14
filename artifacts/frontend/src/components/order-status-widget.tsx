@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, CookingPot, Grip, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  clearOrderTracking,
-  getTrackedOrderId,
+  getTrackedOrderIds,
   ORDER_TRACKING_CHANGED_EVENT,
+  stopTrackingOrder,
 } from "@/features/orders/order-tracking";
 import {
   AUTH_STATE_CHANGED_EVENT,
@@ -117,34 +117,49 @@ const tabVariants = {
   },
 };
 
+const CARD_TOP_OFFSET = 96; // top-24
+const CARD_STACK_GAP = 16;
+const CARD_HEIGHT_ESTIMATE = 230;
+const MINIMIZED_TOP_OFFSET = 96;
+const MINIMIZED_STACK_GAP = 12;
+const MINIMIZED_HEIGHT_ESTIMATE = 112;
+
 export function OrderStatusWidget() {
-  const [orderId, setOrderId] = useState<string | null>(getTrackedOrderId);
+  const [orderIds, setOrderIds] = useState<string[]>(getTrackedOrderIds);
+
+  useEffect(() => {
+    const refreshOrderIds = () => setOrderIds(getTrackedOrderIds());
+    window.addEventListener(ORDER_TRACKING_CHANGED_EVENT, refreshOrderIds);
+    window.addEventListener(AUTH_STATE_CHANGED_EVENT, refreshOrderIds);
+    return () => {
+      window.removeEventListener(ORDER_TRACKING_CHANGED_EVENT, refreshOrderIds);
+      window.removeEventListener(AUTH_STATE_CHANGED_EVENT, refreshOrderIds);
+    };
+  }, []);
+
+  if (!orderIds.length) return null;
+
+  return (
+    <>
+      {orderIds.map((orderId, index) => (
+        <TrackedOrderCard key={orderId} orderId={orderId} stackIndex={index} />
+      ))}
+    </>
+  );
+}
+
+function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex: number }) {
   const [order, setOrder] = useState<OrderStatusResponse | null>(null);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isItemsExpanded, setIsItemsExpanded] = useState(false);
   const [isCompleting, setIsCompleting] = useState(false);
   const [isPinging, setIsPinging] = useState(false);
   const [pingSent, setPingSent] = useState(false);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [dragOffset2d, setDragOffset2d] = useState({ x: 0, y: 0 });
   const dragOffset = useRef({ x: 0, y: 0 });
   const isDragging = useRef(false);
 
   useEffect(() => {
-    const refreshOrderId = () => setOrderId(getTrackedOrderId());
-    window.addEventListener(ORDER_TRACKING_CHANGED_EVENT, refreshOrderId);
-    window.addEventListener(AUTH_STATE_CHANGED_EVENT, refreshOrderId);
-    return () => {
-      window.removeEventListener(ORDER_TRACKING_CHANGED_EVENT, refreshOrderId);
-      window.removeEventListener(AUTH_STATE_CHANGED_EVENT, refreshOrderId);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!orderId) {
-      setOrder(null);
-      return;
-    }
-
     let cancelled = false;
 
     const fetchStatus = () => {
@@ -158,7 +173,7 @@ export function OrderStatusWidget() {
         })
         .catch(() => {
           if (cancelled) return;
-          clearOrderTracking();
+          stopTrackingOrder(orderId);
         });
     };
 
@@ -174,7 +189,7 @@ export function OrderStatusWidget() {
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
       if (!isDragging.current) return;
-      setPosition({
+      setDragOffset2d({
         x: event.clientX - dragOffset.current.x,
         y: event.clientY - dragOffset.current.y,
       });
@@ -192,7 +207,7 @@ export function OrderStatusWidget() {
   }, []);
 
   const handleCompleteOrder = async () => {
-    if (!orderId || isCompleting) return;
+    if (isCompleting) return;
     setIsCompleting(true);
     try {
       await confirmOrderPickup(orderId);
@@ -219,7 +234,7 @@ export function OrderStatusWidget() {
     }
   };
 
-  if (!orderId || !order) return null;
+  if (!order) return null;
 
   const isTerminal = TERMINAL_STATUSES.has(order.status);
   const label = STATUS_LABELS[order.status] || order.status;
@@ -227,13 +242,18 @@ export function OrderStatusWidget() {
   const dotClass = STATUS_DOT_CLASS[order.status] || "bg-blue-500 shadow-blue-300/60";
   const pillClass = STATUS_PILL_CLASS[order.status] || "bg-blue-500/10 text-blue-600";
 
+  const baseTop = isMinimized
+    ? MINIMIZED_TOP_OFFSET + stackIndex * (MINIMIZED_HEIGHT_ESTIMATE + MINIMIZED_STACK_GAP)
+    : CARD_TOP_OFFSET + stackIndex * (CARD_HEIGHT_ESTIMATE + CARD_STACK_GAP);
+
   return (
     <AnimatePresence mode="wait" initial={false}>
       {isMinimized ? (
         <motion.button
           key="minimized"
           type="button"
-          className="group pointer-events-auto fixed right-0 top-1/2 z-40 flex h-28 w-14 -translate-y-1/2 items-center justify-center overflow-hidden rounded-l-2xl border border-r-0 border-border/80 bg-card/95 shadow-xl backdrop-blur-md transition-all duration-300 hover:w-24"
+          className="group pointer-events-auto fixed right-0 z-40 flex h-28 w-14 items-center justify-center overflow-hidden rounded-l-2xl border border-r-0 border-border/80 bg-card/95 shadow-xl backdrop-blur-md transition-all duration-300 hover:w-24"
+          style={{ top: baseTop, transform: `translate(${dragOffset2d.x}px, ${dragOffset2d.y}px)` }}
           onClick={() => setIsMinimized(false)}
           aria-label="Expand order status"
           variants={tabVariants}
@@ -252,8 +272,8 @@ export function OrderStatusWidget() {
       ) : (
         <motion.aside
           key="expanded"
-          className="pointer-events-auto fixed right-4 top-24 z-40 w-[230px] select-none rounded-[24px] border border-border/80 bg-card/95 p-4 shadow-2xl backdrop-blur-md"
-          style={{ transform: `translate(${position.x}px, ${position.y}px)` }}
+          className="pointer-events-auto fixed right-4 z-40 w-[230px] select-none rounded-[24px] border border-border/80 bg-card/95 p-4 shadow-2xl backdrop-blur-md"
+          style={{ top: baseTop, transform: `translate(${dragOffset2d.x}px, ${dragOffset2d.y}px)` }}
           aria-label="Order status"
           variants={widgetVariants}
           initial="hidden"
@@ -265,8 +285,8 @@ export function OrderStatusWidget() {
             onPointerDown={(event) => {
               isDragging.current = true;
               dragOffset.current = {
-                x: event.clientX - position.x,
-                y: event.clientY - position.y,
+                x: event.clientX - dragOffset2d.x,
+                y: event.clientY - dragOffset2d.y,
               };
               event.currentTarget.setPointerCapture?.(event.pointerId);
             }}
@@ -280,7 +300,7 @@ export function OrderStatusWidget() {
               onPointerDown={(event) => {
                 event.stopPropagation();
                 if (isTerminal) {
-                  clearOrderTracking();
+                  stopTrackingOrder(orderId);
                 } else {
                   setIsMinimized(true);
                 }
@@ -288,7 +308,7 @@ export function OrderStatusWidget() {
               onClick={(event) => {
                 event.stopPropagation();
                 if (isTerminal) {
-                  clearOrderTracking();
+                  stopTrackingOrder(orderId);
                 } else {
                   setIsMinimized(true);
                 }
