@@ -2,15 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   Check,
+  CreditCard,
   Eye,
   EyeOff,
   LogOut,
   MoonStar,
   PencilLine,
   ShieldCheck,
+  Store,
   SunMedium,
   Trash2,
   UserRound,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -35,6 +38,13 @@ import {
   type VendorSummary,
 } from "@/features/auth/api";
 import { useRequireAuth } from "@/hooks/use-require-auth";
+import { PaymentMethodForm } from "@/features/payments/payment-method-form";
+import {
+  getSavedPaymentMethod,
+  PAYMENT_METHOD_CHANGED_EVENT,
+  removeSavedPaymentMethod,
+  type SavedPaymentMethod,
+} from "@/features/payments/payment-method";
 
 type Theme = "light" | "dark";
 
@@ -98,6 +108,12 @@ export default function ProfilePage() {
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<SavedPaymentMethod | null>(getSavedPaymentMethod);
+  const [isEditingPaymentMethod, setIsEditingPaymentMethod] = useState(false);
+  const [showVendorApplyForm, setShowVendorApplyForm] = useState(false);
+  const [vendorApplicationSubmitted, setVendorApplicationSubmitted] = useState(false);
+  const [vendorBusinessName, setVendorBusinessName] = useState("");
+  const [vendorDescription, setVendorDescription] = useState("");
 
   useEffect(() => {
     Promise.all([getMyProfile(), getMyOrders(), getMyFavoriteVendors()])
@@ -126,6 +142,24 @@ export default function ProfilePage() {
     document.documentElement.classList.toggle("dark", theme === "dark");
     window.dispatchEvent(new Event("queueless-theme-changed"));
   }, [theme]);
+
+  useEffect(() => {
+    const refreshPaymentMethod = () => setPaymentMethod(getSavedPaymentMethod());
+    window.addEventListener(PAYMENT_METHOD_CHANGED_EVENT, refreshPaymentMethod);
+    return () => window.removeEventListener(PAYMENT_METHOD_CHANGED_EVENT, refreshPaymentMethod);
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("setupPayment") === "1" && !getSavedPaymentMethod()) {
+      setIsEditingPaymentMethod(true);
+      window.setTimeout(() => {
+        document
+          .getElementById("payment-method-card")
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 100);
+    }
+  }, []);
 
   const nameParts = profile.fullName.trim().split(/\s+/).filter(Boolean);
   const firstName = nameParts[0] || "";
@@ -736,6 +770,154 @@ export default function ProfilePage() {
               </div>
             </CardContent>
           </Card>
+
+          <Card
+            id="payment-method-card"
+            className={`bg-card/90 shadow-sm ${
+              paymentMethod ? "border-card-border/80" : "border-2 border-destructive"
+            }`}
+          >
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-2xl tracking-tighter">
+                <CreditCard className="h-5 w-5 text-primary" />
+                Payment method
+              </CardTitle>
+              <CardDescription>
+                {paymentMethod
+                  ? "This method is used to pay for your orders via PayMongo."
+                  : "Set up a payment method before you can place an order."}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isEditingPaymentMethod ? (
+                <PaymentMethodForm
+                  onSaved={() => setIsEditingPaymentMethod(false)}
+                  onCancel={paymentMethod ? () => setIsEditingPaymentMethod(false) : undefined}
+                />
+              ) : paymentMethod ? (
+                <div className="flex items-center justify-between gap-3 rounded-[18px] border border-border bg-secondary/30 p-3">
+                  <div>
+                    <p className="text-sm font-medium">{paymentMethod.label}</p>
+                    <p className="text-xs text-muted-foreground">PayMongo Sandbox</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="rounded-full"
+                      onClick={() => setIsEditingPaymentMethod(true)}
+                    >
+                      Change
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="rounded-full text-destructive hover:bg-destructive/10"
+                      onClick={removeSavedPaymentMethod}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-[18px] border border-dashed border-destructive/50 bg-destructive/5 p-4 text-center">
+                  <AlertCircle className="mx-auto h-5 w-5 text-destructive" />
+                  <p className="mt-2 text-sm font-medium text-foreground">
+                    No payment method set up yet
+                  </p>
+                  <Button
+                    type="button"
+                    className="mt-3 rounded-full"
+                    onClick={() => setIsEditingPaymentMethod(true)}
+                  >
+                    Set up payment method
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-card-border/80 bg-card/90 shadow-sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-2xl tracking-tighter">
+                <Store className="h-5 w-5 text-primary" />
+                Become a vendor
+              </CardTitle>
+              <CardDescription>
+                Sell food or goods on campus as a student vendor.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {vendorApplicationSubmitted ? (
+                <div className="rounded-[18px] border border-emerald-500/30 bg-emerald-500/10 p-4 text-center">
+                  <Check className="mx-auto h-5 w-5 text-emerald-600" />
+                  <p className="mt-2 text-sm font-medium text-foreground">
+                    Application submitted
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    We'll review your vendor application and get back to you.
+                  </p>
+                </div>
+              ) : showVendorApplyForm ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium">Vendor application</p>
+                    <button
+                      type="button"
+                      onClick={() => setShowVendorApplyForm(false)}
+                      className="text-muted-foreground hover:text-foreground"
+                      aria-label="Close vendor application form"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    <label htmlFor="vendor-business-name" className="text-sm font-medium">
+                      Business / stall name
+                    </label>
+                    <Input
+                      id="vendor-business-name"
+                      value={vendorBusinessName}
+                      onChange={(event) => setVendorBusinessName(event.target.value)}
+                      placeholder="e.g. North Loop Kitchen"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label htmlFor="vendor-description" className="text-sm font-medium">
+                      What will you sell?
+                    </label>
+                    <Input
+                      id="vendor-description"
+                      value={vendorDescription}
+                      onChange={(event) => setVendorDescription(event.target.value)}
+                      placeholder="e.g. Rice meals and snacks"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    className="w-full rounded-full"
+                    disabled={!vendorBusinessName.trim()}
+                    onClick={() => setVendorApplicationSubmitted(true)}
+                  >
+                    Submit application
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full gap-2 rounded-full"
+                  onClick={() => setShowVendorApplyForm(true)}
+                >
+                  <Store className="h-4 w-4" />
+                  Apply to be a student vendor
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+
           <Card className="border-card-border/80 bg-card/90 shadow-sm">
             <CardContent className="p-5">
               <div className="flex items-center gap-3 rounded-[18px] border border-border bg-secondary/30 p-3">

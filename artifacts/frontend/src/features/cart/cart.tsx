@@ -14,8 +14,20 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createGroupOrder, createOrder, fetchWithAuth, joinGroupOrderByCode } from "@/features/auth/api";
-import { startOrderTracking } from "@/features/orders/order-tracking";
+import {
+  canTrackNewOrder,
+  getTrackedOrderIds,
+  MAX_TRACKED_ORDERS,
+  ORDER_TRACKING_CHANGED_EVENT,
+  startOrderTracking,
+} from "@/features/orders/order-tracking";
 import { GroupOrderCartView } from "@/features/group-orders/group-order-cart-view";
+import { PaymentStep, type PaymentResult } from "@/features/payments/payment";
+import {
+  getSavedPaymentMethod,
+  hasSavedPaymentMethod,
+  PAYMENT_METHOD_CHANGED_EVENT,
+} from "@/features/payments/payment-method";
 import {
   GROUP_ORDER_SESSION_CHANGED_EVENT,
   getGroupOrderSession,
@@ -121,6 +133,10 @@ export default function CartPage() {
   const [finalTotal, setFinalTotal] = useState(0);
   const [finalStoreName, setFinalStoreName] = useState("Campus Shop");
   const [finalWaitMinutes, setFinalWaitMinutes] = useState<number | null>(null);
+  const [pendingPaymentOrder, setPendingPaymentOrder] = useState<{ id: string; total: number; storeName: string } | null>(null);
+  const [paymentResult, setPaymentResult] = useState<PaymentResult | null>(null);
+  const [trackedOrderCount, setTrackedOrderCount] = useState(() => getTrackedOrderIds().length);
+  const [paymentMethodConfigured, setPaymentMethodConfigured] = useState(hasSavedPaymentMethod);
   const [groupSession, setGroupSession] = useState<GroupOrderSession | null>(getGroupOrderSession);
   const [joinCode, setJoinCode] = useState("");
   const [isStartingGroupOrder, setIsStartingGroupOrder] = useState(false);
@@ -138,6 +154,18 @@ export default function CartPage() {
     window.addEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, refreshGroupSession);
     return () =>
       window.removeEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, refreshGroupSession);
+  }, []);
+
+  useEffect(() => {
+    const refreshTrackedCount = () => setTrackedOrderCount(getTrackedOrderIds().length);
+    window.addEventListener(ORDER_TRACKING_CHANGED_EVENT, refreshTrackedCount);
+    return () => window.removeEventListener(ORDER_TRACKING_CHANGED_EVENT, refreshTrackedCount);
+  }, []);
+
+  useEffect(() => {
+    const refreshPaymentMethod = () => setPaymentMethodConfigured(hasSavedPaymentMethod());
+    window.addEventListener(PAYMENT_METHOD_CHANGED_EVENT, refreshPaymentMethod);
+    return () => window.removeEventListener(PAYMENT_METHOD_CHANGED_EVENT, refreshPaymentMethod);
   }, []);
 
   const handleCreateGroupOrder = async () => {
@@ -227,6 +255,16 @@ export default function CartPage() {
 
   const submitOrder = async () => {
     if (isSubmitting || !items.length) return;
+    if (!hasSavedPaymentMethod()) {
+      window.location.href = "/profile?setupPayment=1";
+      return;
+    }
+    if (!canTrackNewOrder()) {
+      alert(
+        `You already have ${MAX_TRACKED_ORDERS} orders being tracked. Complete or dismiss one before placing another.`,
+      );
+      return;
+    }
     setIsSubmitting(true);
     try {
       let activeCartId = "";
@@ -273,6 +311,7 @@ export default function CartPage() {
       );
       setFinalPrepTime(maxPrepTime);
       setIsConfirmed(true);
+      setPendingPaymentOrder({ id: orderResponse?.id ?? activeCartId, total, storeName });
       saveCartItems([]);
     } catch (error) {
       console.error("Failed to submit order:", error);
@@ -282,22 +321,58 @@ export default function CartPage() {
     }
   };
 
+  if (pendingPaymentOrder && !isConfirmed) {
+    const savedMethod = getSavedPaymentMethod();
+    if (!savedMethod) {
+      // Should not happen — submitOrder() already gates on this — but guard
+      // against a method being removed mid-checkout in another tab.
+      window.location.href = "/profile?setupPayment=1";
+      return null;
+    }
+    return (
+      <PaymentStep
+        orderId={pendingPaymentOrder.id}
+        storeName={pendingPaymentOrder.storeName}
+        amount={pendingPaymentOrder.total}
+        savedMethod={savedMethod}
+        onDone={(result) => {
+          setPaymentResult(result);
+          setIsConfirmed(true);
+        }}
+      />
+    );
+  }
+
   if (isConfirmed) {
+    const paymentFailed = paymentResult?.status === "failed";
     return (
       <main className="mx-auto flex min-h-[70dvh] w-full max-w-2xl items-center justify-center px-4 py-12">
-        <section className="w-full rounded-[28px] border border-emerald-500/30 bg-card p-8 text-center shadow-md sm:p-12">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500 text-white">
+        <section
+          className={`w-full rounded-[28px] border p-8 text-center shadow-md sm:p-12 ${
+            paymentFailed ? "border-destructive/30" : "border-emerald-500/30"
+          } bg-card`}
+        >
+          <div
+            className={`mx-auto flex h-16 w-16 items-center justify-center rounded-full text-white ${
+              paymentFailed ? "bg-destructive" : "bg-emerald-500"
+            }`}
+          >
             <Check className="h-8 w-8" />
           </div>
-          <p className="mt-6 font-mono text-[10px] uppercase tracking-[0.18em] text-emerald-600">
-            Order submitted
+          <p
+            className={`mt-6 font-mono text-[10px] uppercase tracking-[0.18em] ${
+              paymentFailed ? "text-destructive" : "text-emerald-600"
+            }`}
+          >
+            {paymentFailed ? "Order placed • Payment pending" : "Order submitted"}
           </p>
           <h1 className="mt-2 text-3xl font-bold tracking-[-0.06em] text-foreground">
-            Your food is on its way.
+            {paymentFailed ? "We'll hold your order for a bit." : "Your food is on its way."}
           </h1>
           <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted-foreground">
-            {finalStoreName} has received your order. Pick it up at the Student
-            Center when it is ready.
+            {paymentFailed
+              ? `Your payment didn't go through, so ${finalStoreName} hasn't started preparing your order yet. Retry payment from your order tracking to confirm it.`
+              : `${finalStoreName} has received your order. Pick it up at the Student Center when it is ready.`}
           </p>
           <div className="mx-auto mt-8 max-w-sm rounded-2xl bg-secondary/60 p-4 text-left text-sm">
             <div className="flex items-center justify-between">
@@ -307,6 +382,12 @@ export default function CartPage() {
             <div className="mt-2 flex items-center justify-between">
               <span className="text-muted-foreground">Estimated wait</span>
               <strong>{finalWaitMinutes !== null ? `~${finalWaitMinutes} min` : `${finalPrepTime} min`}</strong>
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              <span className="text-muted-foreground">Payment status</span>
+              <strong className={paymentFailed ? "text-destructive" : "text-emerald-600"}>
+                {paymentFailed ? "Failed" : "Paid"}
+              </strong>
             </div>
           </div>
           <Button
@@ -697,15 +778,23 @@ export default function CartPage() {
 
               <Button
                 type="button"
-                disabled={isSubmitting}
+                disabled={isSubmitting || (paymentMethodConfigured && trackedOrderCount >= MAX_TRACKED_ORDERS)}
                 onClick={submitOrder}
                 className="mt-5 w-full rounded-full"
               >
-                {isSubmitting ? "Submitting..." : "Order Now"}
+                {isSubmitting
+                  ? "Submitting..."
+                  : !paymentMethodConfigured
+                    ? "Set up payment method"
+                    : "Order Now"}
               </Button>
 
               <p className="mt-3 text-center text-[11px] text-muted-foreground">
-                Your order is submitted securely to the shop.
+                {!paymentMethodConfigured
+                  ? "Add a payment method on your profile before you can order."
+                  : trackedOrderCount >= MAX_TRACKED_ORDERS
+                    ? `You have ${MAX_TRACKED_ORDERS} orders in progress. Complete or dismiss one to order again.`
+                    : `Your order is submitted securely to the shop. (${trackedOrderCount}/${MAX_TRACKED_ORDERS} active orders)`}
               </p>
             </section>
           </div>
