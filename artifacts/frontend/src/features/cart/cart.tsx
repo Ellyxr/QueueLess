@@ -37,6 +37,7 @@ export interface CartItem {
   price: number;
   quantity: number;
   options: CartOption[];
+  preparationTimeMinutes?: number;
 }
 
 export const CART_CHANGED_EVENT = "queueless-cart-changed";
@@ -124,6 +125,7 @@ export default function CartPage() {
   const [joinCode, setJoinCode] = useState("");
   const [isStartingGroupOrder, setIsStartingGroupOrder] = useState(false);
   const [groupOrderActionError, setGroupOrderActionError] = useState<string | null>(null);
+  const [finalPrepTime, setFinalPrepTime] = useState(15);
 
   useEffect(() => {
     const refreshCart = () => setItems(getCartItems());
@@ -231,7 +233,7 @@ export default function CartPage() {
       for (const item of items) {
         console.log("Debugging item object:", item);
         console.log("Current item id:", item.id);
-
+        
         const cartResponse: any = await fetchWithAuth('/carts/items', {
           method: 'POST',
           body: JSON.stringify({
@@ -249,21 +251,27 @@ export default function CartPage() {
         throw new Error("Could not retrieve active cart ID.");
       }
 
-      const order = await createOrder({
+      const orderResponse: any = await createOrder({
         cartId: activeCartId,
         isPasabuyRequest: delivery,
       });
 
-      if (order?.id) {
-        startOrderTracking(order.id);
-      }
+      const realOrderId = orderResponse?.id || orderResponse?.orderId || activeCartId;
 
-      // I-save muna ang total at storeName bago i-clear ang cart items
+      // US-020: Kunin ang pinakamataas na preparation time mula sa mga inorder na item
+      const maxPrepTime = items.reduce((max, item) => {
+        const prep = item.preparationTimeMinutes || 15;
+        return prep > max ? prep : max;
+      }, 15);
+
+      startOrderTracking(realOrderId);
+
       setFinalTotal(total);
       setFinalStoreName(storeName);
       setFinalWaitMinutes(
-        typeof order?.estimatedWaitMinutes === "number" ? order.estimatedWaitMinutes : null,
+        typeof orderResponse?.estimatedWaitMinutes === "number" ? orderResponse.estimatedWaitMinutes : null,
       );
+      setFinalPrepTime(maxPrepTime);
       setIsConfirmed(true);
       saveCartItems([]);
     } catch (error) {
@@ -298,7 +306,7 @@ export default function CartPage() {
             </div>
             <div className="mt-2 flex items-center justify-between">
               <span className="text-muted-foreground">Estimated wait</span>
-              <strong>{finalWaitMinutes !== null ? `~${finalWaitMinutes} min` : "Pending confirmation"}</strong>
+              <strong>{finalWaitMinutes !== null ? `~${finalWaitMinutes} min` : `${finalPrepTime} min`}</strong>
             </div>
           </div>
           <Button
@@ -334,17 +342,24 @@ export default function CartPage() {
             Ready when you are.
           </h1>
         </div>
-        {!!items.length && (
-          <div className="text-left sm:text-right">
-            <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground sm:justify-end">
-              <MapPin className="h-4 w-4 text-primary" /> {storeName}
-            </p>
-            <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground sm:justify-end">
-              <Clock3 className="h-3.5 w-3.5" /> Pickup at Student Center •
-              12-18 min
-            </p>
-          </div>
-        )}
+        {!!items.length && (() => {
+          const maxPrep = items.reduce((max, item) => {
+            const p = typeof item.preparationTimeMinutes === 'number' ? item.preparationTimeMinutes : 15;
+            return p > max ? p : max;
+          }, 0);
+          const displayPrep = maxPrep > 0 ? maxPrep : 15;
+          return (
+            <div className="text-left sm:text-right">
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground sm:justify-end">
+                <MapPin className="h-4 w-4 text-primary" /> {storeName}
+              </p>
+              <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground sm:justify-end">
+                <Clock3 className="h-3.5 w-3.5" /> Pickup at Student Center •
+                {displayPrep} min
+              </p>
+            </div>
+          );
+        })()}
       </div>
 
       {!items.length ? (
