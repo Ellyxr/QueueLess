@@ -1186,6 +1186,6 @@ export default function MarketplacePage({
           </section>
         )}
       </div>
-    </main>
+    </main> 
   );
 }
