@@ -55,7 +55,7 @@ export function PaymentStep({ orderId, storeName, amount, savedMethod, onDone }:
   const MethodIcon = METHOD_ICON[savedMethod.type];
 
   const startPayment = () => {
-    if (status === "processing") return;
+    if (status === "processing" || status === "succeeded" || status === "failed") return;
     setStatus("processing");
     setFailureReason(null);
 
@@ -65,7 +65,7 @@ export function PaymentStep({ orderId, storeName, amount, savedMethod, onDone }:
       const result: PaymentResult = {
         status: willDecline ? "failed" : "succeeded",
         method: savedMethod.type,
-        referenceId: generateReferenceId(),
+        referenceId: lastResult?.referenceId || generateReferenceId(),
       };
       setLastResult(result);
       if (willDecline) {
@@ -75,6 +75,11 @@ export function PaymentStep({ orderId, storeName, amount, savedMethod, onDone }:
         setStatus("succeeded");
       }
     }, 1600);
+  };
+
+  const handleDone = (result: PaymentResult) => {
+    if (status !== "succeeded" && status !== "failed") return;
+    onDone(result);
   };
 
   const retry = () => {
@@ -145,7 +150,7 @@ export function PaymentStep({ orderId, storeName, amount, savedMethod, onDone }:
             <p className="max-w-xs text-xs text-muted-foreground">
               Reference {lastResult.referenceId} • {currency(amount)} paid via {savedMethod.label}
             </p>
-            <Button className="mt-4 w-full rounded-full" onClick={() => onDone(lastResult)}>
+            <Button className="mt-4 w-full rounded-full" onClick={() => handleDone(lastResult)}>
               Continue browsing
             </Button>
           </div>
@@ -168,7 +173,7 @@ export function PaymentStep({ orderId, storeName, amount, savedMethod, onDone }:
                 variant="secondary"
                 className="w-full rounded-full"
                 onClick={() =>
-                  onDone(
+                  handleDone(
                     lastResult ?? {
                       status: "failed",
                       method: savedMethod.type,
