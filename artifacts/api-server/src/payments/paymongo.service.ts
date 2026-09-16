@@ -11,6 +11,7 @@ interface CreateCheckoutSessionParams {
   amount: number;
   description: string;
   referenceNumber: string;
+  orderId: string;
 }
 
 interface PaymongoCheckoutSessionResponse {
@@ -60,6 +61,10 @@ export class PaymongoService {
 
     const authorization = Buffer.from(`${secretKey}:`).toString('base64');
 
+    const orderIdParam = `orderId=${encodeURIComponent(params.orderId)}`;
+    const successUrlWithOrder = `${successUrl}${successUrl.includes('?') ? '&' : '?'}${orderIdParam}`;
+    const cancelUrlWithOrder = `${cancelUrl}${cancelUrl.includes('?') ? '&' : '?'}${orderIdParam}`;
+
     try {
       const response = await fetch(`${this.baseUrl}/checkout_sessions`, {
         method: 'POST',
@@ -89,8 +94,8 @@ export class PaymongoService {
               ],
               description: params.description,
               reference_number: params.referenceNumber,
-              success_url: successUrl,
-              cancel_url: cancelUrl,
+              success_url: successUrlWithOrder,
+              cancel_url: cancelUrlWithOrder,
               send_email_receipt: false,
               show_description: true,
               show_line_items: true,
