@@ -149,18 +149,6 @@ export default function ProfilePage() {
     return () => window.removeEventListener(PAYMENT_METHOD_CHANGED_EVENT, refreshPaymentMethod);
   }, []);
 
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("setupPayment") === "1" && !getSavedPaymentMethod()) {
-      setIsEditingPaymentMethod(true);
-      window.setTimeout(() => {
-        document
-          .getElementById("payment-method-card")
-          ?.scrollIntoView({ behavior: "smooth", block: "center" });
-      }, 100);
-    }
-  }, []);
-
   const nameParts = profile.fullName.trim().split(/\s+/).filter(Boolean);
   const firstName = nameParts[0] || "";
   const lastName = nameParts.slice(1).join(" ");
@@ -771,21 +759,15 @@ export default function ProfilePage() {
             </CardContent>
           </Card>
 
-          <Card
-            id="payment-method-card"
-            className={`bg-card/90 shadow-sm ${
-              paymentMethod ? "border-card-border/80" : "border-2 border-destructive"
-            }`}
-          >
+          <Card id="payment-method-card" className="border-card-border/80 bg-card/90 shadow-sm">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-2xl tracking-tighter">
                 <CreditCard className="h-5 w-5 text-primary" />
                 Payment method
               </CardTitle>
               <CardDescription>
-                {paymentMethod
-                  ? "This method is used to pay for your orders via PayMongo."
-                  : "Set up a payment method before you can place an order."}
+                Optional — save a payment method here for your own reference. You'll still
+                choose how to pay on PayMongo's checkout page when you order.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -822,17 +804,17 @@ export default function ProfilePage() {
                   </div>
                 </div>
               ) : (
-                <div className="rounded-[18px] border border-dashed border-destructive/50 bg-destructive/5 p-4 text-center">
-                  <AlertCircle className="mx-auto h-5 w-5 text-destructive" />
-                  <p className="mt-2 text-sm font-medium text-foreground">
-                    No payment method set up yet
+                <div className="rounded-[18px] border border-dashed border-border bg-secondary/30 p-4 text-center">
+                  <p className="text-sm font-medium text-foreground">
+                    No payment method on file
                   </p>
                   <Button
                     type="button"
+                    variant="outline"
                     className="mt-3 rounded-full"
                     onClick={() => setIsEditingPaymentMethod(true)}
                   >
-                    Set up payment method
+                    Add payment method
                   </Button>
                 </div>
               )}

@@ -13,6 +13,14 @@ export function notifyAuthStateChanged(): void {
   }
 }
 
+export interface EligibleExtra {
+  id: string;
+  name: string;
+  price: number;
+  description: string | null;
+  category?: string | null;
+}
+
 export interface VendorProduct {
   id: string;
   vendorId?: string;
@@ -22,6 +30,7 @@ export interface VendorProduct {
   category: string | null;
   preparationTimeMinutes: number;
   isAvailable: boolean;
+  eligibleExtras?: EligibleExtra[];
 }
 
 export interface ProductInput {
@@ -31,6 +40,7 @@ export interface ProductInput {
   category?: string;
   preparationTimeMinutes: number;
   isAvailable?: boolean;
+  eligibleExtraIds?: string[];
 }
 
 export interface VendorStorefront {
@@ -358,6 +368,50 @@ export function createOrder(data: CreateOrderInput): Promise<any> {
       "Idempotency-Key": crypto.randomUUID(),
     },
     body: JSON.stringify(data),
+  });
+}
+
+export interface OrderPaymentStatusResponse {
+  orderId: string;
+  orderType: "INDIVIDUAL" | "GROUP";
+  orderStatus: string;
+  totalAmount: string;
+  paymentShare: {
+    id: string;
+    amountDue: string;
+    status: "PENDING" | "PAID";
+  };
+  payment: {
+    id: string;
+    amount: string;
+    currency: string;
+    provider: string;
+    status: "PENDING" | "SUCCEEDED" | "FAILED";
+    createdAt: string;
+    updatedAt: string;
+  } | null;
+}
+
+export function getOrderPaymentStatus(orderId: string): Promise<OrderPaymentStatusResponse> {
+  return fetchWithAuth(`/payments/orders/${orderId}/status`);
+}
+
+export interface CreatePaymentCheckoutResponse {
+  paymentId: string;
+  paymentShareId: string;
+  orderId: string;
+  amount: string;
+  currency: string;
+  status: string;
+  provider: string;
+  checkoutSessionId: string;
+  checkoutUrl: string;
+}
+
+export function createPaymentCheckout(paymentShareId: string): Promise<CreatePaymentCheckoutResponse> {
+  return fetchWithAuth("/payments/checkout", {
+    method: "POST",
+    body: JSON.stringify({ paymentShareId }),
   });
 }
 
