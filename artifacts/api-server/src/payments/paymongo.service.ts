@@ -139,7 +139,7 @@ export class PaymongoService {
       );
     }
   }
-    verifyWebhookSignature(
+      verifyWebhookSignature(
     rawBody: Buffer,
     signatureHeader: string | undefined,
   ): void {
@@ -182,10 +182,38 @@ export class PaymongoService {
       );
     }
 
-    // US-025 uses PayMongo Sandbox, so prefer the test signature.
-    const receivedSignature =
-      testSignaturePart?.substring(3) ??
-      liveSignaturePart?.substring(3);
+    const timestampSeconds = Number(timestamp);
+
+    if (
+      !Number.isFinite(timestampSeconds) ||
+      !Number.isInteger(timestampSeconds)
+    ) {
+      throw new UnauthorizedException(
+        'Invalid PayMongo webhook timestamp',
+      );
+    }
+
+    const currentTimestampSeconds = Math.floor(Date.now() / 1000);
+    const timestampToleranceSeconds = 300; // 5 minutes
+
+    if (
+      Math.abs(currentTimestampSeconds - timestampSeconds) >
+      timestampToleranceSeconds
+    ) {
+      throw new UnauthorizedException(
+        'Expired PayMongo webhook signature',
+      );
+    }
+
+    // QueueLess currently uses PayMongo Sandbox,
+    // so only test signatures are accepted.
+    const receivedSignature = testSignaturePart?.substring(3);
+
+    if (liveSignaturePart?.substring(3) && !receivedSignature) {
+      throw new UnauthorizedException(
+        'Live PayMongo webhook signatures are not accepted in Sandbox mode',
+      );
+    }
 
     if (!receivedSignature) {
       throw new UnauthorizedException(

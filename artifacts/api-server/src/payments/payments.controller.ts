@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   InternalServerErrorException,
+  Logger,
   Post,
   Req,
   UseGuards,
@@ -32,6 +33,8 @@ class CreateCheckoutDto {
 @ApiTags('payments')
 @Controller('payments')
 export class PaymentsController {
+  private readonly logger = new Logger(PaymentsController.name);
+
   constructor(private readonly paymentsService: PaymentsService) {}
 
   @Post('checkout')
@@ -86,8 +89,16 @@ export class PaymentsController {
     description: 'Webhook received',
   })
   @ApiResponse({
+    status: 400,
+    description: 'Invalid PayMongo webhook event or resource',
+  })
+  @ApiResponse({
     status: 401,
-    description: 'Invalid PayMongo webhook signature',
+    description: 'Invalid or expired PayMongo webhook signature',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Payment for PayMongo checkout session not found',
   })
   @ApiResponse({
     status: 500,
@@ -98,18 +109,48 @@ export class PaymentsController {
     @Headers('paymongo-signature') signature: string | undefined,
   ) {
     if (!request.rawBody) {
+      this.logger.error(
+        'PayMongo webhook rejected: raw request body unavailable',
+      );
+
       throw new InternalServerErrorException(
         'Raw webhook body is unavailable',
       );
     }
 
-    this.paymentsService.verifyWebhookSignature(
-      request.rawBody,
-      signature,
-    );
+    try {
+      this.paymentsService.verifyWebhookSignature(
+        request.rawBody,
+        signature,
+      );
+    } catch (error) {
+      this.logger.warn(
+        'PayMongo webhook rejected: signature validation failed',
+      );
 
-    return this.paymentsService.handleWebhookEvent(
-      request.body,
-    );
+      throw error;
+    }
+
+    try {
+      const result = await this.paymentsService.handleWebhookEvent(
+        request.body,
+      );
+
+      this.logger.log(
+        `PayMongo webhook handled: eventType=${
+          result.eventType ?? 'unknown'
+        }, processed=${result.processed}, duplicate=${
+          result.duplicate ?? false
+        }`,
+      );
+
+      return result;
+    } catch (error) {
+      this.logger.warn(
+        'PayMongo webhook rejected: event validation or processing failed',
+      );
+
+      throw error;
+    }
   }
 }
