@@ -12,6 +12,9 @@ import { StoreRouter } from '@/features/store/store-router';
 import CartPage from '@/features/cart/cart';
 import PaymentSuccessPage from '@/features/payments/payment-success';
 import PaymentCancelPage from '@/features/payments/payment-cancel';
+import AdminDashboardPage from '@/features/admin/admin-dashboard';
+import AdminRefundsPage from '@/features/admin/admin-refunds';
+import AdminUsersPage from '@/features/admin/admin-users';
 import { useLocation } from 'wouter';
 
 import {
@@ -116,6 +119,9 @@ export function AppRouter() {
             <Route path="/vendor" component={VendorRoute} />
             <Route path="/vendor/storefront" component={VendorStorefrontPage} />
             <Route path="/vendor/promotion" component={VendorPromotionPage} />
+            <Route path="/admin" component={AdminDashboardPage} />
+            <Route path="/admin/refunds" component={AdminRefundsPage} />
+            <Route path="/admin/users" component={AdminUsersPage} />
             <Route component={NotFound} />
           </Switch>
         </RoutedErrorBoundary>
