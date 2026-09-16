@@ -10,6 +10,8 @@ import VendorStorefrontPage from '@/features/vendor/vendor-storefront';
 import VendorPromotionPage from '@/features/vendor/vendor-promotion';
 import { StoreRouter } from '@/features/store/store-router';
 import CartPage from '@/features/cart/cart';
+import PaymentSuccessPage from '@/features/payments/payment-success';
+import PaymentCancelPage from '@/features/payments/payment-cancel';
 import { useLocation } from 'wouter';
 
 import {
@@ -108,6 +110,8 @@ export function AppRouter() {
             <Route path="/login" component={LoginPage} />
             <Route path="/store/:storeName" component={StoreRoute} />
             <Route path="/cart" component={CartPage} />
+            <Route path="/payment/success" component={PaymentSuccessPage} />
+            <Route path="/payment/cancel" component={PaymentCancelPage} />
             <Route path="/profile" component={Profile} />
             <Route path="/vendor" component={VendorRoute} />
             <Route path="/vendor/storefront" component={VendorStorefrontPage} />
