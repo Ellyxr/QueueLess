@@ -1,11 +1,13 @@
 import {
   Body,
   Controller,
+  Get,
   Headers,
   HttpCode,
   HttpStatus,
   InternalServerErrorException,
   Logger,
+  Param,
   Post,
   Req,
   UseGuards,
@@ -76,6 +78,39 @@ export class PaymentsController {
     return this.paymentsService.createCheckout(
       user.sub,
       dto.paymentShareId,
+    );
+  }
+
+  @Get('orders/:orderId/status')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('BUYER')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Get payment status for an order',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Order payment status retrieved successfully',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Insufficient permissions',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Payment information for order not found',
+  })
+  async getOrderPaymentStatus(
+    @CurrentUser() user: { sub: string },
+    @Param('orderId') orderId: string,
+  ) {
+    return this.paymentsService.getOrderPaymentStatus(
+      user.sub,
+      orderId,
     );
   }
 
