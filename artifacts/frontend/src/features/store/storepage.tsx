@@ -14,6 +14,12 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { StoreItemCard } from "@/components/store-item-card";
 
+interface MenuItemExtra {
+  id: string;
+  name: string;
+  price: number;
+}
+
 interface MenuItem {
   id: string;
   vendorId?: string;
@@ -21,6 +27,7 @@ interface MenuItem {
   name: string;
   flavorProfile: string;
   price: number;
+  extras?: MenuItemExtra[];
 }
 
 interface StoreCategory {
@@ -364,6 +371,7 @@ export default function StorePage({
                             flavorProfile={item.flavorProfile}
                             price={item.price}
                             storeName={storeName}
+                            extras={item.extras}
                           />
                         ))}
                       </div>

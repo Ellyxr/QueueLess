@@ -252,6 +252,14 @@ export class OrdersService {
               items: {
                 create: orderItems,
               },
+              paymentShares: {
+                create: [
+                  {
+                    payerUserId: userId,
+                    amountDue: totalAmount,
+                  },
+                ],
+              },
             },
             include: {
               vendor: true,
@@ -693,6 +701,12 @@ export class OrdersService {
               },
             },
           });
+        }
+
+        if (dto.status === OrderStatus.PAID) {
+          throw new BadRequestException(
+            'Order payment is confirmed automatically once PayMongo notifies QueueLess; vendors cannot mark an order as paid manually.',
+          );
         }
 
         this.validateOrderStatusTransition(
