@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
+import { EXTRA_CATEGORY } from "@/lib/product-extras";
 import { createGroupOrder, joinGroupOrderByCode, listVendors, type VendorStorefront } from "@/features/auth/api";
 import {
   GROUP_ORDER_SESSION_CHANGED_EVENT,
@@ -527,7 +528,14 @@ type MarketplaceVendor = {
   vendorType: string;
   eta: string;
   rating: number;
-  menuItems: Array<{ id: string; image: string; name: string; flavorProfile: string; price: number }>;
+  menuItems: Array<{
+    id: string;
+    image: string;
+    name: string;
+    flavorProfile: string;
+    price: number;
+    extras: Array<{ id: string; name: string; price: number }>;
+  }>;
 };
 
 function toMarketplaceVendor(vendor: VendorStorefront): MarketplaceVendor {
@@ -541,13 +549,18 @@ function toMarketplaceVendor(vendor: VendorStorefront): MarketplaceVendor {
     eta: "15-25 min",
     rating: 5,
     menuItems: (vendor.products || [])
-      .filter((product) => product.isAvailable)
+      .filter((product) => product.isAvailable && product.category !== EXTRA_CATEGORY)
       .map((product) => ({
         id: product.id,
         image: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80",
         name: product.name,
         flavorProfile: product.description || "Freshly prepared",
         price: Number(product.price),
+        extras: (product.eligibleExtras ?? []).map((extra) => ({
+          id: extra.id,
+          name: extra.name,
+          price: Number(extra.price),
+        })),
       })),
   };
 }
@@ -561,7 +574,14 @@ function VendorCard({
   type,
 }: {
   id: string;
-  menuItems: Array<{ id: string; image: string; name: string; flavorProfile: string; price: number }>;
+  menuItems: Array<{
+    id: string;
+    image: string;
+    name: string;
+    flavorProfile: string;
+    price: number;
+    extras: Array<{ id: string; name: string; price: number }>;
+  }>;
   name: string;
   eta: string;
   rating: number;
@@ -639,6 +659,7 @@ function VendorCard({
                       price={item.price}
                       storeName={name}
                       vendorId={id}
+                      extras={item.extras}
                     />
                   ))}
                   {menuItems.length === 0 && (
@@ -708,6 +729,7 @@ function VendorCard({
                         price={item.price}
                         storeName={name}
                         vendorId={id}
+                        extras={item.extras}
                       />
                     </motion.div>
                   ))}

@@ -13,6 +13,14 @@ export function notifyAuthStateChanged(): void {
   }
 }
 
+export interface EligibleExtra {
+  id: string;
+  name: string;
+  price: number;
+  description: string | null;
+  category?: string | null;
+}
+
 export interface VendorProduct {
   id: string;
   vendorId?: string;
@@ -22,6 +30,7 @@ export interface VendorProduct {
   category: string | null;
   preparationTimeMinutes: number;
   isAvailable: boolean;
+  eligibleExtras?: EligibleExtra[];
 }
 
 export interface ProductInput {
@@ -31,6 +40,7 @@ export interface ProductInput {
   category?: string;
   preparationTimeMinutes: number;
   isAvailable?: boolean;
+  eligibleExtraIds?: string[];
 }
 
 export interface VendorStorefront {
