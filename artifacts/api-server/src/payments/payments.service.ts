@@ -147,6 +147,67 @@ export class PaymentsService {
       throw error;
     }
   }
+    async getOrderPaymentStatus(userId: string, orderId: string) {
+    const paymentShare = await this.prisma.paymentShare.findFirst({
+      where: {
+        orderId,
+        payerUserId: userId,
+      },
+      select: {
+        id: true,
+        amountDue: true,
+        status: true,
+        order: {
+          select: {
+            id: true,
+            orderType: true,
+            status: true,
+            totalAmount: true,
+          },
+        },
+        payment: {
+          select: {
+            id: true,
+            amount: true,
+            currency: true,
+            provider: true,
+            status: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        },
+      },
+    });
+
+    if (!paymentShare) {
+      throw new NotFoundException(
+        'Payment information for order not found',
+      );
+    }
+
+    return {
+      orderId: paymentShare.order.id,
+      orderType: paymentShare.order.orderType,
+      orderStatus: paymentShare.order.status,
+      totalAmount: paymentShare.order.totalAmount.toFixed(2),
+      paymentShare: {
+        id: paymentShare.id,
+        amountDue: paymentShare.amountDue.toFixed(2),
+        status: paymentShare.status,
+      },
+      payment: paymentShare.payment
+        ? {
+            id: paymentShare.payment.id,
+            amount: paymentShare.payment.amount.toFixed(2),
+            currency: paymentShare.payment.currency,
+            provider: paymentShare.payment.provider,
+            status: paymentShare.payment.status,
+            createdAt: paymentShare.payment.createdAt,
+            updatedAt: paymentShare.payment.updatedAt,
+          }
+        : null,
+    };
+  }
 
   verifyWebhookSignature(
     rawBody: Buffer,
