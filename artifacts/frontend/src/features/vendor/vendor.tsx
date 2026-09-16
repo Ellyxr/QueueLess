@@ -38,6 +38,7 @@ import {
   type VendorStorefront,
   type VendorQueueOrder,
 } from '@/features/auth/api';
+import { EXTRA_CATEGORY } from '@/lib/product-extras';
 
 interface Product {
   id: string;
@@ -48,6 +49,7 @@ interface Product {
   preparationTimeMinutes: number;
   image?: string;
   isAvailable: boolean;
+  eligibleExtraIds: string[];
 }
 
 function getNextOrderStatus(
@@ -86,8 +88,10 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   // US-012 State Management
   const [products, setProducts] = useState<Product[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalKind, setModalKind] = useState<'product' | 'extra'>('product');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [extraSearch, setExtraSearch] = useState('');
 
   // Form State
   const [formData, setFormData] = useState({
@@ -97,6 +101,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     category: '',
     preparationTime: '15',
     image: '',
+    eligibleExtraIds: [] as string[],
   });
   const [imagePreview, setImagePreview] = useState<string>('');
   const [formErrors, setFormErrors] = useState<{ name?: string; price?: string; description?: string; preparationTime?: string }>({});
@@ -245,10 +250,13 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     preparationTimeMinutes: product.preparationTimeMinutes ?? 15,
     image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
     isAvailable: product.isAvailable,
+    eligibleExtraIds: product.eligibleExtras?.map((extra) => extra.id) ?? [],
   });
 
-  const handleOpenModal = (product?: Product) => {
+  const handleOpenModal = (product?: Product, kind: 'product' | 'extra' = 'product') => {
     if (product) {
+      const resolvedKind = product.category === EXTRA_CATEGORY ? 'extra' : 'product';
+      setModalKind(resolvedKind);
       setEditingProduct(product);
       setFormData({
         name: product.name,
@@ -257,11 +265,21 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
         category: product.category || 'General',
         preparationTime: String(product.preparationTimeMinutes ?? 15),
         image: product.image || '',
+        eligibleExtraIds: product.eligibleExtraIds,
       });
       setImagePreview(product.image || '');
     } else {
+      setModalKind(kind);
       setEditingProduct(null);
-      setFormData({ name: '', price: '', description: '', category: '', preparationTime: '15', image: '' });
+      setFormData({
+        name: '',
+        price: '',
+        description: '',
+        category: kind === 'extra' ? EXTRA_CATEGORY : '',
+        preparationTime: '15',
+        image: '',
+        eligibleExtraIds: [],
+      });
       setImagePreview('');
     }
     setFormErrors({});
@@ -310,7 +328,12 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     e.preventDefault();
     if (!validateForm()) return;
 
-    const finalCategory = formData.category.trim() ? formData.category.trim() : 'General';
+    const finalCategory =
+      modalKind === 'extra'
+        ? EXTRA_CATEGORY
+        : formData.category.trim()
+          ? formData.category.trim()
+          : 'General';
     setIsProductSaving(true);
     try {
       const data = {
@@ -320,6 +343,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
         category: finalCategory,
         preparationTimeMinutes: Number(formData.preparationTime),
         isAvailable: editingProduct ? editingProduct.isAvailable : true,
+        ...(modalKind === 'product' ? { eligibleExtraIds: formData.eligibleExtraIds } : {}),
       };
       const savedProduct = editingProduct
         ? await updateProduct(editingProduct.id, data)
@@ -332,7 +356,15 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
             )
           : [mappedProduct, ...prev],
       );
-      showToast(editingProduct ? 'Product updated successfully!' : 'New product added to store!');
+      showToast(
+        modalKind === 'extra'
+          ? editingProduct
+            ? 'Extra updated successfully!'
+            : 'New extra added to store!'
+          : editingProduct
+            ? 'Product updated successfully!'
+            : 'New product added to store!',
+      );
       setIsModalOpen(false);
     } catch (error: unknown) {
       showToast(error instanceof Error ? error.message : 'Unable to save product.', 'error');
@@ -366,14 +398,26 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
 
   const handleDeleteProduct = async () => {
     if (!deleteTargetId) return;
+    const deletedId = deleteTargetId;
     setIsProductDeleting(true);
     try {
-      await deleteProduct(deleteTargetId);
-      setProducts((prev) => prev.filter((product) => product.id !== deleteTargetId));
+      await deleteProduct(deletedId);
+      setProducts((prev) =>
+        prev
+          .filter((product) => product.id !== deletedId)
+          .map((product) =>
+            product.eligibleExtraIds.includes(deletedId)
+              ? {
+                  ...product,
+                  eligibleExtraIds: product.eligibleExtraIds.filter((id) => id !== deletedId),
+                }
+              : product,
+          ),
+      );
       setDeleteTargetId(null);
-      showToast('Product deleted from menu');
+      showToast('Deleted from menu');
     } catch (error: unknown) {
-      showToast(error instanceof Error ? error.message : 'Unable to delete product.', 'error');
+      showToast(error instanceof Error ? error.message : 'Unable to delete item.', 'error');
     } finally {
       setIsProductDeleting(false);
     }
@@ -440,13 +484,26 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     await applyOrderStatusUpdate(selectedOrder.id, newStatus);
   };
 
+  const menuProducts = products.filter((product) => product.category !== EXTRA_CATEGORY);
+  const extraProducts = products.filter((product) => product.category === EXTRA_CATEGORY);
+
   const existingCategories = Array.from(
-    new Set(products.map((product) => product.category).filter((cat): cat is string => Boolean(cat && cat.trim()))),
+    new Set(
+      menuProducts
+        .map((product) => product.category)
+        .filter((cat): cat is string => Boolean(cat && cat.trim())),
+    ),
   ).sort((a, b) => a.localeCompare(b));
 
-  const filteredProducts = products.filter((product) => {
+  const filteredMenuProducts = menuProducts.filter((product) => {
     const query = productSearch.trim().toLowerCase();
     return !query || [product.name, product.description, product.category]
+      .some((value) => value.toLowerCase().includes(query));
+  });
+
+  const filteredExtraProducts = extraProducts.filter((product) => {
+    const query = extraSearch.trim().toLowerCase();
+    return !query || [product.name, product.description]
       .some((value) => value.toLowerCase().includes(query));
   });
 
@@ -773,7 +830,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                   className="h-10 w-full rounded-full border border-border bg-background pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 sm:w-56"
                 />
               </div>
-              <Button onClick={() => handleOpenModal()} className="gap-2 rounded-full px-4 py-2 font-medium">
+              <Button onClick={() => handleOpenModal(undefined, 'product')} className="gap-2 rounded-full px-4 py-2 font-medium">
                 <Plus className="h-4 w-4" />
                 Add Item
               </Button>
@@ -790,12 +847,12 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                 <span className="text-right">Actions</span>
               </div>
 
-              {filteredProducts.length === 0 ? (
+              {filteredMenuProducts.length === 0 ? (
                 <div className="p-8 text-center text-muted-foreground text-sm">
-                  {products.length === 0 ? 'No products in your catalog yet. Click "Add Item" to create one.' : 'No products match your search.'}
+                  {menuProducts.length === 0 ? 'No products in your catalog yet. Click "Add Item" to create one.' : 'No products match your search.'}
                 </div>
               ) : (
-                filteredProducts.map((product) => (
+                filteredMenuProducts.map((product) => (
                   <div
                     key={product.id}
                     className="grid grid-cols-[1.3fr_0.8fr_1.6fr_0.9fr_1fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
@@ -841,6 +898,99 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                         onClick={() => setDeleteTargetId(product.id)}
                         className="h-8 w-8 rounded-full border border-destructive/30 text-destructive hover:bg-destructive/10"
                         title="Delete product"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Extras Management Section */}
+        <section id="extras-management-section" className="mt-10">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Add-ons</p>
+              <h2 className="mt-1 text-2xl font-semibold tracking-[-0.05em] text-foreground">Extras</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Add-ons like "Extra calamansi" that buyers can attach to eligible menu items.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  value={extraSearch}
+                  onChange={(event) => setExtraSearch(event.target.value)}
+                  placeholder="Search extras"
+                  className="h-10 w-full rounded-full border border-border bg-background pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 sm:w-56"
+                />
+              </div>
+              <Button onClick={() => handleOpenModal(undefined, 'extra')} className="gap-2 rounded-full px-4 py-2 font-medium">
+                <Plus className="h-4 w-4" />
+                Add Extras
+              </Button>
+            </div>
+          </div>
+
+          <Card className="border-card-border/80 bg-card/90 shadow-sm overflow-hidden">
+            <CardContent className="p-0">
+              <div className="grid grid-cols-[1.3fr_0.8fr_1.6fr_0.9fr_1fr] gap-3 border-b border-border bg-secondary/40 px-4 py-3 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                <span>Extra Name</span>
+                <span>Price</span>
+                <span>Description</span>
+                <span>Availability</span>
+                <span className="text-right">Actions</span>
+              </div>
+
+              {filteredExtraProducts.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">
+                  {extraProducts.length === 0 ? 'No extras yet. Click "Add Extras" to create one.' : 'No extras match your search.'}
+                </div>
+              ) : (
+                filteredExtraProducts.map((extra) => (
+                  <div
+                    key={extra.id}
+                    className="grid grid-cols-[1.3fr_0.8fr_1.6fr_0.9fr_1fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
+                  >
+                    <p className="text-sm font-semibold text-foreground">{extra.name}</p>
+                    <p className="text-sm font-semibold text-primary">₱{extra.price}</p>
+                    <p className="text-sm text-muted-foreground line-clamp-1">{extra.description}</p>
+
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleAvailability(extra)}
+                        className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
+                          extra.isAvailable
+                            ? 'bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20'
+                            : 'bg-destructive/10 text-destructive hover:bg-destructive/20'
+                        }`}
+                        title={`Mark as ${extra.isAvailable ? 'unavailable' : 'available'}`}
+                      >
+                        {extra.isAvailable ? 'Available' : 'Unavailable'}
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleOpenModal(extra)}
+                        className="h-8 w-8 rounded-full border border-border/80 hover:bg-secondary"
+                        title="Edit extra"
+                      >
+                        <Pencil className="h-3.5 w-3.5 text-foreground" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setDeleteTargetId(extra.id)}
+                        className="h-8 w-8 rounded-full border border-destructive/30 text-destructive hover:bg-destructive/10"
+                        title="Delete extra"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -1055,7 +1205,13 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
             <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl my-8">
               <div className="flex items-center justify-between border-b border-border pb-3">
                 <h3 className="text-lg font-bold text-foreground">
-                  {editingProduct ? 'Edit Product' : 'Add New Product'}
+                  {modalKind === 'extra'
+                    ? editingProduct
+                      ? 'Edit Extra'
+                      : 'Add New Extra'
+                    : editingProduct
+                      ? 'Edit Product'
+                      : 'Add New Product'}
                 </h3>
                 <button
                   onClick={() => setIsModalOpen(false)}
@@ -1068,13 +1224,13 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
               <form onSubmit={handleSaveProduct} className="mt-4 space-y-4">
                 <div>
                   <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
-                    Product Name
+                    {modalKind === 'extra' ? 'Extra Name' : 'Product Name'}
                   </label>
                   <input
                     type="text"
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    placeholder="e.g. Banh Mi Combo"
+                    placeholder={modalKind === 'extra' ? 'e.g. Extra calamansi' : 'e.g. Banh Mi Combo'}
                     className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
                   />
                   {formErrors.name && <p className="mt-1 text-xs text-destructive">{formErrors.name}</p>}
@@ -1095,72 +1251,74 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                   {formErrors.price && <p className="mt-1 text-xs text-destructive">{formErrors.price}</p>}
                 </div>
 
-                <div className="relative">
-                  <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
-                    Category <span className="text-[10px] text-muted-foreground/70 font-normal">(Optional — type to filter or create)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.category}
-                    onChange={(e) => {
-                      setFormData({ ...formData, category: e.target.value });
-                      setIsCategoryMenuOpen(true);
-                    }}
-                    onFocus={() => setIsCategoryMenuOpen(true)}
-                    onBlur={() => setTimeout(() => setIsCategoryMenuOpen(false), 120)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        setIsCategoryMenuOpen(false);
-                      }
-                    }}
-                    placeholder="e.g. Rice Bowls, Drinks, Snacks"
-                    autoComplete="off"
-                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  />
-                  {isCategoryMenuOpen && (() => {
-                    const query = formData.category.trim().toLowerCase();
-                    const matches = existingCategories.filter((cat) =>
-                      !query || cat.toLowerCase().includes(query),
-                    );
-                    const exactMatch = existingCategories.some(
-                      (cat) => cat.toLowerCase() === query,
-                    );
-                    return (
-                      <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-xl border border-border bg-card shadow-lg">
-                        {matches.map((cat) => (
-                          <button
-                            type="button"
-                            key={cat}
-                            onMouseDown={(e) => {
-                              e.preventDefault();
-                              setFormData({ ...formData, category: cat });
-                              setIsCategoryMenuOpen(false);
-                            }}
-                            className="block w-full px-3 py-2 text-left text-sm text-foreground hover:bg-secondary"
-                          >
-                            {cat}
-                          </button>
-                        ))}
-                        {query && !exactMatch && (
-                          <button
-                            type="button"
-                            onMouseDown={(e) => {
-                              e.preventDefault();
-                              setIsCategoryMenuOpen(false);
-                            }}
-                            className="block w-full border-t border-border px-3 py-2 text-left text-sm text-primary hover:bg-secondary"
-                          >
-                            Create new category "{formData.category.trim()}"
-                          </button>
-                        )}
-                        {matches.length === 0 && !query && (
-                          <p className="px-3 py-2 text-xs text-muted-foreground">No categories yet — type a name to create one.</p>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
+                {modalKind === 'product' && (
+                  <div className="relative">
+                    <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
+                      Category <span className="text-[10px] text-muted-foreground/70 font-normal">(Optional — type to filter or create)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.category}
+                      onChange={(e) => {
+                        setFormData({ ...formData, category: e.target.value });
+                        setIsCategoryMenuOpen(true);
+                      }}
+                      onFocus={() => setIsCategoryMenuOpen(true)}
+                      onBlur={() => setTimeout(() => setIsCategoryMenuOpen(false), 120)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          setIsCategoryMenuOpen(false);
+                        }
+                      }}
+                      placeholder="e.g. Rice Bowls, Drinks, Snacks"
+                      autoComplete="off"
+                      className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                    {isCategoryMenuOpen && (() => {
+                      const query = formData.category.trim().toLowerCase();
+                      const matches = existingCategories.filter((cat) =>
+                        !query || cat.toLowerCase().includes(query),
+                      );
+                      const exactMatch = existingCategories.some(
+                        (cat) => cat.toLowerCase() === query,
+                      );
+                      return (
+                        <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-xl border border-border bg-card shadow-lg">
+                          {matches.map((cat) => (
+                            <button
+                              type="button"
+                              key={cat}
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                setFormData({ ...formData, category: cat });
+                                setIsCategoryMenuOpen(false);
+                              }}
+                              className="block w-full px-3 py-2 text-left text-sm text-foreground hover:bg-secondary"
+                            >
+                              {cat}
+                            </button>
+                          ))}
+                          {query && !exactMatch && (
+                            <button
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                setIsCategoryMenuOpen(false);
+                              }}
+                              className="block w-full border-t border-border px-3 py-2 text-left text-sm text-primary hover:bg-secondary"
+                            >
+                              Create new category "{formData.category.trim()}"
+                            </button>
+                          )}
+                          {matches.length === 0 && !query && (
+                            <p className="px-3 py-2 text-xs text-muted-foreground">No categories yet — type a name to create one.</p>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
@@ -1252,6 +1410,49 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                   )}
                 </div>
 
+                {modalKind === 'product' && (
+                  <div>
+                    <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
+                      Extras eligible <span className="text-[10px] text-muted-foreground/70 font-normal">(Optional)</span>
+                    </label>
+                    {extraProducts.length === 0 ? (
+                      <p className="rounded-xl border border-dashed border-border bg-secondary/30 px-3 py-3 text-xs text-muted-foreground">
+                        No extras yet — create one in the Extras section to make it eligible here.
+                      </p>
+                    ) : (
+                      <div className="max-h-40 space-y-1 overflow-y-auto rounded-xl border border-border bg-background p-2">
+                        {extraProducts.map((extra) => {
+                          const checked = formData.eligibleExtraIds.includes(extra.id);
+                          return (
+                            <label
+                              key={extra.id}
+                              className="flex cursor-pointer items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-secondary"
+                            >
+                              <span className="text-foreground">{extra.name}</span>
+                              <span className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">₱{extra.price}</span>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() =>
+                                    setFormData((prev) => ({
+                                      ...prev,
+                                      eligibleExtraIds: checked
+                                        ? prev.eligibleExtraIds.filter((id) => id !== extra.id)
+                                        : [...prev.eligibleExtraIds, extra.id],
+                                    }))
+                                  }
+                                  className="h-4 w-4 accent-primary"
+                                />
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-2 pt-2">
                   <Button
                     type="button"
@@ -1262,7 +1463,11 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                     Cancel
                   </Button>
                   <Button type="submit" className="rounded-full px-5">
-                    {editingProduct ? 'Save Changes' : 'Create Product'}
+                    {editingProduct
+                      ? 'Save Changes'
+                      : modalKind === 'extra'
+                        ? 'Create Extra'
+                        : 'Create Product'}
                   </Button>
                 </div>
               </form>

@@ -160,6 +160,11 @@ model Product {
   orderItems             OrderItem[]
   vendor                 Vendor            @relation(fields: [vendorId], references: [id], onDelete: Cascade)
   reportsTargeting       Report[]          @relation("ReportTargetProduct")
+  // Self-relation: which "extra" products (e.g. add-ons like "Extra calamansi")
+  // are eligible for this product, and the inverse — which products this
+  // extra is eligible for.
+  eligibleExtras         Product[]         @relation("ProductEligibleExtras")
+  eligibleExtraFor       Product[]         @relation("ProductEligibleExtras")
 
   @@unique([vendorId, name])
   @@index([vendorId])

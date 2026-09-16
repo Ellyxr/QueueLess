@@ -1,13 +1,37 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { ProductSearchDto } from './dto/product-search.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+
+const PRODUCT_SELECT = {
+  id: true,
+  vendorId: true,
+  name: true,
+  description: true,
+  price: true,
+  preparationTimeMinutes: true,
+  category: true,
+  isAvailable: true,
+  createdAt: true,
+  updatedAt: true,
+  eligibleExtras: {
+    select: {
+      id: true,
+      name: true,
+      price: true,
+      description: true,
+      category: true,
+    },
+  },
+} as const;
 
 @Injectable()
 export class ProductsService {
@@ -108,12 +132,45 @@ export class ProductsService {
     return vendor;
   }
 
+  /** Extras can only be marked eligible for a product if they belong to the same vendor. */
+  private async validateEligibleExtraIds(
+    vendorId: string,
+    extraIds: string[],
+    excludeProductId?: string,
+  ) {
+    const uniqueIds = [...new Set(extraIds)];
+    if (uniqueIds.length === 0) return uniqueIds;
+
+    if (excludeProductId && uniqueIds.includes(excludeProductId)) {
+      throw new BadRequestException('A product cannot be its own extra');
+    }
+
+    const owned = await this.prisma.product.findMany({
+      where: {
+        id: { in: uniqueIds },
+        vendorId,
+      },
+      select: { id: true },
+    });
+
+    if (owned.length !== uniqueIds.length) {
+      throw new BadRequestException(
+        'One or more eligibleExtraIds do not belong to this vendor',
+      );
+    }
+
+    return uniqueIds;
+  }
+
   async createProduct(userId: string, dto: CreateProductDto) {
     const vendor = await this.getVendorForUser(userId);
 
     const name = dto.name.trim();
     const description = dto.description?.trim() || null;
     const category = dto.category?.trim() || null;
+    const eligibleExtraIds = dto.eligibleExtraIds
+      ? await this.validateEligibleExtraIds(vendor.id, dto.eligibleExtraIds)
+      : [];
 
     try {
       return await this.prisma.product.create({
@@ -125,19 +182,11 @@ export class ProductsService {
           preparationTimeMinutes: dto.preparationTimeMinutes ?? 15,
           category,
           isAvailable: dto.isAvailable ?? true,
+          ...(eligibleExtraIds.length > 0
+            ? { eligibleExtras: { connect: eligibleExtraIds.map((id) => ({ id })) } }
+            : {}),
         },
-        select: {
-          id: true,
-          vendorId: true,
-          name: true,
-          description: true,
-          price: true,
-          preparationTimeMinutes: true,
-          category: true,
-          isAvailable: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+        select: PRODUCT_SELECT,
       });
     } catch (error) {
       if (
@@ -180,14 +229,7 @@ export class ProductsService {
       );
     }
 
-    const data: {
-      name?: string;
-      description?: string | null;
-      price?: number;
-      preparationTimeMinutes?: number;
-      category?: string | null;
-      isAvailable?: boolean;
-    } = {};
+    const data: Prisma.ProductUpdateInput = {};
 
     if (dto.name !== undefined) {
       data.name = dto.name.trim();
@@ -214,24 +256,24 @@ export class ProductsService {
       data.isAvailable = dto.isAvailable;
     }
 
+    if (dto.eligibleExtraIds !== undefined) {
+      const eligibleExtraIds = await this.validateEligibleExtraIds(
+        vendor.id,
+        dto.eligibleExtraIds,
+        productId,
+      );
+      data.eligibleExtras = {
+        set: eligibleExtraIds.map((id) => ({ id })),
+      };
+    }
+
     try {
       return await this.prisma.product.update({
         where: {
           id: productId,
         },
         data,
-        select: {
-          id: true,
-          vendorId: true,
-          name: true,
-          description: true,
-          price: true,
-          preparationTimeMinutes: true,
-          category: true,
-          isAvailable: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+        select: PRODUCT_SELECT,
       });
     } catch (error) {
       if (

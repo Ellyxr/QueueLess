@@ -8,6 +8,12 @@ import {
   getGroupOrderSession,
 } from "@/features/group-orders/group-order-session";
 
+interface StoreItemCardExtra {
+  id: string;
+  name: string;
+  price: number;
+}
+
 interface StoreItemCardProps {
   id: string;
   image: string;
@@ -16,6 +22,7 @@ interface StoreItemCardProps {
   price: number;
   storeName?: string;
   vendorId?: string;
+  extras?: StoreItemCardExtra[];
 }
 
 export function StoreItemCard({
@@ -26,6 +33,7 @@ export function StoreItemCard({
   price,
   storeName,
   vendorId,
+  extras,
 }: StoreItemCardProps) {
   const [isFavorited, setIsFavorited] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
@@ -154,7 +162,7 @@ export function StoreItemCard({
     }
 
     setIsAdding(true);
-    addCartItem({ id, image, name, price, storeName, vendorId });
+    addCartItem({ id, image, name, price, storeName, vendorId, availableExtras: extras ?? [] });
     runFlyToCartAnimation();
   };
 
