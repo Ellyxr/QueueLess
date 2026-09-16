@@ -55,7 +55,9 @@ function getNextOrderStatus(
 ): { label: string; next: string } | null {
   switch (order.status) {
     case 'PENDING':
-      return { label: 'Mark Paid', next: 'PAID' };
+      // Payment is confirmed automatically by the PayMongo webhook once the
+      // buyer pays — vendors have no manual action while an order is unpaid.
+      return null;
     case 'PAID':
       return { label: 'Start Cooking', next: 'COOKING' };
     case 'COOKING':
@@ -172,6 +174,35 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
       .finally(() => {
         setIsQueueLoading(false); // Ito ang kulang na nagtatapos sa loading status!
       });
+  }, []);
+
+  // Poll the queue so a PayMongo webhook confirming payment flips an order
+  // to "Paid" here without the vendor needing to refresh the page.
+  useEffect(() => {
+    const QUEUE_POLL_INTERVAL_MS = 8000;
+
+    const refreshQueue = () => {
+      getVendorOrderQueue()
+        .then((data: unknown) => {
+          const list: VendorQueueOrder[] = Array.isArray(data)
+            ? data
+            : Array.isArray((data as { orders?: unknown })?.orders)
+            ? ((data as { orders: VendorQueueOrder[] }).orders)
+            : Array.isArray((data as { data?: unknown })?.data)
+            ? ((data as { data: VendorQueueOrder[] }).data)
+            : [];
+          setOrderQueue(list);
+          setSelectedOrder((prev) =>
+            prev ? list.find((order) => order.id === prev.id) ?? prev : prev,
+          );
+        })
+        .catch(() => {
+          // Silent — the next poll will retry, no need to spam the toast.
+        });
+    };
+
+    const timer = window.setInterval(refreshQueue, QUEUE_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
   }, []);
 
   const handleSaveStorefront = async (event: React.FormEvent) => {
@@ -364,16 +395,17 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
       await updateOrderStatus(orderId, newStatus, extra as any);
       showToast(`Order status updated to ${newStatus}`);
 
+      const impliesPaid = newStatus !== 'PENDING' && newStatus !== 'CANCELLED';
       setOrderQueue((prev) =>
         prev.map((o) =>
           o.id === orderId
-            ? { ...o, status: newStatus, ...(newStatus !== 'PENDING' ? { paymentStatus: 'PAID' } : {}) }
+            ? { ...o, status: newStatus, ...(impliesPaid ? { paymentStatus: 'PAID' } : {}) }
             : o
         )
       );
       setSelectedOrder((prev) =>
         prev && prev.id === orderId
-          ? { ...prev, status: newStatus, ...(newStatus !== 'PENDING' ? { paymentStatus: 'PAID' } : {}) }
+          ? { ...prev, status: newStatus, ...(impliesPaid ? { paymentStatus: 'PAID' } : {}) }
           : prev
       );
     } catch (error: unknown) {

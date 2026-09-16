@@ -254,6 +254,21 @@ async function seed() {
     },
   });
 
+  // --- Admin account used to access the /admin panel in the frontend ---
+  const adminPanelPasswordHash = await bcrypt.hash('Password123!', SALT_ROUNDS);
+  const adminPanelUser = await prisma.user.upsert({
+    where: { email: 'admin@queueless.com' },
+    update: {},
+    create: {
+      email: 'admin@queueless.com',
+      passwordHash: adminPanelPasswordHash,
+      fullName: 'QueueLess Admin',
+      roleAssignments: {
+        create: { role: 'ADMIN' },
+      },
+    },
+  });
+
   console.log('Seeded test accounts (all use password: %s):', SEED_PASSWORD);
   console.log(' - buyer@test.queueless.dev  (BUYER)  id=%s', buyer.id);
   console.log(' - vendor@test.queueless.dev (VENDOR_OWNER, ACTIVE vendor) id=%s', vendorOwner.id);
@@ -263,6 +278,7 @@ async function seed() {
   console.log(' - external-vendor@test.queueless.dev (VENDOR_OWNER only) id=%s', externalVendor.id);
   console.log(' - student-vendor@test.queueless.dev (BUYER + VENDOR_OWNER) id=%s', studentVendor.id);
   console.log(' - admin@test.queueless.dev  (ADMIN)  id=%s', admin.id);
+  console.log(' - admin@queueless.com (ADMIN, password: Password123!) id=%s', adminPanelUser.id);
 }
 
 seed()
