@@ -22,6 +22,7 @@ import {
   type ProfileData,
   type VendorStorefront,
 } from '@/features/auth/api';
+import { EXTRA_CATEGORY } from '@/lib/product-extras';
 
 const PLACEHOLDER_PRODUCT_IMAGE =
   'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80';
@@ -111,8 +112,11 @@ export default function VendorPromotionPage() {
 
   const storefrontUrl =
     typeof window !== 'undefined' ? `${window.location.origin}/store/${vendor.id}` : `/store/${vendor.id}`;
-  const previewProducts = (vendor.products ?? []).filter((product) => product.isAvailable).slice(0, 3);
-  const fallbackProducts = previewProducts.length > 0 ? previewProducts : (vendor.products ?? []).slice(0, 3);
+  const promotableProducts = (vendor.products ?? []).filter(
+    (product) => product.category !== EXTRA_CATEGORY,
+  );
+  const previewProducts = promotableProducts.filter((product) => product.isAvailable).slice(0, 3);
+  const fallbackProducts = previewProducts.length > 0 ? previewProducts : promotableProducts.slice(0, 3);
 
   return (
     <main className="mx-auto min-h-dvh max-w-4xl bg-background px-4 py-8 sm:px-6">

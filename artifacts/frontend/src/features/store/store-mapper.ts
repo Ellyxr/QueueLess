@@ -1,4 +1,5 @@
 import type { VendorStorefront } from "@/features/auth/api";
+import { EXTRA_CATEGORY } from "@/lib/product-extras";
 import type { StorePageProps } from "./storepage";
 
 type StoreCategory = StorePageProps["categories"][number];
@@ -18,6 +19,7 @@ export function sortCategoriesByOrder(
 
 export function formatAveragePrepTime(vendor: VendorStorefront): string {
   const prepTimes = (vendor.products ?? [])
+    .filter((product) => product.category !== EXTRA_CATEGORY)
     .map((product) => product.preparationTimeMinutes)
     .filter((minutes): minutes is number => typeof minutes === "number" && minutes > 0);
 
@@ -33,6 +35,7 @@ export function toStorePageProps(vendor: VendorStorefront): StorePageProps {
   const categories = new Map<string, StoreCategory["items"]>();
 
   for (const product of vendor.products ?? []) {
+    if (product.category === EXTRA_CATEGORY) continue;
     const categoryName = product.category?.trim() || "Menu";
     const items = categories.get(categoryName) ?? [];
     items.push({
@@ -43,6 +46,11 @@ export function toStorePageProps(vendor: VendorStorefront): StorePageProps {
       name: product.name,
       flavorProfile: product.description || "Freshly prepared",
       price: Number(product.price),
+      extras: (product.eligibleExtras ?? []).map((extra) => ({
+        id: extra.id,
+        name: extra.name,
+        price: Number(extra.price),
+      })),
     });
     categories.set(categoryName, items);
   }
