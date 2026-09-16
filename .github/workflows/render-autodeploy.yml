@@ -1,0 +1,15 @@
+name: Trigger Render Deploys
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy Web Service
+        run: curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_WEB }}"
+
+      - name: Deploy Static Site
+        run: curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_STATIC }}"
