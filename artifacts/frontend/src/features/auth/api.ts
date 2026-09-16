@@ -361,6 +361,50 @@ export function createOrder(data: CreateOrderInput): Promise<any> {
   });
 }
 
+export interface OrderPaymentStatusResponse {
+  orderId: string;
+  orderType: "INDIVIDUAL" | "GROUP";
+  orderStatus: string;
+  totalAmount: string;
+  paymentShare: {
+    id: string;
+    amountDue: string;
+    status: "PENDING" | "PAID";
+  };
+  payment: {
+    id: string;
+    amount: string;
+    currency: string;
+    provider: string;
+    status: "PENDING" | "SUCCEEDED" | "FAILED";
+    createdAt: string;
+    updatedAt: string;
+  } | null;
+}
+
+export function getOrderPaymentStatus(orderId: string): Promise<OrderPaymentStatusResponse> {
+  return fetchWithAuth(`/payments/orders/${orderId}/status`);
+}
+
+export interface CreatePaymentCheckoutResponse {
+  paymentId: string;
+  paymentShareId: string;
+  orderId: string;
+  amount: string;
+  currency: string;
+  status: string;
+  provider: string;
+  checkoutSessionId: string;
+  checkoutUrl: string;
+}
+
+export function createPaymentCheckout(paymentShareId: string): Promise<CreatePaymentCheckoutResponse> {
+  return fetchWithAuth("/payments/checkout", {
+    method: "POST",
+    body: JSON.stringify({ paymentShareId }),
+  });
+}
+
 // US-018: Update Vendor Order Status
 export function updateOrderStatus(
   orderId: string,

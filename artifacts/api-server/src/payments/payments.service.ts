@@ -112,6 +112,7 @@ export class PaymentsService {
           amount: amountCentavos,
           description: `QueueLess order ${paymentShare.order.id}`,
           referenceNumber: payment.id,
+          orderId: paymentShare.order.id,
         });
 
       await this.prisma.payment.update({
