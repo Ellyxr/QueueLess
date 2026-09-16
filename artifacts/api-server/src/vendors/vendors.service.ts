@@ -37,6 +37,14 @@ export class VendorsService {
             category: true,
             preparationTimeMinutes: true,
             isAvailable: true,
+            eligibleExtras: {
+              select: {
+                id: true,
+                name: true,
+                price: true,
+                description: true,
+              },
+            },
           },
           orderBy: {
             name: 'asc',
@@ -73,6 +81,14 @@ export class VendorsService {
             category: true,
             preparationTimeMinutes: true,
             isAvailable: true,
+            eligibleExtras: {
+              select: {
+                id: true,
+                name: true,
+                price: true,
+                description: true,
+              },
+            },
           },
           orderBy: {
             name: 'asc',

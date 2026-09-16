@@ -49,6 +49,8 @@ export interface CartItem {
   price: number;
   quantity: number;
   options: CartOption[];
+  /** Extras the vendor marked eligible for this specific product. */
+  availableExtras?: CartOption[];
   preparationTimeMinutes?: number;
 }
 
@@ -100,6 +102,7 @@ export function addCartItem(
     existingItem.quantity += 1;
     existingItem.vendorId = item.vendorId || existingItem.vendorId;
     existingItem.storeName = item.storeName || existingItem.storeName;
+    existingItem.availableExtras = item.availableExtras ?? existingItem.availableExtras;
   } else {
     items.push({
       ...item,
@@ -497,31 +500,34 @@ export default function CartPage() {
                               Extra options
                             </p>
 
-                            {[
-                              { name: "Extra Sauce", price: 15 },
-                              { name: "Chili crisp", price: 10 },
-                            ].map((option) => (
-                              <label
-                                key={option.name}
-                                className="mt-3 flex cursor-pointer items-center justify-between text-sm"
-                              >
-                                <span>
-                                  {option.name}{" "}
-                                  <span className="text-muted-foreground">
-                                    +{currency(option.price)}
+                            {!item.availableExtras || item.availableExtras.length === 0 ? (
+                              <p className="mt-2 text-xs text-muted-foreground">
+                                No extras available for this item.
+                              </p>
+                            ) : (
+                              item.availableExtras.map((option) => (
+                                <label
+                                  key={option.name}
+                                  className="mt-3 flex cursor-pointer items-center justify-between text-sm"
+                                >
+                                  <span>
+                                    {option.name}{" "}
+                                    <span className="text-muted-foreground">
+                                      +{currency(option.price)}
+                                    </span>
                                   </span>
-                                </span>
 
-                                <input
-                                  type="checkbox"
-                                  checked={item.options.some(
-                                    (current) => current.name === option.name,
-                                  )}
-                                  onChange={() => toggleOption(item.id, option)}
-                                  className="h-4 w-4 accent-primary"
-                                />
-                              </label>
-                            ))}
+                                  <input
+                                    type="checkbox"
+                                    checked={item.options.some(
+                                      (current) => current.name === option.name,
+                                    )}
+                                    onChange={() => toggleOption(item.id, option)}
+                                    className="h-4 w-4 accent-primary"
+                                  />
+                                </label>
+                              ))
+                            )}
                           </div>
                         </div>
                       </div>
