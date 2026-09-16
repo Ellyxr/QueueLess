@@ -38,7 +38,9 @@ export class PaymentsService {
       },
     });
 
-    if (!paymentShare) throw new NotFoundException('Payment share not found');
+    if (!paymentShare) {
+      throw new NotFoundException('Payment share not found');
+    }
 
     if (paymentShare.order.status !== OrderStatus.PENDING) {
       throw new ConflictException(
@@ -46,8 +48,11 @@ export class PaymentsService {
       );
     }
 
-    if (paymentShare.status === PaymentShareStatus.PAID)
-      throw new ConflictException('Payment share has already been paid');
+    if (paymentShare.status === PaymentShareStatus.PAID) {
+      throw new ConflictException(
+        'Payment share has already been paid',
+      );
+    }
 
     if (
       paymentShare.payment &&
@@ -102,11 +107,12 @@ export class PaymentsService {
     });
 
     try {
-      const checkout = await this.paymongoService.createCheckoutSession({
-        amount: amountCentavos,
-        description: `QueueLess order ${paymentShare.order.id}`,
-        referenceNumber: payment.id,
-      });
+      const checkout =
+        await this.paymongoService.createCheckoutSession({
+          amount: amountCentavos,
+          description: `QueueLess order ${paymentShare.order.id}`,
+          referenceNumber: payment.id,
+        });
 
       await this.prisma.payment.update({
         where: {
@@ -141,7 +147,8 @@ export class PaymentsService {
       throw error;
     }
   }
-    verifyWebhookSignature(
+
+  verifyWebhookSignature(
     rawBody: Buffer,
     signature: string | undefined,
   ): void {
@@ -150,7 +157,8 @@ export class PaymentsService {
       signature,
     );
   }
-      async handleWebhookEvent(event: unknown) {
+
+  async handleWebhookEvent(event: unknown) {
     if (
       typeof event !== 'object' ||
       event === null ||
@@ -199,9 +207,25 @@ export class PaymentsService {
 
     const checkoutSession = data.attributes.data;
 
-    if (!checkoutSession?.id) {
+    if (
+      !checkoutSession ||
+      typeof checkoutSession.id !== 'string' ||
+      checkoutSession.id.trim().length === 0
+    ) {
       throw new BadRequestException(
         'PayMongo checkout session ID is missing',
+      );
+    }
+
+    if (checkoutSession.type !== 'checkout_session') {
+      throw new BadRequestException(
+        'Invalid PayMongo webhook resource type',
+      );
+    }
+
+    if (checkoutSession.attributes?.status !== 'paid') {
+      throw new BadRequestException(
+        'PayMongo checkout session is not paid',
       );
     }
 
@@ -218,6 +242,24 @@ export class PaymentsService {
     if (!payment) {
       throw new NotFoundException(
         'Payment for PayMongo checkout session not found',
+      );
+    }
+
+    const referenceNumber =
+      checkoutSession.attributes?.reference_number;
+
+    if (
+      typeof referenceNumber !== 'string' ||
+      referenceNumber.trim().length === 0
+    ) {
+      throw new BadRequestException(
+        'PayMongo payment reference number is missing',
+      );
+    }
+
+    if (referenceNumber !== payment.id) {
+      throw new BadRequestException(
+        'PayMongo payment reference does not match',
       );
     }
 
@@ -254,33 +296,33 @@ export class PaymentsService {
     const orderId = orderIds[0];
 
     const result = await this.prisma.$transaction(async (tx) => {
-    const paymentUpdate = await tx.payment.updateMany({
-      where: {
-        id: payment.id,
-        status: {
-          not: PaymentStatus.SUCCEEDED,
-        },
-      },
-      data: {
-        status: PaymentStatus.SUCCEEDED,
-      },
-    });
-
-    if (paymentUpdate.count === 0) {
-      return {
-        duplicate: true,
-        orderId,
-        orderMarkedPaid: false,
-        unpaidShares: await tx.paymentShare.count({
-          where: {
-            orderId,
-            status: PaymentShareStatus.PENDING,
+      const paymentUpdate = await tx.payment.updateMany({
+        where: {
+          id: payment.id,
+          status: {
+            not: PaymentStatus.SUCCEEDED,
           },
-        }),
-      };
-    }
+        },
+        data: {
+          status: PaymentStatus.SUCCEEDED,
+        },
+      });
 
-    await tx.paymentShare.updateMany({
+      if (paymentUpdate.count === 0) {
+        return {
+          duplicate: true,
+          orderId,
+          orderMarkedPaid: false,
+          unpaidShares: await tx.paymentShare.count({
+            where: {
+              orderId,
+              status: PaymentShareStatus.PENDING,
+            },
+          }),
+        };
+      }
+
+      await tx.paymentShare.updateMany({
         where: {
           paymentId: payment.id,
           status: PaymentShareStatus.PENDING,
