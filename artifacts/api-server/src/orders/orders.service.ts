@@ -271,6 +271,35 @@ export class OrdersService {
             },
           });
 
+            if (dto.isPasabuyRequest) {
+    const deliveryFee = this.getPasabuyDeliveryFee();
+
+    const itemDescription = cart.items
+      .map(
+        (item) =>
+          `${item.quantity}x ${item.product.name}`,
+      )
+      .join(', ');
+
+    await tx.pasabuyRequest.create({
+      data: {
+        requesterUserId: userId,
+        relatedOrderId: order.id,
+        status: 'PENDING',
+        itemDescription,
+        convenienceFee: deliveryFee,
+        totalAmount: order.totalAmount.add(deliveryFee),
+        statusHistory: {
+          create: {
+            status: 'PENDING',
+            changedByUserId: userId,
+            note: 'Pasabuy request created',
+          },
+        },
+      },
+    });
+  }
+
           await tx.orderIdempotencyKey.update({
             where: {
               userId_key: {
@@ -712,7 +741,6 @@ export class OrdersService {
         this.validateOrderStatusTransition(
           order.status,
           dto.status,
-          order.isPasabuyRequest,
         );
 
         const updated = await tx.order.update({
@@ -800,6 +828,7 @@ export class OrdersService {
             status: true,
             customerId: true,
             pickupConfirmedAt: true,
+            isPasabuyRequest: true,
             groupOrder: {
               select: {
                 initiator: {
@@ -812,6 +841,11 @@ export class OrdersService {
 
         if (!order) {
           throw new NotFoundException('Order not found');
+        }
+        if (order.isPasabuyRequest) {
+          throw new BadRequestException(
+            'Pasabuy orders must be collected by the assigned Pasabuy fulfiller',
+          );
         }
 
         const isOwner = order.customerId === userId;
@@ -954,7 +988,6 @@ export class OrdersService {
   private validateOrderStatusTransition(
     currentStatus: OrderStatus,
     nextStatus: OrderStatus,
-    isPasabuyRequest: boolean,
   ) {
     const allowedTransitions: Record<
       OrderStatus,
@@ -969,9 +1002,7 @@ export class OrdersService {
         OrderStatus.CANCELLED,
       ],
       COOKING: [
-        isPasabuyRequest
-          ? OrderStatus.OUT_FOR_DELIVERY
-          : OrderStatus.READY_FOR_PICKUP,
+        OrderStatus.READY_FOR_PICKUP,
         OrderStatus.CANCELLED,
       ],
       OUT_FOR_DELIVERY: [
@@ -1023,6 +1054,33 @@ export class OrdersService {
 
     return rate;
   }
+
+    private getPasabuyDeliveryFee(): Prisma.Decimal {
+    const rawFee =
+      this.configService.get<string>(
+        'PASABUY_DELIVERY_FEE',
+        '35',
+      );
+
+    let fee: Prisma.Decimal;
+
+    try {
+      fee = new Prisma.Decimal(rawFee);
+    } catch {
+      throw new BadRequestException(
+        'PASABUY_DELIVERY_FEE must be a valid number',
+      );
+    }
+
+    if (fee.lessThan(0)) {
+      throw new BadRequestException(
+        'PASABUY_DELIVERY_FEE must be zero or greater',
+      );
+    }
+
+    return fee;
+  }
+
   private buildOrderResponse(
     order: Prisma.OrderGetPayload<{
       include: {
