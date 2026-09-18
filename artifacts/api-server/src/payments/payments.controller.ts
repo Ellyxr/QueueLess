@@ -16,6 +16,7 @@ import type { RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
 import {
   ApiBearerAuth,
+  ApiHeader,
   ApiOperation,
   ApiResponse,
   ApiTags,
@@ -43,16 +44,24 @@ export class PaymentsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('BUYER')
   @ApiBearerAuth()
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description:
+      'Unique key used to prevent duplicate checkout sessions when a request is retried',
+  })
   @ApiOperation({
     summary: 'Create a PayMongo Sandbox checkout for a payment share',
   })
   @ApiResponse({
     status: 201,
-    description: 'PayMongo checkout session created successfully',
+    description:
+      'PayMongo checkout session created or safely reused',
   })
   @ApiResponse({
     status: 400,
-    description: 'Payment share cannot be paid',
+    description:
+      'Payment share cannot be paid or Idempotency-Key is missing or invalid',
   })
   @ApiResponse({
     status: 401,
@@ -69,15 +78,18 @@ export class PaymentsController {
   @ApiResponse({
     status: 409,
     description:
-      'Payment share has already been paid or the order cannot be paid',
+      'Payment share has already been paid, the order cannot be paid, or the idempotency key conflicts with another request',
   })
   async createCheckout(
     @CurrentUser() user: { sub: string },
+    @Headers('idempotency-key')
+    idempotencyKey: string | undefined,
     @Body() dto: CreateCheckoutDto,
   ) {
     return this.paymentsService.createCheckout(
       user.sub,
       dto.paymentShareId,
+      idempotencyKey,
     );
   }
 
@@ -167,9 +179,10 @@ export class PaymentsController {
     }
 
     try {
-      const result = await this.paymentsService.handleWebhookEvent(
-        request.body,
-      );
+      const result =
+        await this.paymentsService.handleWebhookEvent(
+          request.body,
+        );
 
       this.logger.log(
         `PayMongo webhook handled: eventType=${

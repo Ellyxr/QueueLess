@@ -27,6 +27,7 @@ model User {
   groupOrdersInitiated     GroupOrder[]            @relation("GroupOrderInitiator")
   notifications            Notification[]
   orderIdempotencyKeys     OrderIdempotencyKey[]
+  paymentIdempotencyKeys   PaymentIdempotencyKey[]
   orderStatusChanges       OrderStatusHistory[]    @relation("OrderStatusChangedBy")
   ordersPlaced             Order[]                 @relation("OrderCustomer")
   pasabuyRequestsFulfilled PasabuyRequest[]        @relation("PasabuyFulfiller")
@@ -330,6 +331,27 @@ model OrderIdempotencyKey {
   @@map("order_idempotency_keys")
 }
 
+model PaymentIdempotencyKey {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String   @db.Uuid
+  key            String
+  paymentShareId String   @db.Uuid
+  paymentId      String?  @db.Uuid
+  checkoutSessionId String?
+  checkoutUrl       String?
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(6)
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paymentShare PaymentShare @relation(fields: [paymentShareId], references: [id], onDelete: Cascade)
+  payment      Payment?     @relation(fields: [paymentId], references: [id])
+
+  @@unique([userId, key])
+  @@index([paymentShareId])
+  @@index([paymentId])
+  @@map("payment_idempotency_keys")
+}
+
 model OrderItem {
   id                String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   orderId           String                 @db.Uuid
@@ -413,6 +435,7 @@ model PaymentShare {
   order       Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
   payer       User               @relation("PaymentSharePayer", fields: [payerUserId], references: [id])
   payment     Payment?           @relation(fields: [paymentId], references: [id])
+  idempotencyKeys PaymentIdempotencyKey[]
 
   @@unique([orderId, payerUserId])
   @@index([orderId])
@@ -440,6 +463,7 @@ model Payment {
   payer                User                @relation("PaymentPayer", fields: [payerUserId], references: [id])
   vendorSubscription   VendorSubscription? @relation(fields: [vendorSubscriptionId], references: [id], onDelete: Restrict)
   refunds              Refund[]
+  idempotencyKeys      PaymentIdempotencyKey[]
 
   @@index([payerUserId])
   @@index([status])

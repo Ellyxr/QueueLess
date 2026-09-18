@@ -21,7 +21,25 @@ export class PaymentsService {
     private readonly paymongoService: PaymongoService,
   ) {}
 
-  async createCheckout(userId: string, paymentShareId: string) {
+  async createCheckout(
+    userId: string,
+    paymentShareId: string,
+    idempotencyKey: string | undefined,
+  ) {
+    const normalizedKey = idempotencyKey?.trim();
+
+    if (!normalizedKey) {
+      throw new BadRequestException(
+        'Idempotency-Key header is required',
+      );
+    }
+
+    if (normalizedKey.length > 255) {
+      throw new BadRequestException(
+        'Idempotency-Key must not exceed 255 characters',
+      );
+    }
+
     const paymentShare = await this.prisma.paymentShare.findFirst({
       where: {
         id: paymentShareId,
@@ -67,6 +85,128 @@ export class PaymentsService {
       );
     }
 
+    /*
+    * Reserve the idempotency key before contacting PayMongo.
+    *
+    * The unique (userId, key) constraint prevents two concurrent
+    * requests from independently creating checkout sessions.
+    */
+    let idempotencyRecord =
+      await this.prisma.paymentIdempotencyKey.findUnique({
+        where: {
+          userId_key: {
+            userId,
+            key: normalizedKey,
+          },
+        },
+        include: {
+          payment: true,
+        },
+      });
+
+    if (idempotencyRecord) {
+      if (idempotencyRecord.paymentShareId !== paymentShareId) {
+        throw new ConflictException(
+          'Idempotency-Key has already been used for another payment share',
+        );
+      }
+
+      if (
+        idempotencyRecord.paymentId &&
+        idempotencyRecord.checkoutSessionId &&
+        idempotencyRecord.checkoutUrl &&
+        idempotencyRecord.payment
+      ) {
+        return {
+          paymentId: idempotencyRecord.payment.id,
+          paymentShareId,
+          orderId: paymentShare.order.id,
+          amount: paymentShare.amountDue.toFixed(2),
+          currency: idempotencyRecord.payment.currency,
+          status: idempotencyRecord.payment.status,
+          provider: idempotencyRecord.payment.provider,
+          checkoutSessionId:
+            idempotencyRecord.checkoutSessionId,
+          checkoutUrl: idempotencyRecord.checkoutUrl,
+          idempotentReplay: true,
+        };
+      }
+
+      throw new ConflictException(
+        'A checkout request with this Idempotency-Key is already being processed',
+      );
+    }
+
+    try {
+      idempotencyRecord =
+        await this.prisma.paymentIdempotencyKey.create({
+          data: {
+            userId,
+            key: normalizedKey,
+            paymentShareId,
+          },
+          include: {
+            payment: true,
+          },
+        });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const existing =
+          await this.prisma.paymentIdempotencyKey.findUnique({
+            where: {
+              userId_key: {
+                userId,
+                key: normalizedKey,
+              },
+            },
+            include: {
+              payment: true,
+            },
+          });
+
+        if (!existing) {
+          throw new ConflictException(
+            'A checkout request with this Idempotency-Key is already being processed',
+          );
+        }
+
+        if (existing.paymentShareId !== paymentShareId) {
+          throw new ConflictException(
+            'Idempotency-Key has already been used for another payment share',
+          );
+        }
+
+        if (
+          existing.paymentId &&
+          existing.checkoutSessionId &&
+          existing.checkoutUrl &&
+          existing.payment
+        ) {
+          return {
+            paymentId: existing.payment.id,
+            paymentShareId,
+            orderId: paymentShare.order.id,
+            amount: paymentShare.amountDue.toFixed(2),
+            currency: existing.payment.currency,
+            status: existing.payment.status,
+            provider: existing.payment.provider,
+            checkoutSessionId: existing.checkoutSessionId,
+            checkoutUrl: existing.checkoutUrl,
+            idempotentReplay: true,
+          };
+        }
+
+        throw new ConflictException(
+          'A checkout request with this Idempotency-Key is already being processed',
+        );
+      }
+
+      throw error;
+    }
+
     const amountCentavos = paymentShare.amountDue
       .mul(100)
       .toDecimalPlaces(0)
@@ -74,7 +214,7 @@ export class PaymentsService {
 
     const payment = await this.prisma.$transaction(async (tx) => {
       if (paymentShare.paymentId) {
-        return tx.payment.update({
+        const existingPayment = await tx.payment.update({
           where: {
             id: paymentShare.paymentId,
           },
@@ -82,6 +222,17 @@ export class PaymentsService {
             status: PaymentStatus.PENDING,
           },
         });
+
+        await tx.paymentIdempotencyKey.update({
+          where: {
+            id: idempotencyRecord.id,
+          },
+          data: {
+            paymentId: existingPayment.id,
+          },
+        });
+
+        return existingPayment;
       }
 
       const createdPayment = await tx.payment.create({
@@ -103,6 +254,15 @@ export class PaymentsService {
         },
       });
 
+      await tx.paymentIdempotencyKey.update({
+        where: {
+          id: idempotencyRecord.id,
+        },
+        data: {
+          paymentId: createdPayment.id,
+        },
+      });
+
       return createdPayment;
     });
 
@@ -115,14 +275,25 @@ export class PaymentsService {
           orderId: paymentShare.order.id,
         });
 
-      await this.prisma.payment.update({
-        where: {
-          id: payment.id,
-        },
-        data: {
-          providerPaymentId: checkout.checkoutSessionId,
-        },
-      });
+      await this.prisma.$transaction([
+        this.prisma.payment.update({
+          where: {
+            id: payment.id,
+          },
+          data: {
+            providerPaymentId: checkout.checkoutSessionId,
+          },
+        }),
+        this.prisma.paymentIdempotencyKey.update({
+          where: {
+            id: idempotencyRecord.id,
+          },
+          data: {
+            checkoutSessionId: checkout.checkoutSessionId,
+            checkoutUrl: checkout.checkoutUrl,
+          },
+        }),
+      ]);
 
       return {
         paymentId: payment.id,
@@ -134,6 +305,7 @@ export class PaymentsService {
         provider: payment.provider,
         checkoutSessionId: checkout.checkoutSessionId,
         checkoutUrl: checkout.checkoutUrl,
+        idempotentReplay: false,
       };
     } catch (error) {
       await this.prisma.payment.update({
@@ -142,6 +314,17 @@ export class PaymentsService {
         },
         data: {
           status: PaymentStatus.FAILED,
+        },
+      });
+
+      /*
+      * Remove the incomplete reservation so a failed PayMongo
+      * request can be retried using the same key.
+      */
+      await this.prisma.paymentIdempotencyKey.deleteMany({
+        where: {
+          id: idempotencyRecord.id,
+          checkoutSessionId: null,
         },
       });
 
