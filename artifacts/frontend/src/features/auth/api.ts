@@ -667,6 +667,15 @@ export function addGroupOrderItem(
   });
 }
 
+export function removeGroupOrderItem(
+  groupOrderId: string,
+  itemId: string,
+): Promise<AddGroupOrderItemResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/items/${itemId}`, {
+    method: "DELETE",
+  });
+}
+
 export function finalizeGroupOrder(
   groupOrderId: string,
 ): Promise<FinalizeGroupOrderResponse> {
