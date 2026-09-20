@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { OrderStatus, Prisma } from '@prisma/client';
+import { CancellationReason, OrderStatus, Prisma } from '@prisma/client';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -244,12 +244,21 @@ export class OrdersService {
               eventId: dto.eventId ?? null,
               orderType: 'INDIVIDUAL',
               status: 'PENDING',
+              isPasabuyRequest: dto.isPasabuyRequest ?? false,
               subtotal,
               marketplaceFee,
               estimatedReadyAt,
               totalAmount,
               items: {
                 create: orderItems,
+              },
+              paymentShares: {
+                create: [
+                  {
+                    payerUserId: userId,
+                    amountDue: totalAmount,
+                  },
+                ],
               },
             },
             include: {
@@ -261,6 +270,35 @@ export class OrdersService {
               },
             },
           });
+
+            if (dto.isPasabuyRequest) {
+    const deliveryFee = this.getPasabuyDeliveryFee();
+
+    const itemDescription = cart.items
+      .map(
+        (item) =>
+          `${item.quantity}x ${item.product.name}`,
+      )
+      .join(', ');
+
+    await tx.pasabuyRequest.create({
+      data: {
+        requesterUserId: userId,
+        relatedOrderId: order.id,
+        status: 'PENDING',
+        itemDescription,
+        convenienceFee: deliveryFee,
+        totalAmount: order.totalAmount.add(deliveryFee),
+        statusHistory: {
+          create: {
+            status: 'PENDING',
+            changedByUserId: userId,
+            note: 'Pasabuy request created',
+          },
+        },
+      },
+    });
+  }
 
           await tx.orderIdempotencyKey.update({
             where: {
@@ -404,11 +442,25 @@ export class OrdersService {
     const order = await this.prisma.order.findFirst({
       where: {
         id: orderId,
-        customerId: userId,
+        OR: [
+          { customerId: userId },
+          {
+            groupOrder: {
+              participants: {
+                some: { userId, status: 'JOINED' },
+              },
+            },
+          },
+        ],
       },
       select: {
         id: true,
+        customerId: true,
+        orderType: true,
         status: true,
+        isPasabuyRequest: true,
+        cancellationReason: true,
+        cancellationNote: true,
         estimatedReadyAt: true,
         updatedAt: true,
         pickupConfirmedAt: true,
@@ -416,6 +468,18 @@ export class OrdersService {
           select: {
             id: true,
             name: true,
+            campusLocation: true,
+          },
+        },
+        items: {
+          select: {
+            id: true,
+            quantity: true,
+            product: {
+              select: {
+                name: true,
+              },
+            },
           },
         },
         statusHistory: {
@@ -428,6 +492,20 @@ export class OrdersService {
             changedAt: true,
           },
         },
+        groupOrder: {
+          select: {
+            id: true,
+            code: true,
+            initiatorUserId: true,
+            initiator: {
+              select: { allowParticipantOrderCompletion: true },
+            },
+            participants: {
+              where: { status: 'JOINED' },
+              select: { id: true },
+            },
+          },
+        },
       },
     });
 
@@ -437,7 +515,7 @@ export class OrdersService {
 
     const estimatedWaitMinutes =
       order.estimatedReadyAt &&
-      order.status !== OrderStatus.DELIVERED &&
+      order.status !== OrderStatus.COMPLETED &&
       order.status !== OrderStatus.CANCELLED
         ? Math.max(
             0,
@@ -447,14 +525,39 @@ export class OrdersService {
             ),
           )
         : null;
+
+    const isOwner = order.customerId === userId;
+    const viewerRole = order.groupOrder ? (isOwner ? 'OWNER' : 'MEMBER') : null;
+    const canComplete = order.groupOrder
+      ? isOwner || order.groupOrder.initiator.allowParticipantOrderCompletion
+      : true;
+
     return {
       orderId: order.id,
+      orderType: order.orderType,
       status: order.status,
+      isPasabuyRequest: order.isPasabuyRequest,
+      cancellationReason: order.cancellationReason,
+      cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
       estimatedWaitMinutes,
       updatedAt: order.updatedAt,
       vendor: order.vendor,
+      items: order.items.map((item) => ({
+        id: item.id,
+        name: item.product.name,
+        quantity: item.quantity,
+      })),
       history: order.statusHistory,
+      viewerRole,
+      canComplete,
+      groupOrder: order.groupOrder
+        ? {
+            id: order.groupOrder.id,
+            code: order.groupOrder.code,
+            participantCount: order.groupOrder.participants.length,
+          }
+        : null,
     };
   }
 
@@ -491,6 +594,7 @@ export class OrdersService {
         customerId: true,
         orderType: true,
         status: true,
+        isPasabuyRequest: true,
         subtotal: true,
         marketplaceFee: true,
         totalAmount: true,
@@ -500,6 +604,7 @@ export class OrdersService {
         customer: {
           select: {
             fullName: true,
+            email: true,
           },
         },
         items: {
@@ -532,6 +637,12 @@ export class OrdersService {
           id: order.customerId,
           fullName: order.customer.fullName,
         },
+        userId: order.customerId,
+        customerName: order.customer.fullName,
+        customerEmail: order.customer.email,
+        paymentStatus:
+          order.status === 'PENDING' ? 'PENDING' : 'PAID',
+        isPasabuyRequest: order.isPasabuyRequest,
         orderType: order.orderType,
         status: order.status,
         eventId: order.eventId,
@@ -576,6 +687,7 @@ export class OrdersService {
     }
 
     const note = dto.note?.trim() || null;
+    const isCancelling = dto.status === OrderStatus.CANCELLED;
 
     const updatedOrder = await this.prisma.$transaction(
       async (tx) => {
@@ -587,6 +699,12 @@ export class OrdersService {
             id: true,
             vendorId: true,
             status: true,
+            isPasabuyRequest: true,
+            items: {
+              select: {
+                productId: true,
+              },
+            },
           },
         });
 
@@ -597,6 +715,26 @@ export class OrdersService {
         if (order.vendorId !== vendor.id) {
           throw new ForbiddenException(
             'You do not have permission to update this order',
+          );
+        }
+
+        if (order.status === dto.status) {
+          return tx.order.findUniqueOrThrow({
+            where: { id: order.id },
+            include: {
+              vendor: true,
+              items: {
+                include: {
+                  product: true,
+                },
+              },
+            },
+          });
+        }
+
+        if (dto.status === OrderStatus.PAID) {
+          throw new BadRequestException(
+            'Order payment is confirmed automatically once PayMongo notifies QueueLess; vendors cannot mark an order as paid manually.',
           );
         }
 
@@ -611,6 +749,13 @@ export class OrdersService {
           },
           data: {
             status: dto.status,
+            ...(isCancelling
+              ? {
+                  cancellationReason: dto.cancellationReason,
+                  cancellationNote:
+                    dto.cancellationNote?.trim() || null,
+                }
+              : {}),
           },
           include: {
             vendor: true,
@@ -621,6 +766,24 @@ export class OrdersService {
             },
           },
         });
+
+        if (
+          isCancelling &&
+          dto.cancellationReason ===
+            CancellationReason.NOT_AVAILABLE
+        ) {
+          const productIds = order.items.map(
+            (item) => item.productId,
+          );
+          await tx.product.updateMany({
+            where: {
+              id: { in: productIds },
+            },
+            data: {
+              isAvailable: false,
+            },
+          });
+        }
 
         await tx.orderStatusHistory.create({
           data: {
@@ -649,17 +812,52 @@ export class OrdersService {
         const order = await tx.order.findFirst({
           where: {
             id: orderId,
-            customerId: userId,
+            OR: [
+              { customerId: userId },
+              {
+                groupOrder: {
+                  participants: {
+                    some: { userId, status: 'JOINED' },
+                  },
+                },
+              },
+            ],
           },
           select: {
             id: true,
             status: true,
+            customerId: true,
             pickupConfirmedAt: true,
+            isPasabuyRequest: true,
+            groupOrder: {
+              select: {
+                initiator: {
+                  select: { allowParticipantOrderCompletion: true },
+                },
+              },
+            },
           },
         });
 
         if (!order) {
           throw new NotFoundException('Order not found');
+        }
+        if (order.isPasabuyRequest) {
+          throw new BadRequestException(
+            'Pasabuy orders must be collected by the assigned Pasabuy fulfiller',
+          );
+        }
+
+        const isOwner = order.customerId === userId;
+
+        if (
+          !isOwner &&
+          order.groupOrder &&
+          !order.groupOrder.initiator.allowParticipantOrderCompletion
+        ) {
+          throw new ForbiddenException(
+            'Only the group order owner can complete this order',
+          );
         }
 
         if (order.pickupConfirmedAt) {
@@ -668,7 +866,12 @@ export class OrdersService {
           );
         }
 
-        if (order.status !== OrderStatus.OUT_FOR_DELIVERY) {
+        const pickupEligibleStatuses: OrderStatus[] = [
+          OrderStatus.OUT_FOR_DELIVERY,
+          OrderStatus.READY_FOR_PICKUP,
+        ];
+
+        if (!pickupEligibleStatuses.includes(order.status)) {
           throw new BadRequestException(
             'Order is not ready for pickup',
           );
@@ -677,12 +880,11 @@ export class OrdersService {
         const updateResult = await tx.order.updateMany({
           where: {
             id: order.id,
-            customerId: userId,
-            status: OrderStatus.OUT_FOR_DELIVERY,
+            status: order.status,
             pickupConfirmedAt: null,
           },
           data: {
-            status: OrderStatus.DELIVERED,
+            status: OrderStatus.COMPLETED,
             pickupConfirmedAt,
           },
         });
@@ -696,9 +898,11 @@ export class OrdersService {
         await tx.orderStatusHistory.create({
           data: {
             orderId: order.id,
-            status: OrderStatus.DELIVERED,
+            status: OrderStatus.COMPLETED,
             changedByUserId: userId,
-            note: 'Pickup confirmed by customer',
+            note: isOwner
+              ? 'Order completed by customer'
+              : 'Order completed by group order participant',
           },
         });
 
@@ -755,7 +959,13 @@ export class OrdersService {
       (total, order) => total.add(order.totalAmount),
       new Prisma.Decimal(0),
     );
-    const pendingStatuses = new Set(['PENDING', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY']);
+    const pendingStatuses = new Set([
+      'PENDING',
+      'PAID',
+      'COOKING',
+      'OUT_FOR_DELIVERY',
+      'READY_FOR_PICKUP',
+    ]);
     const pendingOrders = orders.filter((order) => pendingStatuses.has(order.status)).length;
 
     return {
@@ -792,13 +1002,16 @@ export class OrdersService {
         OrderStatus.CANCELLED,
       ],
       COOKING: [
-        OrderStatus.OUT_FOR_DELIVERY,
+        OrderStatus.READY_FOR_PICKUP,
         OrderStatus.CANCELLED,
       ],
       OUT_FOR_DELIVERY: [
-        OrderStatus.DELIVERED,
+        OrderStatus.COMPLETED,
       ],
-      DELIVERED: [],
+      READY_FOR_PICKUP: [
+        OrderStatus.COMPLETED,
+      ],
+      COMPLETED: [],
       CANCELLED: [],
     };
 
@@ -841,6 +1054,33 @@ export class OrdersService {
 
     return rate;
   }
+
+    private getPasabuyDeliveryFee(): Prisma.Decimal {
+    const rawFee =
+      this.configService.get<string>(
+        'PASABUY_DELIVERY_FEE',
+        '35',
+      );
+
+    let fee: Prisma.Decimal;
+
+    try {
+      fee = new Prisma.Decimal(rawFee);
+    } catch {
+      throw new BadRequestException(
+        'PASABUY_DELIVERY_FEE must be a valid number',
+      );
+    }
+
+    if (fee.lessThan(0)) {
+      throw new BadRequestException(
+        'PASABUY_DELIVERY_FEE must be zero or greater',
+      );
+    }
+
+    return fee;
+  }
+
   private buildOrderResponse(
     order: Prisma.OrderGetPayload<{
       include: {
@@ -855,7 +1095,7 @@ export class OrdersService {
   ) {
     const estimatedWaitMinutes =
       order.estimatedReadyAt &&
-      order.status !== OrderStatus.DELIVERED &&
+      order.status !== OrderStatus.COMPLETED &&
       order.status !== OrderStatus.CANCELLED
         ? Math.max(
             0,
@@ -877,6 +1117,9 @@ export class OrdersService {
       eventId: order.eventId,
       orderType: order.orderType,
       status: order.status,
+      isPasabuyRequest: order.isPasabuyRequest,
+      cancellationReason: order.cancellationReason,
+      cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
       pickupConfirmedAt: order.pickupConfirmedAt,
       estimatedWaitMinutes,

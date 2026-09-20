@@ -2,15 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   Check,
+  CreditCard,
   Eye,
   EyeOff,
   LogOut,
   MoonStar,
   PencilLine,
   ShieldCheck,
+  Store,
   SunMedium,
   Trash2,
   UserRound,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -27,14 +30,21 @@ import { Switch } from "@/components/ui/switch";
 import {
   getMyOrders,
   getMyProfile,
-  listVendors,
+  getMyFavoriteVendors,
   changeMyPassword,
   logoutUser,
   updateMyProfile,
   type CustomerOrder,
-  type VendorStorefront,
+  type VendorSummary,
 } from "@/features/auth/api";
 import { useRequireAuth } from "@/hooks/use-require-auth";
+import { PaymentMethodForm } from "@/features/payments/payment-method-form";
+import {
+  getSavedPaymentMethod,
+  PAYMENT_METHOD_CHANGED_EVENT,
+  removeSavedPaymentMethod,
+  type SavedPaymentMethod,
+} from "@/features/payments/payment-method";
 
 type Theme = "light" | "dark";
 
@@ -80,16 +90,15 @@ export default function ProfilePage() {
     phone: "",
   });
   const [orders, setOrders] = useState<CustomerOrder[]>([]);
-  const [vendors, setVendors] = useState<VendorStorefront[]>([]);
-  const [favoriteVendorId, setFavoriteVendorId] = useState(
-    () => localStorage.getItem("favorite-vendor-id") || "",
-  );
+  const [favoriteVendors, setFavoriteVendors] = useState<VendorSummary[]>([]);
   const [theme, setThemeState] = useState<Theme>(() =>
     localStorage.getItem("theme") === "dark" ? "dark" : "light",
   );
   const [seePasabuyRequest, setSeePasabuyRequest] = useState(
     () => localStorage.getItem("see-pasabuy-request") === "true",
   );
+  const [allowParticipantOrderCompletion, setAllowParticipantOrderCompletion] = useState(false);
+  const [isSavingGroupOrderSetting, setIsSavingGroupOrderSetting] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(true);
   const [dyslexicFont, setDyslexicFont] = useState(false);
   const [nameError, setNameError] = useState("");
@@ -99,17 +108,24 @@ export default function ProfilePage() {
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<SavedPaymentMethod | null>(getSavedPaymentMethod);
+  const [isEditingPaymentMethod, setIsEditingPaymentMethod] = useState(false);
+  const [showVendorApplyForm, setShowVendorApplyForm] = useState(false);
+  const [vendorApplicationSubmitted, setVendorApplicationSubmitted] = useState(false);
+  const [vendorBusinessName, setVendorBusinessName] = useState("");
+  const [vendorDescription, setVendorDescription] = useState("");
 
   useEffect(() => {
-    Promise.all([getMyProfile(), getMyOrders(), listVendors()])
-      .then(([user, customerOrders, vendorList]) => {
+    Promise.all([getMyProfile(), getMyOrders(), getMyFavoriteVendors()])
+      .then(([user, customerOrders, favoriteVendorList]) => {
         setProfile({
           fullName: user.fullName,
           email: user.email,
           phone: user.phone || "",
         });
+        setAllowParticipantOrderCompletion(user.allowParticipantOrderCompletion ?? false);
         setOrders(customerOrders);
-        setVendors(vendorList);
+        setFavoriteVendors(favoriteVendorList);
       })
       .catch((error: unknown) =>
         setMessage({
@@ -127,13 +143,16 @@ export default function ProfilePage() {
     window.dispatchEvent(new Event("queueless-theme-changed"));
   }, [theme]);
 
+  useEffect(() => {
+    const refreshPaymentMethod = () => setPaymentMethod(getSavedPaymentMethod());
+    window.addEventListener(PAYMENT_METHOD_CHANGED_EVENT, refreshPaymentMethod);
+    return () => window.removeEventListener(PAYMENT_METHOD_CHANGED_EVENT, refreshPaymentMethod);
+  }, []);
+
   const nameParts = profile.fullName.trim().split(/\s+/).filter(Boolean);
   const firstName = nameParts[0] || "";
   const lastName = nameParts.slice(1).join(" ");
   const incomplete = !firstName || !lastName || !profile.phone;
-  const favoriteVendor = vendors.find(
-    (vendor) => vendor.id === favoriteVendorId,
-  );
   const latestOrder = orders[0];
   const mostOrdered = useMemo(() => {
     const counts = new Map<string, { name: string; quantity: number }>();
@@ -198,11 +217,6 @@ export default function ProfilePage() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const chooseFavorite = (vendorId: string) => {
-    setFavoriteVendorId(vendorId);
-    localStorage.setItem("favorite-vendor-id", vendorId);
   };
 
   const savePassword = async () => {
@@ -361,36 +375,29 @@ export default function ProfilePage() {
               <CardContent className="relative z-10 flex min-h-47.5 flex-col justify-between p-5">
                 <div>
                   <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
-                    Favorite Vendor
+                    Favorite Vendors {favoriteVendors.length > 0 && `(${favoriteVendors.length})`}
                   </p>
-                  {favoriteVendor ? (
-                    <>
-                      <h3 className="mt-3 text-xl font-semibold text-foreground">
-                        {favoriteVendor.name}
-                      </h3>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {favoriteVendor.description ||
-                          "Your favorite campus vendor"}
-                      </p>
-                    </>
-                  ) : (
+                  {favoriteVendors.length === 0 && (
                     <p className="mt-8 text-sm text-muted-foreground">
-                      Choose a vendor to save it here
+                      Star a vendor's store to save it here
                     </p>
                   )}
                 </div>
-                <select
-                  value={favoriteVendorId}
-                  onChange={(event) => chooseFavorite(event.target.value)}
-                  className="mt-4 h-9 w-full appearance-none rounded-full border border-border bg-background px-3 pr-8 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring hover:outline hover:outline-primary "
-                >
-                  <option value="">Add favorite vendor</option>
-                  {vendors.map((vendor) => (
-                    <option key={vendor.id} value={vendor.id}>
-                      {vendor.name}
-                    </option>
-                  ))}
-                </select>
+                {favoriteVendors.length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {favoriteVendors.map((vendor) => (
+                      <button
+                        key={vendor.id}
+                        type="button"
+                        title={vendor.name}
+                        onClick={() => (window.location.href = `/store/${vendor.id}`)}
+                        className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-background bg-primary text-sm font-bold text-primary-foreground shadow-sm transition-transform hover:scale-105"
+                      >
+                        {vendor.name.charAt(0).toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -709,6 +716,23 @@ export default function ProfilePage() {
                   }}
                 />
               </div>
+              <div className="flex items-center justify-between rounded-[18px] border border-border bg-secondary/30 p-3">
+                <span className="text-sm font-medium">
+                  Let group members complete orders for me
+                </span>
+                <Switch
+                  checked={allowParticipantOrderCompletion}
+                  disabled={isSavingGroupOrderSetting}
+                  onCheckedChange={(checked) => {
+                    const previous = allowParticipantOrderCompletion;
+                    setAllowParticipantOrderCompletion(checked);
+                    setIsSavingGroupOrderSetting(true);
+                    updateMyProfile({ allowParticipantOrderCompletion: checked })
+                      .catch(() => setAllowParticipantOrderCompletion(previous))
+                      .finally(() => setIsSavingGroupOrderSetting(false));
+                  }}
+                />
+              </div>
               <div className="rounded-[18px] border border-border bg-secondary/30 p-3">
                 <p className="text-sm font-medium">Theme</p>
                 <div className="mt-3 grid grid-cols-2 gap-2">
@@ -734,6 +758,148 @@ export default function ProfilePage() {
               </div>
             </CardContent>
           </Card>
+
+          <Card id="payment-method-card" className="border-card-border/80 bg-card/90 shadow-sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-2xl tracking-tighter">
+                <CreditCard className="h-5 w-5 text-primary" />
+                Payment method
+              </CardTitle>
+              <CardDescription>
+                Optional — save a payment method here for your own reference. You'll still
+                choose how to pay on PayMongo's checkout page when you order.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isEditingPaymentMethod ? (
+                <PaymentMethodForm
+                  onSaved={() => setIsEditingPaymentMethod(false)}
+                  onCancel={paymentMethod ? () => setIsEditingPaymentMethod(false) : undefined}
+                />
+              ) : paymentMethod ? (
+                <div className="flex items-center justify-between gap-3 rounded-[18px] border border-border bg-secondary/30 p-3">
+                  <div>
+                    <p className="text-sm font-medium">{paymentMethod.label}</p>
+                    <p className="text-xs text-muted-foreground">PayMongo Sandbox</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="rounded-full"
+                      onClick={() => setIsEditingPaymentMethod(true)}
+                    >
+                      Change
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="rounded-full text-destructive hover:bg-destructive/10"
+                      onClick={removeSavedPaymentMethod}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-[18px] border border-dashed border-border bg-secondary/30 p-4 text-center">
+                  <p className="text-sm font-medium text-foreground">
+                    No payment method on file
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="mt-3 rounded-full"
+                    onClick={() => setIsEditingPaymentMethod(true)}
+                  >
+                    Add payment method
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-card-border/80 bg-card/90 shadow-sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-2xl tracking-tighter">
+                <Store className="h-5 w-5 text-primary" />
+                Become a vendor
+              </CardTitle>
+              <CardDescription>
+                Sell food or goods on campus as a student vendor.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {vendorApplicationSubmitted ? (
+                <div className="rounded-[18px] border border-emerald-500/30 bg-emerald-500/10 p-4 text-center">
+                  <Check className="mx-auto h-5 w-5 text-emerald-600" />
+                  <p className="mt-2 text-sm font-medium text-foreground">
+                    Application submitted
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    We'll review your vendor application and get back to you.
+                  </p>
+                </div>
+              ) : showVendorApplyForm ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium">Vendor application</p>
+                    <button
+                      type="button"
+                      onClick={() => setShowVendorApplyForm(false)}
+                      className="text-muted-foreground hover:text-foreground"
+                      aria-label="Close vendor application form"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    <label htmlFor="vendor-business-name" className="text-sm font-medium">
+                      Business / stall name
+                    </label>
+                    <Input
+                      id="vendor-business-name"
+                      value={vendorBusinessName}
+                      onChange={(event) => setVendorBusinessName(event.target.value)}
+                      placeholder="e.g. North Loop Kitchen"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label htmlFor="vendor-description" className="text-sm font-medium">
+                      What will you sell?
+                    </label>
+                    <Input
+                      id="vendor-description"
+                      value={vendorDescription}
+                      onChange={(event) => setVendorDescription(event.target.value)}
+                      placeholder="e.g. Rice meals and snacks"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    className="w-full rounded-full"
+                    disabled={!vendorBusinessName.trim()}
+                    onClick={() => setVendorApplicationSubmitted(true)}
+                  >
+                    Submit application
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full gap-2 rounded-full"
+                  onClick={() => setShowVendorApplyForm(true)}
+                >
+                  <Store className="h-4 w-4" />
+                  Apply to be a student vendor
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+
           <Card className="border-card-border/80 bg-card/90 shadow-sm">
             <CardContent className="p-5">
               <div className="flex items-center gap-3 rounded-[18px] border border-border bg-secondary/30 p-3">

@@ -1,0 +1,19 @@
+AvrilMatanguihan, Mashoge
+
+## TopicHeader
+
+Built the `/admin` frontend (dashboard, refunds, users) against mock data since none of this exists server-side yet. Backend work needed to make it real:
+
+1. **Admin dashboard metrics.** No `GET /admin/dashboard` (or similar) endpoint exists — `admin.controller.ts` only has the `GET /admin` 501 stub. The frontend (`artifacts/frontend/src/features/admin/admin-dashboard.tsx`) expects something like: total students, total vendors, orders today (active + completed), platform revenue today, pending refund count, and new signups in the last 7 days, plus a short recent-activity feed (order placed, vendor approved, refund requested, etc.). Suggested shape matches `AdminMetrics`/`ActivityEvent` in `artifacts/frontend/src/features/admin/admin-data.ts` — aggregate off `User` (by role via `RoleAssignment`), `Vendor`, `Order`, `Refund`.
+
+2. **Refunds module is a dead route.** `refunds.controller.ts`'s single handler has no `@Get`/`@Post` decorator, so nothing is actually routed — there is no way for a buyer/vendor to request a refund at all today, and no admin endpoint to list/approve/deny them. Needs: a user-facing `POST /refunds` (creates a `Refund` row, status `REQUESTED`, linked to a `Payment`/`OrderItem`), and admin-facing `GET /refunds` (list, filterable by status) + `PATCH /refunds/:id` (transition `REQUESTED → APPROVED/DENIED`, `APPROVED → PROCESSED`), guarded by `@Roles('ADMIN')` like `AdminController` already does. Frontend expects the shape in `RefundRequest` (`admin-data.ts`) — `admin-refunds.tsx` already has the approve/deny/mark-processed UI wired to local state, just needs real endpoints to call.
+
+3. **No admin user-management endpoints at all.** `users.controller.ts` only has self-service `GET/PATCH /users/me` and `PATCH /users/me/password` — no admin can list all users, create a user, change someone else's role, or activate/deactivate/archive an account. Needed, all under `@Roles('ADMIN')`:
+   - `GET /admin/users` (list, with search/filter)
+   - `POST /admin/users` (create — the register flow's `RegisterDto.role` is also locked to `'student'|'vendor'`, so admin creation needs its own path since `UserRole.ADMIN` isn't reachable from `/auth/register` today)
+   - `PATCH /admin/users/:id/roles` (add/revoke `RoleAssignment` rows — remember these are soft-revoked via `revokedAt`, not deleted, per the existing `login()`/`register()` pattern)
+   - `PATCH /admin/users/:id/status` (toggle `isActive`; there's no archive concept in the schema yet — `User` would need something like an `archivedAt DateTime?` column added if "archive" should be distinct from "inactive," which the frontend currently treats as two separate states)
+
+4. **User consent before admin can view/change email or password.** Explicitly called out as backend work by the client: an admin should only be able to see or change a user's email/password after that user has granted permission. Nothing like this exists — no consent/grant model, no `PATCH /admin/users/:id/email` or `/password`. Needs a new concept (e.g. a `dataAccessGrantedAt DateTime?` column on `User`, settable only by the user themselves from their own profile settings, checked before allowing the two admin endpoints above to touch `email`/`passwordHash`). The frontend (`admin-users.tsx`) already renders both the locked and granted states — see `dataAccessGranted` on `AdminUserRow` in `admin-data.ts`.
+
+Note: I seeded a real admin login for testing the frontend shell (`artifacts/api-server/prisma/seed.ts`) — `admin@queueless.com` / `Password123!` — separate from the existing `admin@test.queueless.dev` account. No migration was needed for that (schema already supports `ADMIN` via `RoleAssignment`); run `npm run seed` to apply it if it hasn't been run since this was added.

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
-  Check,
   ChevronDown,
   Clock3,
   MapPin,
@@ -10,9 +9,31 @@ import {
   ShoppingBag,
   Trash2,
   Truck,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { createOrder, fetchWithAuth } from "@/features/auth/api";
+import {
+  createGroupOrder,
+  createOrder,
+  createPaymentCheckout,
+  fetchWithAuth,
+  getOrderPaymentStatus,
+  joinGroupOrderByCode,
+} from "@/features/auth/api";
+import {
+  canTrackNewOrder,
+  getTrackedOrderIds,
+  MAX_TRACKED_ORDERS,
+  ORDER_TRACKING_CHANGED_EVENT,
+  startOrderTracking,
+} from "@/features/orders/order-tracking";
+import { GroupOrderCartView } from "@/features/group-orders/group-order-cart-view";
+import {
+  GROUP_ORDER_SESSION_CHANGED_EVENT,
+  getGroupOrderSession,
+  setGroupOrderSession,
+  type GroupOrderSession,
+} from "@/features/group-orders/group-order-session";
 
 export interface CartOption {
   name: string;
@@ -28,6 +49,9 @@ export interface CartItem {
   price: number;
   quantity: number;
   options: CartOption[];
+  /** Extras the vendor marked eligible for this specific product. */
+  availableExtras?: CartOption[];
+  preparationTimeMinutes?: number;
 }
 
 export const CART_CHANGED_EVENT = "queueless-cart-changed";
@@ -78,6 +102,7 @@ export function addCartItem(
     existingItem.quantity += 1;
     existingItem.vendorId = item.vendorId || existingItem.vendorId;
     existingItem.storeName = item.storeName || existingItem.storeName;
+    existingItem.availableExtras = item.availableExtras ?? existingItem.availableExtras;
   } else {
     items.push({
       ...item,
@@ -107,15 +132,77 @@ export default function CartPage() {
   const [promoApplied, setPromoApplied] = useState(false);
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isConfirmed, setIsConfirmed] = useState(false);
-  const [finalTotal, setFinalTotal] = useState(0);
-  const [finalStoreName, setFinalStoreName] = useState("Campus Shop");
+  const [isRedirectingToPaymongo, setIsRedirectingToPaymongo] = useState(false);
+  const [trackedOrderCount, setTrackedOrderCount] = useState(() => getTrackedOrderIds().length);
+  const [groupSession, setGroupSession] = useState<GroupOrderSession | null>(getGroupOrderSession);
+  const [joinCode, setJoinCode] = useState("");
+  const [isStartingGroupOrder, setIsStartingGroupOrder] = useState(false);
+  const [groupOrderActionError, setGroupOrderActionError] = useState<string | null>(null);
 
   useEffect(() => {
     const refreshCart = () => setItems(getCartItems());
     window.addEventListener(CART_CHANGED_EVENT, refreshCart);
     return () => window.removeEventListener(CART_CHANGED_EVENT, refreshCart);
   }, []);
+
+  useEffect(() => {
+    const refreshGroupSession = () => setGroupSession(getGroupOrderSession());
+    window.addEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, refreshGroupSession);
+    return () =>
+      window.removeEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, refreshGroupSession);
+  }, []);
+
+  useEffect(() => {
+    const refreshTrackedCount = () => setTrackedOrderCount(getTrackedOrderIds().length);
+    window.addEventListener(ORDER_TRACKING_CHANGED_EVENT, refreshTrackedCount);
+    return () => window.removeEventListener(ORDER_TRACKING_CHANGED_EVENT, refreshTrackedCount);
+  }, []);
+
+  const handleCreateGroupOrder = async () => {
+    if (isStartingGroupOrder) return;
+    setIsStartingGroupOrder(true);
+    setGroupOrderActionError(null);
+    try {
+      const groupOrder = await createGroupOrder();
+      setGroupOrderSession({
+        groupOrderId: groupOrder.id,
+        code: groupOrder.code,
+        isOwner: true,
+        vendorId: groupOrder.vendor?.id ?? null,
+        vendorName: groupOrder.vendor?.name ?? null,
+      });
+    } catch (error) {
+      setGroupOrderActionError(
+        error instanceof Error ? error.message : "Could not create a group order.",
+      );
+    } finally {
+      setIsStartingGroupOrder(false);
+    }
+  };
+
+  const handleJoinGroupOrder = async () => {
+    const code = joinCode.trim();
+    if (!code || isStartingGroupOrder) return;
+    setIsStartingGroupOrder(true);
+    setGroupOrderActionError(null);
+    try {
+      const groupOrder = await joinGroupOrderByCode(code);
+      setGroupOrderSession({
+        groupOrderId: groupOrder.id,
+        code: groupOrder.code,
+        isOwner: false,
+        vendorId: groupOrder.vendor?.id ?? null,
+        vendorName: groupOrder.vendor?.name ?? null,
+      });
+      setJoinCode("");
+    } catch (error) {
+      setGroupOrderActionError(
+        error instanceof Error ? error.message : "Could not join that group order.",
+      );
+    } finally {
+      setIsStartingGroupOrder(false);
+    }
+  };
 
   const subtotal = useMemo(
     () => items.reduce((total, item) => total + cartItemTotal(item), 0),
@@ -158,13 +245,19 @@ export default function CartPage() {
 
   const submitOrder = async () => {
     if (isSubmitting || !items.length) return;
+    if (!canTrackNewOrder()) {
+      alert(
+        `You already have ${MAX_TRACKED_ORDERS} orders being tracked. Complete or dismiss one before placing another.`,
+      );
+      return;
+    }
     setIsSubmitting(true);
     try {
       let activeCartId = "";
       for (const item of items) {
         console.log("Debugging item object:", item);
         console.log("Current item id:", item.id);
-
+        
         const cartResponse: any = await fetchWithAuth('/carts/items', {
           method: 'POST',
           body: JSON.stringify({
@@ -182,59 +275,33 @@ export default function CartPage() {
         throw new Error("Could not retrieve active cart ID.");
       }
 
-      await createOrder({
+      const order = await createOrder({
         cartId: activeCartId,
+        isPasabuyRequest: delivery,
       });
 
-      // I-save muna ang total at storeName bago i-clear ang cart items
-      setFinalTotal(total);
-      setFinalStoreName(storeName);
-      setIsConfirmed(true);
+      const orderId = order?.id;
+      if (!orderId) {
+        throw new Error("Order was created without an id.");
+      }
+
+      startOrderTracking(orderId);
       saveCartItems([]);
+
+      setIsRedirectingToPaymongo(true);
+      const paymentStatus = await getOrderPaymentStatus(orderId);
+      const checkout = await createPaymentCheckout(paymentStatus.paymentShare.id);
+      window.location.href = checkout.checkoutUrl;
     } catch (error) {
       console.error("Failed to submit order:", error);
       alert("Failed to submit order. Please try again.");
-    } finally {
       setIsSubmitting(false);
+      setIsRedirectingToPaymongo(false);
     }
   };
 
-  if (isConfirmed) {
-    return (
-      <main className="mx-auto flex min-h-[70dvh] w-full max-w-2xl items-center justify-center px-4 py-12">
-        <section className="w-full rounded-[28px] border border-emerald-500/30 bg-card p-8 text-center shadow-md sm:p-12">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500 text-white">
-            <Check className="h-8 w-8" />
-          </div>
-          <p className="mt-6 font-mono text-[10px] uppercase tracking-[0.18em] text-emerald-600">
-            Order submitted
-          </p>
-          <h1 className="mt-2 text-3xl font-bold tracking-[-0.06em] text-foreground">
-            Your food is on its way.
-          </h1>
-          <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-muted-foreground">
-            {finalStoreName} has received your order. Pick it up at the Student
-            Center when it is ready.
-          </p>
-          <div className="mx-auto mt-8 max-w-sm rounded-2xl bg-secondary/60 p-4 text-left text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Order total</span>
-              <strong>{currency(finalTotal)}</strong>
-            </div>
-            <div className="mt-2 flex items-center justify-between">
-              <span className="text-muted-foreground">Estimated wait</span>
-              <strong>12-18 min</strong>
-            </div>
-          </div>
-          <Button
-            className="mt-8 rounded-full"
-            onClick={() => (window.location.href = "/")}
-          >
-            Continue browsing
-          </Button>
-        </section>
-      </main>
-    );
+  if (groupSession) {
+    return <GroupOrderCartView session={groupSession} />;
   }
 
   return (
@@ -255,17 +322,24 @@ export default function CartPage() {
             Ready when you are.
           </h1>
         </div>
-        {!!items.length && (
-          <div className="text-left sm:text-right">
-            <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground sm:justify-end">
-              <MapPin className="h-4 w-4 text-primary" /> {storeName}
-            </p>
-            <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground sm:justify-end">
-              <Clock3 className="h-3.5 w-3.5" /> Pickup at Student Center •
-              12-18 min
-            </p>
-          </div>
-        )}
+        {!!items.length && (() => {
+          const maxPrep = items.reduce((max, item) => {
+            const p = typeof item.preparationTimeMinutes === 'number' ? item.preparationTimeMinutes : 15;
+            return p > max ? p : max;
+          }, 0);
+          const displayPrep = maxPrep > 0 ? maxPrep : 15;
+          return (
+            <div className="text-left sm:text-right">
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground sm:justify-end">
+                <MapPin className="h-4 w-4 text-primary" /> {storeName}
+              </p>
+              <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground sm:justify-end">
+                <Clock3 className="h-3.5 w-3.5" /> Pickup at Student Center •
+                {displayPrep} min
+              </p>
+            </div>
+          );
+        })()}
       </div>
 
       {!items.length ? (
@@ -275,6 +349,47 @@ export default function CartPage() {
           <p className="mt-2 text-sm text-muted-foreground">
             Add something delicious from a campus shop to get started.
           </p>
+
+          <div className="mx-auto mt-6 max-w-sm space-y-3">
+            <Button
+              variant="outline"
+              className="w-full gap-2 rounded-full"
+              disabled={isStartingGroupOrder}
+              onClick={handleCreateGroupOrder}
+            >
+              <Users className="h-4 w-4" />
+              {isStartingGroupOrder ? "Creating..." : "Create Group Order"}
+            </Button>
+
+            <form
+              className="flex items-center rounded-[20px] border border-border bg-card px-4 py-1"
+              onSubmit={(event) => {
+                event.preventDefault();
+                handleJoinGroupOrder();
+              }}
+            >
+              <input
+                value={joinCode}
+                onChange={(event) => setJoinCode(event.target.value)}
+                placeholder="Enter group order code"
+                inputMode="text"
+                enterKeyHint="go"
+                className="h-11 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              />
+              <button
+                type="submit"
+                disabled={isStartingGroupOrder || !joinCode.trim()}
+                className="px-2 py-2 text-xs font-bold text-primary disabled:opacity-50"
+              >
+                Join
+              </button>
+            </form>
+
+            {groupOrderActionError && (
+              <p className="text-xs text-destructive">{groupOrderActionError}</p>
+            )}
+          </div>
+
           <Button
             className="mt-6 rounded-full"
             onClick={() => (window.location.href = "/")}
@@ -385,31 +500,34 @@ export default function CartPage() {
                               Extra options
                             </p>
 
-                            {[
-                              { name: "Extra Sauce", price: 15 },
-                              { name: "Chili crisp", price: 10 },
-                            ].map((option) => (
-                              <label
-                                key={option.name}
-                                className="mt-3 flex cursor-pointer items-center justify-between text-sm"
-                              >
-                                <span>
-                                  {option.name}{" "}
-                                  <span className="text-muted-foreground">
-                                    +{currency(option.price)}
+                            {!item.availableExtras || item.availableExtras.length === 0 ? (
+                              <p className="mt-2 text-xs text-muted-foreground">
+                                No extras available for this item.
+                              </p>
+                            ) : (
+                              item.availableExtras.map((option) => (
+                                <label
+                                  key={option.name}
+                                  className="mt-3 flex cursor-pointer items-center justify-between text-sm"
+                                >
+                                  <span>
+                                    {option.name}{" "}
+                                    <span className="text-muted-foreground">
+                                      +{currency(option.price)}
+                                    </span>
                                   </span>
-                                </span>
 
-                                <input
-                                  type="checkbox"
-                                  checked={item.options.some(
-                                    (current) => current.name === option.name,
-                                  )}
-                                  onChange={() => toggleOption(item.id, option)}
-                                  className="h-4 w-4 accent-primary"
-                                />
-                              </label>
-                            ))}
+                                  <input
+                                    type="checkbox"
+                                    checked={item.options.some(
+                                      (current) => current.name === option.name,
+                                    )}
+                                    onChange={() => toggleOption(item.id, option)}
+                                    className="h-4 w-4 accent-primary"
+                                  />
+                                </label>
+                              ))
+                            )}
                           </div>
                         </div>
                       </div>
@@ -562,15 +680,21 @@ export default function CartPage() {
 
               <Button
                 type="button"
-                disabled={isSubmitting}
+                disabled={isSubmitting || trackedOrderCount >= MAX_TRACKED_ORDERS}
                 onClick={submitOrder}
                 className="mt-5 w-full rounded-full"
               >
-                {isSubmitting ? "Submitting..." : "Order Now"}
+                {isRedirectingToPaymongo
+                  ? "Redirecting to PayMongo..."
+                  : isSubmitting
+                    ? "Submitting..."
+                    : "Order Now"}
               </Button>
 
               <p className="mt-3 text-center text-[11px] text-muted-foreground">
-                Your order is submitted securely to the shop.
+                {trackedOrderCount >= MAX_TRACKED_ORDERS
+                  ? `You have ${MAX_TRACKED_ORDERS} orders in progress. Complete or dismiss one to order again.`
+                  : `You'll be redirected to PayMongo Sandbox to complete payment. (${trackedOrderCount}/${MAX_TRACKED_ORDERS} active orders)`}
               </p>
             </section>
           </div>

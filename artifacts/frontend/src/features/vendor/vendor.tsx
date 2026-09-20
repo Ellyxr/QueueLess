@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -21,6 +21,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { createPortal } from 'react-dom';
+import { useLocation } from 'wouter';
 import { useRequireAuth } from '@/hooks/use-require-auth';
 import {
   createProduct,
@@ -37,6 +38,7 @@ import {
   type VendorStorefront,
   type VendorQueueOrder,
 } from '@/features/auth/api';
+import { EXTRA_CATEGORY } from '@/lib/product-extras';
 
 interface Product {
   id: string;
@@ -44,18 +46,52 @@ interface Product {
   price: number;
   description: string;
   category: string;
+  preparationTimeMinutes: number;
   image?: string;
   isAvailable: boolean;
+  eligibleExtraIds: string[];
 }
+
+function getNextOrderStatus(
+  order: VendorQueueOrder,
+): { label: string; next: string } | null {
+  switch (order.status) {
+    case 'PENDING':
+      // Payment is confirmed automatically by the PayMongo webhook once the
+      // buyer pays — vendors have no manual action while an order is unpaid.
+      return null;
+    case 'PAID':
+      return { label: 'Start Cooking', next: 'COOKING' };
+    case 'COOKING':
+      return order.isPasabuyRequest
+        ? { label: 'Out for Delivery', next: 'OUT_FOR_DELIVERY' }
+        : { label: 'Ready for Pickup', next: 'READY_FOR_PICKUP' };
+    case 'OUT_FOR_DELIVERY':
+    case 'READY_FOR_PICKUP':
+      return { label: 'Mark Completed', next: 'COMPLETED' };
+    default:
+      return null;
+  }
+}
+
+const CANCELLATION_REASONS: { value: string; label: string }[] = [
+  { value: 'NOT_AVAILABLE', label: 'Not available' },
+  { value: 'CUSTOMER_REQUEST', label: 'Customer request' },
+  { value: 'CLOSING_EARLY', label: 'Closing early' },
+  { value: 'OTHER', label: 'Other' },
+];
 
 export default function VendorPage({ username = 'Jordan' }: { username?: string }) {
   useRequireAuth(['vendor', 'student_vendor', 'admin']);
+  const [, setLocation] = useLocation();
 
   // US-012 State Management
   const [products, setProducts] = useState<Product[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalKind, setModalKind] = useState<'product' | 'extra'>('product');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [extraSearch, setExtraSearch] = useState('');
 
   // Form State
   const [formData, setFormData] = useState({
@@ -63,10 +99,13 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     price: '',
     description: '',
     category: '',
+    preparationTime: '15',
     image: '',
+    eligibleExtraIds: [] as string[],
   });
   const [imagePreview, setImagePreview] = useState<string>('');
-  const [formErrors, setFormErrors] = useState<{ name?: string; price?: string; description?: string }>({});
+  const [formErrors, setFormErrors] = useState<{ name?: string; price?: string; description?: string; preparationTime?: string }>({});
+  const [isCategoryMenuOpen, setIsCategoryMenuOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [vendor, setVendor] = useState<VendorStorefront | null>(null);
   const [storefrontData, setStorefrontData] = useState({ name: '', description: '', campusLocation: '' });
@@ -85,6 +124,10 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
 
   // US-018 State Management
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+  const isUpdatingStatusRef = useRef(false);
+  const [cancelTarget, setCancelTarget] = useState<VendorQueueOrder | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelNote, setCancelNote] = useState('');
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
@@ -138,6 +181,35 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
       });
   }, []);
 
+  // Poll the queue so a PayMongo webhook confirming payment flips an order
+  // to "Paid" here without the vendor needing to refresh the page.
+  useEffect(() => {
+    const QUEUE_POLL_INTERVAL_MS = 8000;
+
+    const refreshQueue = () => {
+      getVendorOrderQueue()
+        .then((data: unknown) => {
+          const list: VendorQueueOrder[] = Array.isArray(data)
+            ? data
+            : Array.isArray((data as { orders?: unknown })?.orders)
+            ? ((data as { orders: VendorQueueOrder[] }).orders)
+            : Array.isArray((data as { data?: unknown })?.data)
+            ? ((data as { data: VendorQueueOrder[] }).data)
+            : [];
+          setOrderQueue(list);
+          setSelectedOrder((prev) =>
+            prev ? list.find((order) => order.id === prev.id) ?? prev : prev,
+          );
+        })
+        .catch(() => {
+          // Silent — the next poll will retry, no need to spam the toast.
+        });
+    };
+
+    const timer = window.setInterval(refreshQueue, QUEUE_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const handleSaveStorefront = async (event: React.FormEvent) => {
     event.preventDefault();
     const errors: typeof storefrontErrors = {};
@@ -175,27 +247,43 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     price: Number(product.price),
     description: product.description || '',
     category: product.category || 'General',
+    preparationTimeMinutes: product.preparationTimeMinutes ?? 15,
     image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
     isAvailable: product.isAvailable,
+    eligibleExtraIds: product.eligibleExtras?.map((extra) => extra.id) ?? [],
   });
 
-  const handleOpenModal = (product?: Product) => {
+  const handleOpenModal = (product?: Product, kind: 'product' | 'extra' = 'product') => {
     if (product) {
+      const resolvedKind = product.category === EXTRA_CATEGORY ? 'extra' : 'product';
+      setModalKind(resolvedKind);
       setEditingProduct(product);
       setFormData({
         name: product.name,
         price: product.price.toString(),
         description: product.description,
         category: product.category || 'General',
+        preparationTime: String(product.preparationTimeMinutes ?? 15),
         image: product.image || '',
+        eligibleExtraIds: product.eligibleExtraIds,
       });
       setImagePreview(product.image || '');
     } else {
+      setModalKind(kind);
       setEditingProduct(null);
-      setFormData({ name: '', price: '', description: '', category: '', image: '' });
+      setFormData({
+        name: '',
+        price: '',
+        description: '',
+        category: kind === 'extra' ? EXTRA_CATEGORY : '',
+        preparationTime: '15',
+        image: '',
+        eligibleExtraIds: [],
+      });
       setImagePreview('');
     }
     setFormErrors({});
+    setIsCategoryMenuOpen(false);
     setIsModalOpen(true);
   };
 
@@ -214,7 +302,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   };
 
   const validateForm = () => {
-    const errors: { name?: string; price?: string; description?: string } = {};
+    const errors: { name?: string; price?: string; description?: string; preparationTime?: string } = {};
     if (!formData.name.trim()) errors.name = 'Product name is required';
     if (!formData.price.trim()) {
       errors.price = 'Price is required';
@@ -222,6 +310,15 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
       errors.price = 'Price must be a valid positive number';
     }
     if (!formData.description.trim()) errors.description = 'Description is required';
+    if (!formData.preparationTime.trim()) {
+      errors.preparationTime = 'Preparation time is required';
+    } else if (
+      !Number.isInteger(Number(formData.preparationTime)) ||
+      Number(formData.preparationTime) < 1 ||
+      Number(formData.preparationTime) > 180
+    ) {
+      errors.preparationTime = 'Enter a whole number of minutes between 1 and 180';
+    }
 
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
@@ -231,7 +328,12 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     e.preventDefault();
     if (!validateForm()) return;
 
-    const finalCategory = formData.category.trim() ? formData.category.trim() : 'General';
+    const finalCategory =
+      modalKind === 'extra'
+        ? EXTRA_CATEGORY
+        : formData.category.trim()
+          ? formData.category.trim()
+          : 'General';
     setIsProductSaving(true);
     try {
       const data = {
@@ -239,7 +341,9 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
         price: Number(formData.price),
         description: formData.description.trim(),
         category: finalCategory,
-        isAvailable: true,
+        preparationTimeMinutes: Number(formData.preparationTime),
+        isAvailable: editingProduct ? editingProduct.isAvailable : true,
+        ...(modalKind === 'product' ? { eligibleExtraIds: formData.eligibleExtraIds } : {}),
       };
       const savedProduct = editingProduct
         ? await updateProduct(editingProduct.id, data)
@@ -252,7 +356,15 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
             )
           : [mappedProduct, ...prev],
       );
-      showToast(editingProduct ? 'Product updated successfully!' : 'New product added to store!');
+      showToast(
+        modalKind === 'extra'
+          ? editingProduct
+            ? 'Extra updated successfully!'
+            : 'New extra added to store!'
+          : editingProduct
+            ? 'Product updated successfully!'
+            : 'New product added to store!',
+      );
       setIsModalOpen(false);
     } catch (error: unknown) {
       showToast(error instanceof Error ? error.message : 'Unable to save product.', 'error');
@@ -261,49 +373,137 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     }
   };
 
+  const handleToggleAvailability = async (product: Product) => {
+    const nextAvailable = !product.isAvailable;
+    setProducts((prev) =>
+      prev.map((p) => (p.id === product.id ? { ...p, isAvailable: nextAvailable } : p)),
+    );
+    try {
+      await updateProduct(product.id, {
+        name: product.name,
+        price: product.price,
+        description: product.description,
+        category: product.category,
+        preparationTimeMinutes: product.preparationTimeMinutes,
+        isAvailable: nextAvailable,
+      });
+      showToast(`${product.name} marked as ${nextAvailable ? 'available' : 'unavailable'}`);
+    } catch (error: unknown) {
+      setProducts((prev) =>
+        prev.map((p) => (p.id === product.id ? { ...p, isAvailable: !nextAvailable } : p)),
+      );
+      showToast(error instanceof Error ? error.message : 'Unable to update availability.', 'error');
+    }
+  };
+
   const handleDeleteProduct = async () => {
     if (!deleteTargetId) return;
+    const deletedId = deleteTargetId;
     setIsProductDeleting(true);
     try {
-      await deleteProduct(deleteTargetId);
-      setProducts((prev) => prev.filter((product) => product.id !== deleteTargetId));
+      await deleteProduct(deletedId);
+      setProducts((prev) =>
+        prev
+          .filter((product) => product.id !== deletedId)
+          .map((product) =>
+            product.eligibleExtraIds.includes(deletedId)
+              ? {
+                  ...product,
+                  eligibleExtraIds: product.eligibleExtraIds.filter((id) => id !== deletedId),
+                }
+              : product,
+          ),
+      );
       setDeleteTargetId(null);
-      showToast('Product deleted from menu');
+      showToast('Deleted from menu');
     } catch (error: unknown) {
-      showToast(error instanceof Error ? error.message : 'Unable to delete product.', 'error');
+      showToast(error instanceof Error ? error.message : 'Unable to delete item.', 'error');
     } finally {
       setIsProductDeleting(false);
     }
   };
 
   // US-018: Handle Order Status Update & Invalid Transition Feedback
-  const handleStatusChange = async (newStatus: string) => {
-    if (!selectedOrder) return;
+  const applyOrderStatusUpdate = async (
+    orderId: string,
+    newStatus: string,
+    extra?: { cancellationReason?: string; cancellationNote?: string },
+  ) => {
+    if (isUpdatingStatusRef.current) return;
+    const currentOrder = orderQueue.find((o) => o.id === orderId);
+    if (currentOrder?.status === newStatus) return;
+
+    isUpdatingStatusRef.current = true;
     setIsUpdatingStatus(true);
     try {
-      await updateOrderStatus(selectedOrder.id, newStatus);
+      await updateOrderStatus(orderId, newStatus, extra as any);
       showToast(`Order status updated to ${newStatus}`);
-      
+
+      const impliesPaid = newStatus !== 'PENDING' && newStatus !== 'CANCELLED';
       setOrderQueue((prev) =>
-        prev.map((o) => 
-          o.id === selectedOrder.id 
-            ? { ...o, status: newStatus, ...(newStatus === 'PAID' ? { paymentStatus: 'PAID' } : {}) } 
+        prev.map((o) =>
+          o.id === orderId
+            ? { ...o, status: newStatus, ...(impliesPaid ? { paymentStatus: 'PAID' } : {}) }
             : o
         )
       );
-      setSelectedOrder((prev) => 
-        prev ? { ...prev, status: newStatus, ...(newStatus === 'PAID' ? { paymentStatus: 'PAID' } : {}) } : null
+      setSelectedOrder((prev) =>
+        prev && prev.id === orderId
+          ? { ...prev, status: newStatus, ...(impliesPaid ? { paymentStatus: 'PAID' } : {}) }
+          : prev
       );
     } catch (error: unknown) {
       showToast(error instanceof Error ? error.message : 'Invalid status transition.', 'error');
     } finally {
+      isUpdatingStatusRef.current = false;
       setIsUpdatingStatus(false);
     }
   };
 
-  const filteredProducts = products.filter((product) => {
+  const handleCancelOrder = async () => {
+    if (!cancelTarget || !cancelReason) return;
+    await applyOrderStatusUpdate(cancelTarget.id, 'CANCELLED', {
+      cancellationReason: cancelReason,
+      ...(cancelReason === 'OTHER' ? { cancellationNote: cancelNote.trim() } : {}),
+    });
+    if (cancelReason === 'NOT_AVAILABLE' && cancelTarget.items) {
+      const affectedProductIds = new Set(
+        cancelTarget.items.map((item) => item.productId).filter((id): id is string => Boolean(id)),
+      );
+      setProducts((prev) =>
+        prev.map((p) => (affectedProductIds.has(p.id) ? { ...p, isAvailable: false } : p)),
+      );
+    }
+    setCancelTarget(null);
+    setCancelReason('');
+    setCancelNote('');
+  };
+
+  const handleStatusChange = async (newStatus: string) => {
+    if (!selectedOrder) return;
+    await applyOrderStatusUpdate(selectedOrder.id, newStatus);
+  };
+
+  const menuProducts = products.filter((product) => product.category !== EXTRA_CATEGORY);
+  const extraProducts = products.filter((product) => product.category === EXTRA_CATEGORY);
+
+  const existingCategories = Array.from(
+    new Set(
+      menuProducts
+        .map((product) => product.category)
+        .filter((cat): cat is string => Boolean(cat && cat.trim())),
+    ),
+  ).sort((a, b) => a.localeCompare(b));
+
+  const filteredMenuProducts = menuProducts.filter((product) => {
     const query = productSearch.trim().toLowerCase();
     return !query || [product.name, product.description, product.category]
+      .some((value) => value.toLowerCase().includes(query));
+  });
+
+  const filteredExtraProducts = extraProducts.filter((product) => {
+    const query = extraSearch.trim().toLowerCase();
+    return !query || [product.name, product.description]
       .some((value) => value.toLowerCase().includes(query));
   });
 
@@ -449,8 +649,8 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                   document.getElementById('menu-management-section')?.scrollIntoView({ behavior: 'smooth' });
                 },
               },
-              { label: 'Store', icon: Store, onClick: () => {} },
-              { label: 'Promotion', icon: Megaphone, onClick: () => {} },
+              { label: 'Store', icon: Store, onClick: () => setLocation('/vendor/storefront') },
+              { label: 'Promotion', icon: Megaphone, onClick: () => setLocation('/vendor/promotion') },
             ].map(({ label, icon: Icon, onClick }) => (
               <Button
                 key={label}
@@ -481,11 +681,12 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
 
           <Card className="border-card-border/80 bg-card/90 shadow-sm overflow-hidden">
             <CardContent className="p-0">
-              <div className="grid grid-cols-[1fr_1.2fr_1.5fr_1fr_1fr_0.8fr] gap-3 border-b border-border bg-secondary/40 px-4 py-3 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+              <div className="grid grid-cols-[1fr_1fr_1.1fr_0.7fr_0.7fr_0.8fr_1.8fr] gap-3 border-b border-border bg-secondary/40 px-4 py-3 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                 <span>Order Ref</span>
                 <span>Customer</span>
                 <span>Items & Quantity</span>
                 <span>Payment</span>
+                <span>Pasabuy?</span>
                 <span>Status</span>
                 <span className="text-right">Action</span>
               </div>
@@ -502,7 +703,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                 orderQueue.map((order) => (
                   <div
                     key={order.id}
-                    className="grid grid-cols-[1fr_1.2fr_1.5fr_1fr_1fr_0.8fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
+                    className="grid grid-cols-[1fr_1fr_1.1fr_0.7fr_0.7fr_0.8fr_1.8fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
                   >
                     <div>
                       <p className="text-sm font-semibold text-foreground">#{order.id.slice(-6).toUpperCase()}</p>
@@ -543,24 +744,63 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
 
                     <div>
                       <span
-                        className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] ${
-                          order.status === 'DELIVERED' || order.status === 'COMPLETED'
-                            ? 'bg-emerald-500/10 text-emerald-600'
-                            : order.status === 'PREPARING' || order.status === 'COOKING'
-                            ? 'bg-amber-500/10 text-amber-600'
-                            : 'bg-blue-500/10 text-blue-600'
+                        className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                          order.isPasabuyRequest
+                            ? 'bg-blue-500/10 text-blue-600'
+                            : 'bg-secondary text-muted-foreground'
                         }`}
                       >
-                        {order.status}
+                        {order.isPasabuyRequest ? 'Yes' : 'No'}
                       </span>
                     </div>
 
-                    <div className="text-right">
+                    <div>
+                      <span
+                        className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] ${
+                          order.status === 'COMPLETED'
+                            ? 'bg-emerald-500/10 text-emerald-600'
+                            : order.status === 'COOKING'
+                            ? 'bg-amber-500/10 text-amber-600'
+                            : order.status === 'CANCELLED'
+                            ? 'bg-destructive/10 text-destructive'
+                            : 'bg-blue-500/10 text-blue-600'
+                        }`}
+                      >
+                        {order.status.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-end gap-1.5">
+                      {getNextOrderStatus(order) && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={isUpdatingStatus}
+                          onClick={() => {
+                            const next = getNextOrderStatus(order);
+                            if (next) applyOrderStatusUpdate(order.id, next.next);
+                          }}
+                          className="h-8 rounded-full px-3 text-[10px] font-semibold uppercase tracking-wide"
+                          title={`Update status to ${getNextOrderStatus(order)?.next}`}
+                        >
+                          {getNextOrderStatus(order)?.label}
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={isUpdatingStatus || order.status === 'CANCELLED' || order.status === 'COMPLETED'}
+                        onClick={() => setCancelTarget(order)}
+                        className="h-8 w-8 shrink-0 rounded-full border border-destructive/30 text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:border-border/60 disabled:text-muted-foreground disabled:opacity-50 disabled:hover:bg-transparent"
+                        title={order.status === 'CANCELLED' ? 'Order already cancelled' : 'Cancel order'}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => setSelectedOrder(order)}
-                        className="h-8 w-8 rounded-full border border-border/80 hover:bg-secondary"
+                        className="h-8 w-8 shrink-0 rounded-full border border-border/80 hover:bg-secondary"
                         title="View order detail"
                       >
                         <Eye className="h-3.5 w-3.5 text-foreground" />
@@ -590,7 +830,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                   className="h-10 w-full rounded-full border border-border bg-background pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 sm:w-56"
                 />
               </div>
-              <Button onClick={() => handleOpenModal()} className="gap-2 rounded-full px-4 py-2 font-medium">
+              <Button onClick={() => handleOpenModal(undefined, 'product')} className="gap-2 rounded-full px-4 py-2 font-medium">
                 <Plus className="h-4 w-4" />
                 Add Item
               </Button>
@@ -599,22 +839,23 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
 
           <Card className="border-card-border/80 bg-card/90 shadow-sm overflow-hidden">
             <CardContent className="p-0">
-              <div className="grid grid-cols-[1.5fr_1fr_2fr_1fr] gap-3 border-b border-border bg-secondary/40 px-4 py-3 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+              <div className="grid grid-cols-[1.3fr_0.8fr_1.6fr_0.9fr_1fr] gap-3 border-b border-border bg-secondary/40 px-4 py-3 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                 <span>Product Name</span>
                 <span>Price</span>
                 <span>Description</span>
+                <span>Availability</span>
                 <span className="text-right">Actions</span>
               </div>
 
-              {filteredProducts.length === 0 ? (
+              {filteredMenuProducts.length === 0 ? (
                 <div className="p-8 text-center text-muted-foreground text-sm">
-                  {products.length === 0 ? 'No products in your catalog yet. Click "Add Item" to create one.' : 'No products match your search.'}
+                  {menuProducts.length === 0 ? 'No products in your catalog yet. Click "Add Item" to create one.' : 'No products match your search.'}
                 </div>
               ) : (
-                filteredProducts.map((product) => (
+                filteredMenuProducts.map((product) => (
                   <div
                     key={product.id}
-                    className="grid grid-cols-[1.5fr_1fr_2fr_1fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
+                    className="grid grid-cols-[1.3fr_0.8fr_1.6fr_0.9fr_1fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
                   >
                     <div>
                       <p className="text-sm font-semibold text-foreground">{product.name}</p>
@@ -625,6 +866,21 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
 
                     <p className="text-sm font-semibold text-primary">₱{product.price}</p>
                     <p className="text-sm text-muted-foreground line-clamp-1">{product.description}</p>
+
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleAvailability(product)}
+                        className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
+                          product.isAvailable
+                            ? 'bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20'
+                            : 'bg-destructive/10 text-destructive hover:bg-destructive/20'
+                        }`}
+                        title={`Mark as ${product.isAvailable ? 'unavailable' : 'available'}`}
+                      >
+                        {product.isAvailable ? 'Available' : 'Unavailable'}
+                      </button>
+                    </div>
 
                     <div className="flex items-center justify-end gap-2">
                       <Button
@@ -642,6 +898,99 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                         onClick={() => setDeleteTargetId(product.id)}
                         className="h-8 w-8 rounded-full border border-destructive/30 text-destructive hover:bg-destructive/10"
                         title="Delete product"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Extras Management Section */}
+        <section id="extras-management-section" className="mt-10">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Add-ons</p>
+              <h2 className="mt-1 text-2xl font-semibold tracking-[-0.05em] text-foreground">Extras</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Add-ons like "Extra calamansi" that buyers can attach to eligible menu items.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  value={extraSearch}
+                  onChange={(event) => setExtraSearch(event.target.value)}
+                  placeholder="Search extras"
+                  className="h-10 w-full rounded-full border border-border bg-background pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 sm:w-56"
+                />
+              </div>
+              <Button onClick={() => handleOpenModal(undefined, 'extra')} className="gap-2 rounded-full px-4 py-2 font-medium">
+                <Plus className="h-4 w-4" />
+                Add Extras
+              </Button>
+            </div>
+          </div>
+
+          <Card className="border-card-border/80 bg-card/90 shadow-sm overflow-hidden">
+            <CardContent className="p-0">
+              <div className="grid grid-cols-[1.3fr_0.8fr_1.6fr_0.9fr_1fr] gap-3 border-b border-border bg-secondary/40 px-4 py-3 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                <span>Extra Name</span>
+                <span>Price</span>
+                <span>Description</span>
+                <span>Availability</span>
+                <span className="text-right">Actions</span>
+              </div>
+
+              {filteredExtraProducts.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">
+                  {extraProducts.length === 0 ? 'No extras yet. Click "Add Extras" to create one.' : 'No extras match your search.'}
+                </div>
+              ) : (
+                filteredExtraProducts.map((extra) => (
+                  <div
+                    key={extra.id}
+                    className="grid grid-cols-[1.3fr_0.8fr_1.6fr_0.9fr_1fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
+                  >
+                    <p className="text-sm font-semibold text-foreground">{extra.name}</p>
+                    <p className="text-sm font-semibold text-primary">₱{extra.price}</p>
+                    <p className="text-sm text-muted-foreground line-clamp-1">{extra.description}</p>
+
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleAvailability(extra)}
+                        className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
+                          extra.isAvailable
+                            ? 'bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20'
+                            : 'bg-destructive/10 text-destructive hover:bg-destructive/20'
+                        }`}
+                        title={`Mark as ${extra.isAvailable ? 'unavailable' : 'available'}`}
+                      >
+                        {extra.isAvailable ? 'Available' : 'Unavailable'}
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleOpenModal(extra)}
+                        className="h-8 w-8 rounded-full border border-border/80 hover:bg-secondary"
+                        title="Edit extra"
+                      >
+                        <Pencil className="h-3.5 w-3.5 text-foreground" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setDeleteTargetId(extra.id)}
+                        className="h-8 w-8 rounded-full border border-destructive/30 text-destructive hover:bg-destructive/10"
+                        title="Delete extra"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -708,10 +1057,11 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                       <span
                         className={[
                           'inline-flex rounded-full px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.12em]',
-                          order.status === 'DELIVERED' && 'bg-emerald-500/10 text-emerald-600',
+                          order.status === 'COMPLETED' && 'bg-emerald-500/10 text-emerald-600',
                           order.status === 'COOKING' && 'bg-amber-500/10 text-amber-600',
-                          order.status === 'OUT_FOR_DELIVERY' && 'bg-blue-500/10 text-blue-600',
+                          (order.status === 'OUT_FOR_DELIVERY' || order.status === 'READY_FOR_PICKUP') && 'bg-blue-500/10 text-blue-600',
                           order.status === 'PENDING' && 'bg-slate-500/10 text-slate-600',
+                          order.status === 'CANCELLED' && 'bg-destructive/10 text-destructive',
                         ].join(' ')}
                       >
                         {order.status}
@@ -759,6 +1109,10 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                     <span className="text-xs text-muted-foreground block">Payment State</span>
                     <span className="font-semibold text-emerald-600">{selectedOrder.paymentStatus || 'PENDING'}</span>
                   </div>
+                  <div>
+                    <span className="text-xs text-muted-foreground block">Requested Pasabuy?</span>
+                    <span className="font-semibold text-foreground">{selectedOrder.isPasabuyRequest ? 'Yes' : 'No'}</span>
+                  </div>
                 </div>
 
                 <div>
@@ -794,10 +1148,13 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
               {/* US-018: Order Status Controls & Transition Buttons */}
               <div className="mt-4 border-t border-border pt-4">
                 <span className="text-xs font-mono uppercase tracking-wider text-muted-foreground block mb-2">
-                  Update Order Status (US-018)
+                  Update Order Status
                 </span>
                 <div className="flex flex-wrap gap-2">
-                  {['PENDING', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'].map((statusOption) => (
+                  {(selectedOrder.isPasabuyRequest
+                    ? ['PENDING', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'COMPLETED']
+                    : ['PENDING', 'PAID', 'COOKING', 'READY_FOR_PICKUP', 'COMPLETED']
+                  ).map((statusOption) => (
                     <Button
                       key={statusOption}
                       type="button"
@@ -807,10 +1164,25 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                       onClick={() => handleStatusChange(statusOption)}
                       className="rounded-full text-xs"
                     >
-                      {statusOption}
+                      {statusOption.replace(/_/g, ' ')}
                     </Button>
                   ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={isUpdatingStatus || selectedOrder.status === 'CANCELLED' || selectedOrder.status === 'COMPLETED'}
+                    onClick={() => setCancelTarget(selectedOrder)}
+                    className="rounded-full text-xs border-destructive/30 text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:border-border/60 disabled:text-muted-foreground disabled:opacity-50 disabled:hover:bg-transparent"
+                  >
+                    CANCELLED
+                  </Button>
                 </div>
+                {selectedOrder.status === 'CANCELLED' && (selectedOrder as any).cancellationReason && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Cancellation reason: <span className="font-medium text-foreground">{(selectedOrder as any).cancellationReason.replace(/_/g, ' ')}</span>
+                  </p>
+                )}
               </div>
 
               <div className="mt-6 flex justify-end">
@@ -833,7 +1205,13 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
             <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl my-8">
               <div className="flex items-center justify-between border-b border-border pb-3">
                 <h3 className="text-lg font-bold text-foreground">
-                  {editingProduct ? 'Edit Product' : 'Add New Product'}
+                  {modalKind === 'extra'
+                    ? editingProduct
+                      ? 'Edit Extra'
+                      : 'Add New Extra'
+                    : editingProduct
+                      ? 'Edit Product'
+                      : 'Add New Product'}
                 </h3>
                 <button
                   onClick={() => setIsModalOpen(false)}
@@ -846,13 +1224,13 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
               <form onSubmit={handleSaveProduct} className="mt-4 space-y-4">
                 <div>
                   <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
-                    Product Name
+                    {modalKind === 'extra' ? 'Extra Name' : 'Product Name'}
                   </label>
                   <input
                     type="text"
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    placeholder="e.g. Banh Mi Combo"
+                    placeholder={modalKind === 'extra' ? 'e.g. Extra calamansi' : 'e.g. Banh Mi Combo'}
                     className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
                   />
                   {formErrors.name && <p className="mt-1 text-xs text-destructive">{formErrors.name}</p>}
@@ -873,17 +1251,92 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                   {formErrors.price && <p className="mt-1 text-xs text-destructive">{formErrors.price}</p>}
                 </div>
 
+                {modalKind === 'product' && (
+                  <div className="relative">
+                    <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
+                      Category <span className="text-[10px] text-muted-foreground/70 font-normal">(Optional — type to filter or create)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.category}
+                      onChange={(e) => {
+                        setFormData({ ...formData, category: e.target.value });
+                        setIsCategoryMenuOpen(true);
+                      }}
+                      onFocus={() => setIsCategoryMenuOpen(true)}
+                      onBlur={() => setTimeout(() => setIsCategoryMenuOpen(false), 120)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          setIsCategoryMenuOpen(false);
+                        }
+                      }}
+                      placeholder="e.g. Rice Bowls, Drinks, Snacks"
+                      autoComplete="off"
+                      className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                    {isCategoryMenuOpen && (() => {
+                      const query = formData.category.trim().toLowerCase();
+                      const matches = existingCategories.filter((cat) =>
+                        !query || cat.toLowerCase().includes(query),
+                      );
+                      const exactMatch = existingCategories.some(
+                        (cat) => cat.toLowerCase() === query,
+                      );
+                      return (
+                        <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-xl border border-border bg-card shadow-lg">
+                          {matches.map((cat) => (
+                            <button
+                              type="button"
+                              key={cat}
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                setFormData({ ...formData, category: cat });
+                                setIsCategoryMenuOpen(false);
+                              }}
+                              className="block w-full px-3 py-2 text-left text-sm text-foreground hover:bg-secondary"
+                            >
+                              {cat}
+                            </button>
+                          ))}
+                          {query && !exactMatch && (
+                            <button
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                setIsCategoryMenuOpen(false);
+                              }}
+                              className="block w-full border-t border-border px-3 py-2 text-left text-sm text-primary hover:bg-secondary"
+                            >
+                              Create new category "{formData.category.trim()}"
+                            </button>
+                          )}
+                          {matches.length === 0 && !query && (
+                            <p className="px-3 py-2 text-xs text-muted-foreground">No categories yet — type a name to create one.</p>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
-                    Category <span className="text-[10px] text-muted-foreground/70 font-normal">(Optional)</span>
+                    Preparation Time (minutes)
                   </label>
                   <input
-                    type="text"
-                    value={formData.category}
-                    onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                    placeholder="e.g. Rice Bowls, Drinks, Snacks"
+                    type="number"
+                    min={1}
+                    max={180}
+                    step={1}
+                    value={formData.preparationTime}
+                    onChange={(e) => setFormData({ ...formData, preparationTime: e.target.value })}
+                    placeholder="15"
                     className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
                   />
+                  {formErrors.preparationTime && (
+                    <p className="mt-1 text-xs text-destructive">{formErrors.preparationTime}</p>
+                  )}
                 </div>
 
                 {/* File Explorer / Gallery Picker */}
@@ -957,6 +1410,49 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                   )}
                 </div>
 
+                {modalKind === 'product' && (
+                  <div>
+                    <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-1">
+                      Extras eligible <span className="text-[10px] text-muted-foreground/70 font-normal">(Optional)</span>
+                    </label>
+                    {extraProducts.length === 0 ? (
+                      <p className="rounded-xl border border-dashed border-border bg-secondary/30 px-3 py-3 text-xs text-muted-foreground">
+                        No extras yet — create one in the Extras section to make it eligible here.
+                      </p>
+                    ) : (
+                      <div className="max-h-40 space-y-1 overflow-y-auto rounded-xl border border-border bg-background p-2">
+                        {extraProducts.map((extra) => {
+                          const checked = formData.eligibleExtraIds.includes(extra.id);
+                          return (
+                            <label
+                              key={extra.id}
+                              className="flex cursor-pointer items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-secondary"
+                            >
+                              <span className="text-foreground">{extra.name}</span>
+                              <span className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">₱{extra.price}</span>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() =>
+                                    setFormData((prev) => ({
+                                      ...prev,
+                                      eligibleExtraIds: checked
+                                        ? prev.eligibleExtraIds.filter((id) => id !== extra.id)
+                                        : [...prev.eligibleExtraIds, extra.id],
+                                    }))
+                                  }
+                                  className="h-4 w-4 accent-primary"
+                                />
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-2 pt-2">
                   <Button
                     type="button"
@@ -967,7 +1463,11 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                     Cancel
                   </Button>
                   <Button type="submit" className="rounded-full px-5">
-                    {editingProduct ? 'Save Changes' : 'Create Product'}
+                    {editingProduct
+                      ? 'Save Changes'
+                      : modalKind === 'extra'
+                        ? 'Create Extra'
+                        : 'Create Product'}
                   </Button>
                 </div>
               </form>
@@ -1002,6 +1502,84 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                   className="rounded-full px-5"
                 >
                   Delete
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* US-018: Cancel Order Modal */}
+      {cancelTarget &&
+        createPortal(
+          <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
+            <div className="w-full max-w-sm rounded-3xl border border-border bg-card p-6 shadow-2xl">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10 text-destructive mb-3">
+                <X className="h-6 w-6" />
+              </div>
+              <h3 className="text-lg font-bold text-foreground text-center">Cancel Order</h3>
+              <p className="mt-2 text-xs text-muted-foreground text-center">
+                Ref #{cancelTarget.id.slice(-6).toUpperCase()} — this cannot be undone.
+              </p>
+
+              <div className="mt-4 space-y-2">
+                <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground">
+                  Reason
+                </label>
+                {CANCELLATION_REASONS.map((reason) => (
+                  <label
+                    key={reason.value}
+                    className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm cursor-pointer ${
+                      cancelReason === reason.value ? 'border-primary bg-primary/5' : 'border-border'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="cancel-reason"
+                      value={reason.value}
+                      checked={cancelReason === reason.value}
+                      onChange={(e) => setCancelReason(e.target.value)}
+                    />
+                    {reason.label}
+                    {reason.value === 'NOT_AVAILABLE' && (
+                      <span className="ml-auto text-[10px] text-muted-foreground">Marks item(s) unavailable</span>
+                    )}
+                  </label>
+                ))}
+                {cancelReason === 'OTHER' && (
+                  <textarea
+                    value={cancelNote}
+                    onChange={(e) => setCancelNote(e.target.value)}
+                    placeholder="Explain the reason..."
+                    rows={2}
+                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                )}
+              </div>
+
+              <div className="mt-6 flex justify-center gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setCancelTarget(null);
+                    setCancelReason('');
+                    setCancelNote('');
+                  }}
+                  className="rounded-full px-5"
+                >
+                  Back
+                </Button>
+                <Button
+                  variant="destructive"
+                  disabled={
+                    isUpdatingStatus ||
+                    !cancelReason ||
+                    (cancelReason === 'OTHER' && !cancelNote.trim())
+                  }
+                  onClick={handleCancelOrder}
+                  className="rounded-full px-5"
+                >
+                  {isUpdatingStatus ? 'Cancelling...' : 'Cancel Order'}
                 </Button>
               </div>
             </div>
