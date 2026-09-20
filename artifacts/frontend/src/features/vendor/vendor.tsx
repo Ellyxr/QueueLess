@@ -16,10 +16,27 @@ import {
   Upload,
   Search,
   Eye,
+  Send,
+  Loader2,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import {
+  ChartContainer,
+  type ChartConfig,
+} from '@/components/ui/chart';
+import { Bar, BarChart } from 'recharts';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'wouter';
 import { useRequireAuth } from '@/hooks/use-require-auth';
@@ -33,12 +50,20 @@ import {
   updateProduct,
   updateVendorStorefront,
   updateOrderStatus,
+  payoutVendorBalance,
   type VendorProduct,
   type VendorDashboard,
   type VendorStorefront,
   type VendorQueueOrder,
 } from '@/features/auth/api';
 import { EXTRA_CATEGORY } from '@/lib/product-extras';
+
+const weekSalesChartConfig: ChartConfig = {
+  amount: {
+    label: 'Sales',
+    color: 'hsl(var(--primary-foreground))',
+  },
+};
 
 interface Product {
   id: string;
@@ -116,6 +141,8 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   const [isProductDeleting, setIsProductDeleting] = useState(false);
   const [productSearch, setProductSearch] = useState('');
   const [dashboard, setDashboard] = useState<VendorDashboard | null>(null);
+  const [isPayoutDialogOpen, setIsPayoutDialogOpen] = useState(false);
+  const [isPayoutLoading, setIsPayoutLoading] = useState(false);
 
   // US-017 State Management (Vendor Queue & Order Details)
   const [orderQueue, setOrderQueue] = useState<VendorQueueOrder[]>([]);
@@ -132,6 +159,20 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
     setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const handleTransferOut = async () => {
+    setIsPayoutLoading(true);
+    try {
+      const payout = await payoutVendorBalance(crypto.randomUUID());
+      setDashboard((prev) => (prev ? { ...prev, ledgerBalance: '0.00' } : prev));
+      showToast(`Transferred out ₱${Number(payout.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}.`, 'success');
+      setIsPayoutDialogOpen(false);
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Unable to process payout.', 'error');
+    } finally {
+      setIsPayoutLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -549,42 +590,71 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
             </div>
           </div>
 
-          <Card className="overflow-hidden border-primary/20 bg-gradient-to-br from-primary via-primary to-primary/85 text-primary-foreground shadow-md">
-            <CardContent className="flex flex-col gap-6 p-5 sm:p-8 lg:flex-row lg:items-center lg:justify-between">
+          <Card className="relative overflow-hidden border-primary/20 bg-gradient-to-br from-primary via-primary to-primary/85 text-primary-foreground shadow-md">
+            <ChartContainer
+              config={weekSalesChartConfig}
+              className="pointer-events-none absolute inset-0 aspect-auto opacity-25"
+            >
+              <BarChart
+                data={dashboard?.weekSales ?? []}
+                margin={{ top: 0, right: 0, left: 0, bottom: 0 }}
+              >
+                <Bar dataKey="amount" fill="currentColor" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ChartContainer>
+
+            <CardContent className="relative z-10 flex flex-col gap-6 p-5 sm:p-8 lg:flex-row lg:items-center lg:justify-between">
               <div className="max-w-md">
                 <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary-foreground/80">Total sales</p>
                 <div className="mt-3 flex items-end gap-3">
                   <span className="text-4xl font-bold tracking-[-0.07em] sm:text-5xl">₱{Number(dashboard?.todaySales || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
                 </div>
-              </div>
-
-              <div className="flex min-w-[210px] flex-col gap-4 rounded-[22px] border border-primary-foreground/15 bg-primary-foreground/5 p-4 backdrop-blur-sm">
-                <div className="flex items-center justify-between text-sm text-primary-foreground/80">
-                  <span>vs last week</span>
-                  <span className="font-mono text-[10px] uppercase tracking-[0.12em]">+8.6k</span>
-                </div>
-                <div className="flex items-end gap-2">
-                  {[42, 58, 46, 78, 68, 90, 100].map((height, index) => (
-                    <div
-                      key={height + index}
-                      className="w-full rounded-t-full bg-primary-foreground/85"
-                      style={{ height: `${height}px` }}
-                    />
+                <div className="mt-4 flex items-center gap-4 text-[10px] uppercase tracking-[0.12em] text-primary-foreground/70">
+                  {(dashboard?.weekSales ?? []).map((day) => (
+                    <span key={day.day}>{day.day}</span>
                   ))}
                 </div>
-                <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.12em] text-primary-foreground/80">
-                  <span>Mon</span>
-                  <span>Tue</span>
-                  <span>Wed</span>
-                  <span>Thu</span>
-                  <span>Fri</span>
-                  <span>Sat</span>
-                  <span>Sun</span>
-                </div>
               </div>
+
+              <button
+                type="button"
+                onClick={() => setIsPayoutDialogOpen(true)}
+                className="group flex items-center gap-3 rounded-[22px] border border-primary-foreground/15 bg-primary-foreground/5 px-4 py-3 text-left backdrop-blur-sm transition-colors hover:bg-primary-foreground/15"
+              >
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-primary-foreground/80">Transfer out</p>
+                  <p className="font-mono text-lg font-semibold">₱{Number(dashboard?.ledgerBalance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</p>
+                </div>
+                <span className="flex h-9 w-0 items-center justify-center overflow-hidden rounded-full bg-primary-foreground/20 opacity-0 transition-all duration-300 ease-out group-hover:w-9 group-hover:opacity-100">
+                  <Send className="h-4 w-4 shrink-0 text-primary-foreground" />
+                </span>
+              </button>
             </CardContent>
           </Card>
         </section>
+
+        <AlertDialog open={isPayoutDialogOpen} onOpenChange={setIsPayoutDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Transfer out balance?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will transfer your current ledger balance of ₱{Number(dashboard?.ledgerBalance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })} and reset it to zero. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isPayoutLoading}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(event) => {
+                  event.preventDefault();
+                  handleTransferOut();
+                }}
+                disabled={isPayoutLoading}
+              >
+                {isPayoutLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Transfer out'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* Quick Actions */}
         <section className="mt-8">

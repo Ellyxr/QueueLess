@@ -25,6 +25,23 @@ interface PaymongoCheckoutSessionResponse {
   };
 }
 
+interface CreateRefundParams {
+  paymentResourceId: string;
+  amount: number;
+  reason?: string;
+  notes?: string;
+}
+
+interface PaymongoRefundResponse {
+  data: {
+    id: string;
+    type: string;
+    attributes: {
+      status: string;
+    };
+  };
+}
+
 @Injectable()
 export class PaymongoService {
   private readonly baseUrl = 'https://api.paymongo.com/v2';
@@ -144,6 +161,79 @@ export class PaymongoService {
       );
     }
   }
+
+  async createRefund(
+    params: CreateRefundParams,
+  ): Promise<{ refundId: string; status: string }> {
+    const secretKey =
+      this.configService.get<string>('PAYMONGO_SECRET_KEY');
+
+    if (!secretKey || !secretKey.startsWith('sk_test_')) {
+      throw new InternalServerErrorException(
+        'PayMongo Sandbox secret key is not configured',
+      );
+    }
+
+    const authorization = Buffer.from(`${secretKey}:`).toString('base64');
+
+    try {
+      const response = await fetch(`${this.baseUrl}/refunds`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${authorization}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          data: {
+            attributes: {
+              amount: params.amount,
+              payment_id: params.paymentResourceId,
+              reason: params.reason ?? 'others',
+              notes: params.notes,
+            },
+          },
+        }),
+      });
+
+      const responseBody = (await response.json()) as
+        | PaymongoRefundResponse
+        | {
+            errors?: Array<{
+              code?: string;
+              detail?: string;
+            }>;
+          };
+
+      if (!response.ok) {
+        const errorDetail =
+          'errors' in responseBody
+            ? responseBody.errors?.[0]?.detail
+            : undefined;
+
+        throw new BadGatewayException(
+          errorDetail
+            ? `PayMongo: ${errorDetail}`
+            : 'Unable to create PayMongo refund',
+        );
+      }
+
+      const refund = responseBody as PaymongoRefundResponse;
+
+      return {
+        refundId: refund.data.id,
+        status: refund.data.attributes.status,
+      };
+    } catch (error) {
+      if (error instanceof BadGatewayException) {
+        throw error;
+      }
+
+      throw new BadGatewayException(
+        'Unable to connect to PayMongo',
+      );
+    }
+  }
+
       verifyWebhookSignature(
     rawBody: Buffer,
     signatureHeader: string | undefined,

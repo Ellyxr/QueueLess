@@ -75,6 +75,8 @@ export interface VendorDashboard {
   todaySales: string;
   averageTicket: string;
   pendingOrders: number;
+  ledgerBalance: string;
+  weekSales: Array<{ day: string; amount: string }>;
   recentOrders: Array<{
     id: string;
     customer: string;
@@ -139,8 +141,11 @@ export interface CustomerOrder {
   status: string;
   total: string;
   createdAt: string;
+  paidAt: string | null;
+  buyerContactPingAt: string | null;
   vendor: { id: string; name: string };
   items: Array<{ productId: string; name: string; quantity: number }>;
+  refund: OrderRefundSummary | null;
 }
 
 export interface UpdateProfileInput {
@@ -308,6 +313,98 @@ export function getVendorDashboard(): Promise<VendorDashboard> {
   return fetchWithAuth("/orders/vendor/dashboard");
 }
 
+export interface PayoutResponse {
+  id: string;
+  amount: string;
+  status: string;
+}
+
+export function payoutVendorBalance(idempotencyKey: string): Promise<PayoutResponse> {
+  return fetchWithAuth("/vendors/mine/payout", {
+    method: "POST",
+    headers: {
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({}),
+  });
+}
+
+export type RefundCategory =
+  | "VENDOR_NOT_ACCEPTED"
+  | "VENDOR_UNRESPONSIVE"
+  | "WRONG_ITEM"
+  | "MISSING_ITEM"
+  | "QUALITY_ISSUE"
+  | "INCORRECTLY_COMPLETED"
+  | "DISAGREEMENT"
+  | "OUTSIDE_WINDOW"
+  | "OTHER";
+
+export interface OrderRefundSummary {
+  status: "REQUESTED" | "APPROVED" | "PROCESSED" | "DENIED";
+  category: string | null;
+}
+
+export interface RequestRefundInput {
+  category: RefundCategory;
+  description?: string;
+  orderItemId?: string;
+}
+
+export interface RequestRefundResponse {
+  outcome: "AUTO_REFUNDED" | "PENDING_REVIEW";
+  refund?: { id: string; amount: string; status: string; category: string | null };
+  refunds?: Array<{ id: string; amount: string; status: string; category: string | null }>;
+}
+
+export function contactVendor(orderId: string): Promise<{ message: string }> {
+  return fetchWithAuth(`/orders/${orderId}/contact-vendor`, {
+    method: "POST",
+  });
+}
+
+export function requestOrderRefund(
+  orderId: string,
+  data: RequestRefundInput,
+): Promise<RequestRefundResponse> {
+  return fetchWithAuth(`/orders/${orderId}/refund-request`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export interface AdminRefundRow {
+  id: string;
+  orderId: string | null;
+  requesterName: string;
+  requesterEmail: string | null;
+  vendorName: string | null;
+  amount: number;
+  currency: string;
+  reason: string;
+  category: string | null;
+  initiatedBy: "BUYER" | "SYSTEM";
+  status: "REQUESTED" | "APPROVED" | "PROCESSED" | "DENIED";
+  createdAt: string;
+  processedAt: string | null;
+  providerRefundId: string | null;
+}
+
+export function listAdminRefunds(status?: string): Promise<AdminRefundRow[]> {
+  const query = status && status !== "ALL" ? `?status=${status}` : "";
+  return fetchWithAuth(`/refunds${query}`);
+}
+
+export function updateAdminRefundStatus(
+  refundId: string,
+  status: "APPROVED" | "DENIED" | "PROCESSED",
+): Promise<AdminRefundRow> {
+  return fetchWithAuth(`/refunds/${refundId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
 export function updateVendorStorefront(
   vendorId: string,
   data: UpdateVendorInput,
@@ -345,6 +442,10 @@ export interface OrderStatusResponse {
   estimatedReadyAt: string | null;
   estimatedWaitMinutes: number | null;
   updatedAt: string;
+  paidAt: string | null;
+  buyerContactPingAt: string | null;
+  refund: OrderRefundSummary | null;
+  myPaymentShare: { id: string; amountDue: string; status: "PENDING" | "PAID" } | null;
   vendor: { id: string; name: string; campusLocation: string | null };
   items: Array<{ id: string; name: string; quantity: number }>;
   history: Array<{ status: string; note: string | null; changedAt: string }>;
@@ -411,6 +512,9 @@ export interface CreatePaymentCheckoutResponse {
 export function createPaymentCheckout(paymentShareId: string): Promise<CreatePaymentCheckoutResponse> {
   return fetchWithAuth("/payments/checkout", {
     method: "POST",
+    headers: {
+      "Idempotency-Key": crypto.randomUUID(),
+    },
     body: JSON.stringify({ paymentShareId }),
   });
 }

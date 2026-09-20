@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowRight,
   Bell,
@@ -43,6 +43,7 @@ import {
   setGroupOrderSession,
   type GroupOrderSession,
 } from "@/features/group-orders/group-order-session";
+import { StorefrontPane } from "./storefront-pane";
 
 const categories = [
   "Pizza",
@@ -572,6 +573,7 @@ function VendorCard({
   eta,
   rating,
   type,
+  onSelect,
 }: {
   id: string;
   menuItems: Array<{
@@ -586,43 +588,20 @@ function VendorCard({
   eta: string;
   rating: number;
   type: string;
+  onSelect?: (id: string) => void;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const cardRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!isExpanded) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      if (cardRef.current && !cardRef.current.contains(event.target as Node)) {
-        setIsExpanded(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handlePointerDown);
-    return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [isExpanded]);
+  const handleOpen = () => {
+    if (onSelect) {
+      onSelect(id);
+    } else {
+      window.location.href = `/store/${encodeURIComponent(id)}`;
+    }
+  };
 
   return (
-    <motion.div
-      ref={cardRef}
-      layout
-      transition={{ type: "spring", stiffness: 220, damping: 24, mass: 0.9 }}
-      style={{
-        gridColumn: isExpanded ? "span 2" : "span 1",
-        transformOrigin: "left center",
-        willChange: "grid-column, transform",
-      }}
-      className="relative h-full"
-      onClick={() => setIsExpanded((current) => !current)}
-    >
-      <Card
-        className={cn(
-          "h-full overflow-hidden border-card-border/80 bg-card/90 shadow-sm backdrop-blur-sm transition-[width,transform] duration-500 ease-out",
-          isExpanded && "ring-1 ring-primary/30 shadow-md",
-        )}
-      >
-        <CardContent className="p-0">
+    <div className="relative h-full" onClick={handleOpen}>
+      <Card className="h-full cursor-pointer overflow-hidden border-card-border/80 bg-card/90 shadow-sm backdrop-blur-sm transition-shadow hover:shadow-md">
+        <CardContent className="space-y-3 p-0">
           <div className="flex items-center justify-between border-b border-border/80 px-4 py-3">
             <div>
               <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -638,126 +617,50 @@ function VendorCard({
             </span>
           </div>
 
-          <AnimatePresence mode="wait">
-            {!isExpanded ? (
-              <motion.div
-                key="collapsed"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.2, ease: "easeOut" }}
-                className="space-y-3 p-4"
-              >
-                <div className="grid grid-cols-2 gap-2">
-                  {menuItems.slice(0, 2).map((item) => (
-                    <StoreItemCard
-                      id={item.id}
-                      key={item.name}
-                      image={item.image}
-                      name={item.name}
-                      flavorProfile={item.flavorProfile}
-                      price={item.price}
-                      storeName={name}
-                      vendorId={id}
-                      extras={item.extras}
-                    />
-                  ))}
-                  {menuItems.length === 0 && (
-                    <div className="col-span-2 flex min-h-69 items-center justify-center rounded-[20px] bg-gray-100/70 p-3 text-center text-xs text-muted-foreground">
-                      No menu items available
-                    </div>
-                  )}
+          <div className="space-y-3 p-4 pt-0">
+            <div className="grid grid-cols-2 gap-2">
+              {menuItems.slice(0, 2).map((item) => (
+                <StoreItemCard
+                  id={item.id}
+                  key={item.name}
+                  image={item.image}
+                  name={item.name}
+                  flavorProfile={item.flavorProfile}
+                  price={item.price}
+                  storeName={name}
+                  vendorId={id}
+                  extras={item.extras}
+                />
+              ))}
+              {menuItems.length === 0 && (
+                <div className="col-span-2 flex min-h-69 items-center justify-center rounded-[20px] bg-gray-100/70 p-3 text-center text-xs text-muted-foreground">
+                  No menu items available
                 </div>
+              )}
+            </div>
 
-                <div className="flex items-center justify-between text-sm text-muted-foreground">
-                  <div className="flex items-center gap-1.5">
-                    <Clock3 className="h-3.5 w-3.5" />
-                    <span>{eta}</span>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5 rounded-full px-3 py-1.5 text-xs"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setIsExpanded(true);
-                    }}
-                  >
-                    View menu
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </motion.div>
-            ) : (
-              <motion.div
-                key="expanded"
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -12 }}
-                transition={{ duration: 0.25, ease: "easeOut" }}
-                className="space-y-3 p-4"
+            <div className="flex items-center justify-between text-sm text-muted-foreground">
+              <div className="flex items-center gap-1.5">
+                <Clock3 className="h-3.5 w-3.5" />
+                <span>{eta}</span>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 rounded-full px-3 py-1.5 text-xs"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleOpen();
+                }}
               >
-                <motion.div
-                  layout
-                  transition={{ duration: 0.3, ease: "easeOut" }}
-                  className={cn(
-                    "gap-3 md:grid md:grid-cols-2",
-                    menuItems.length >= 3 ? "overflow-x-auto pb-2 md:max-h-[260px] md:overflow-y-auto md:overflow-x-hidden" : "grid",
-                    menuItems.length >= 3 && "flex snap-x snap-mandatory md:flex-none",
-                  )}
-                  style={
-                    menuItems.length >= 3
-                      ? { scrollbarWidth: "none", msOverflowStyle: "none" }
-                      : undefined
-                  }
-                >
-                  {menuItems.map((item) => (
-                    <motion.div
-                      key={item.name}
-                      initial={{ opacity: 0, scale: 0.97, y: 10 }}
-                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                      transition={{ duration: 0.2, ease: "easeOut" }}
-                      className={cn(
-                        menuItems.length >= 3 && "min-w-[220px] shrink-0 snap-start md:min-w-0",
-                      )}
-                    >
-                      <StoreItemCard
-                        id={item.id}
-                        image={item.image}
-                        name={item.name}
-                        flavorProfile={item.flavorProfile}
-                        price={item.price}
-                        storeName={name}
-                        vendorId={id}
-                        extras={item.extras}
-                      />
-                    </motion.div>
-                  ))}
-                </motion.div>
-
-                <div className="flex items-center justify-between text-sm text-muted-foreground">
-                  <div className="flex items-center gap-1.5">
-                    <Clock3 className="h-3.5 w-3.5" />
-                    <span>{eta}</span>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5 rounded-full px-3 py-1.5 text-xs"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      window.location.href = `/store/${encodeURIComponent(id)}`;
-                    }}
-                  >
-                    View Page
-                  </Button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                View store
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
-    </motion.div>
+    </div>
   );
 }
 
@@ -783,6 +686,20 @@ export default function MarketplacePage({
   const [groupJoinCode, setGroupJoinCode] = useState("");
   const [groupOrderError, setGroupOrderError] = useState<string | null>(null);
   const isGroupMode = groupSession !== null;
+
+  // Split-view storefront state
+  const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
+  const [isStorefrontExpanded, setIsStorefrontExpanded] = useState(false);
+
+  const handleSelectVendor = (id: string) => {
+    setSelectedVendorId(id);
+    setIsStorefrontExpanded(false);
+  };
+
+  const handleCloseStorefront = () => {
+    setSelectedVendorId(null);
+    setIsStorefrontExpanded(false);
+  };
 
   useEffect(() => {
     const refreshGroupSession = () => setGroupSession(getGroupOrderSession());
@@ -934,6 +851,15 @@ export default function MarketplacePage({
   }
 
   return (
+    <div className="flex w-full items-start">
+      <motion.div
+        className="min-w-0 overflow-hidden"
+        animate={{
+          width: !selectedVendorId ? "100%" : isStorefrontExpanded ? "0%" : "50%",
+        }}
+        transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+      >
+        <div className="sticky top-24 max-h-[calc(100vh-6rem)] overflow-y-auto">
     <main className="mx-auto w-full max-w-[1340px] px-4 pb-14 pt-4 sm:px-6 lg:px-10">
       <div className="rounded-[28px] border border-border/80 bg-background/80 p-3 shadow-sm backdrop-blur-sm sm:p-4">
         
@@ -1096,9 +1022,9 @@ export default function MarketplacePage({
                   </div>
                 </div>
 
-                <div className="hidden md:grid md:grid-cols-4 md:gap-4 [grid-auto-flow:dense]">
+                <div className="hidden md:grid md:grid-cols-3 md:gap-4 [grid-auto-flow:dense]">
                   {filteredFeatured.map((vendor) => (
-                    <VendorCard key={vendor.name} {...vendor} />
+                    <VendorCard key={vendor.name} {...vendor} onSelect={handleSelectVendor} />
                   ))}
                 </div>
               </div>
@@ -1198,9 +1124,9 @@ export default function MarketplacePage({
                   </div>
                 </div>
 
-                <div className="hidden md:grid md:grid-cols-4 md:gap-4 [grid-auto-flow:dense]">
+                <div className="hidden md:grid md:grid-cols-3 md:gap-4 [grid-auto-flow:dense]">
                   {filteredLocal.map((vendor) => (
-                    <VendorCard key={vendor.name} {...vendor} />
+                    <VendorCard key={vendor.name} {...vendor} onSelect={handleSelectVendor} />
                   ))}
                 </div>
               </div>
@@ -1208,6 +1134,31 @@ export default function MarketplacePage({
           </section>
         )}
       </div>
-    </main> 
+    </main>
+        </div>
+      </motion.div>
+
+      <AnimatePresence>
+        {selectedVendorId && (
+          <motion.div
+            key="storefront-pane"
+            className="min-w-0 overflow-hidden border-l border-border/80"
+            initial={{ width: "0%" }}
+            animate={{ width: isStorefrontExpanded ? "100%" : "50%" }}
+            exit={{ width: "0%" }}
+            transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <div className="sticky top-24 max-h-[calc(100vh-6rem)] overflow-y-auto">
+              <StorefrontPane
+                vendorId={selectedVendorId}
+                isExpanded={isStorefrontExpanded}
+                onToggleExpand={() => setIsStorefrontExpanded((current) => !current)}
+                onClose={handleCloseStorefront}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
