@@ -1,6 +1,6 @@
 import { LoginInput, RegisterInput, AuthResponse } from "../../types/auth";
 
-const API_BASE_URL = "/api/v1";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
 
 export const AUTH_STATE_CHANGED_EVENT = "queueless-auth-state-changed";
 export const PORTAL_CHANGED_EVENT = "queueless-portal-changed";
@@ -13,6 +13,14 @@ export function notifyAuthStateChanged(): void {
   }
 }
 
+export interface EligibleExtra {
+  id: string;
+  name: string;
+  price: number;
+  description: string | null;
+  category?: string | null;
+}
+
 export interface VendorProduct {
   id: string;
   vendorId?: string;
@@ -20,7 +28,9 @@ export interface VendorProduct {
   description: string | null;
   price: number;
   category: string | null;
+  preparationTimeMinutes: number;
   isAvailable: boolean;
+  eligibleExtras?: EligibleExtra[];
 }
 
 export interface ProductInput {
@@ -28,7 +38,9 @@ export interface ProductInput {
   description?: string;
   price: number;
   category?: string;
+  preparationTimeMinutes: number;
   isAvailable?: boolean;
+  eligibleExtraIds?: string[];
 }
 
 export interface VendorStorefront {
@@ -36,9 +48,27 @@ export interface VendorStorefront {
   name: string;
   description: string | null;
   campusLocation: string | null;
+  categoryOrder?: string[];
   vendorType: string;
   status: string;
   products?: VendorProduct[];
+  favoritesCount?: number;
+  isFavoritedByMe?: boolean;
+}
+
+export interface VendorSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  campusLocation: string | null;
+  vendorType: string;
+  status: string;
+}
+
+export interface VendorFavoriteStatus {
+  vendorId: string;
+  favoritesCount: number;
+  isFavoritedByMe: boolean;
 }
 
 export interface VendorDashboard {
@@ -59,10 +89,12 @@ export interface UpdateVendorInput {
   name?: string;
   description?: string;
   campusLocation?: string;
+  categoryOrder?: string[];
 }
 
 // US-017 Types for Vendor Incoming Order Queue
 export interface VendorOrderItem {
+  productId?: string;
   productName?: string;
   quantity: number;
   price?: number;
@@ -75,13 +107,21 @@ export interface VendorQueueOrder {
   customerEmail?: string;
   userId?: string;
   paymentStatus?: string;
+  isPasabuyRequest?: boolean;
   status: string;
   items?: VendorOrderItem[];
 }
 
+export type CancellationReason =
+  | 'NOT_AVAILABLE'
+  | 'CUSTOMER_REQUEST'
+  | 'CLOSING_EARLY'
+  | 'OTHER';
+
 // US-017: Create/Submit Order from Cart
 export interface CreateOrderInput {
   cartId: string;
+  isPasabuyRequest?: boolean;
 }
 
 export interface ProfileData {
@@ -89,6 +129,7 @@ export interface ProfileData {
   email: string;
   fullName: string;
   phone: string | null;
+  allowParticipantOrderCompletion?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -105,6 +146,7 @@ export interface CustomerOrder {
 export interface UpdateProfileInput {
   fullName?: string;
   phone?: string;
+  allowParticipantOrderCompletion?: boolean;
 }
 
 export interface ChangePasswordInput {
@@ -276,9 +318,47 @@ export function updateVendorStorefront(
   });
 }
 
+export function favoriteVendor(vendorId: string): Promise<VendorFavoriteStatus> {
+  return fetchWithAuth(`/vendors/${vendorId}/favorite`, { method: "POST" });
+}
+
+export function unfavoriteVendor(vendorId: string): Promise<VendorFavoriteStatus> {
+  return fetchWithAuth(`/vendors/${vendorId}/favorite`, { method: "DELETE" });
+}
+
+export function getMyFavoriteVendors(): Promise<VendorSummary[]> {
+  return fetchWithAuth("/vendors/favorites/mine");
+}
+
 // US-017: Get Vendor Incoming Order Queue
 export function getVendorOrderQueue(): Promise<VendorQueueOrder[]> {
   return fetchWithAuth("/orders/vendor/queue");
+}
+
+export interface OrderStatusResponse {
+  orderId: string;
+  orderType: "INDIVIDUAL" | "GROUP";
+  status: string;
+  isPasabuyRequest: boolean;
+  cancellationReason: CancellationReason | null;
+  cancellationNote: string | null;
+  estimatedReadyAt: string | null;
+  estimatedWaitMinutes: number | null;
+  updatedAt: string;
+  vendor: { id: string; name: string; campusLocation: string | null };
+  items: Array<{ id: string; name: string; quantity: number }>;
+  history: Array<{ status: string; note: string | null; changedAt: string }>;
+  viewerRole: "OWNER" | "MEMBER" | null;
+  canComplete: boolean;
+  groupOrder: { id: string; code: string; participantCount: number } | null;
+}
+
+export function getOrderStatus(orderId: string): Promise<OrderStatusResponse> {
+  return fetchWithAuth(`/orders/${orderId}/status`);
+}
+
+export function confirmOrderPickup(orderId: string): Promise<any> {
+  return fetchWithAuth(`/orders/${orderId}/pickup`, { method: "PATCH" });
 }
 
 export function createOrder(data: CreateOrderInput): Promise<any> {
@@ -291,15 +371,241 @@ export function createOrder(data: CreateOrderInput): Promise<any> {
   });
 }
 
+export interface OrderPaymentStatusResponse {
+  orderId: string;
+  orderType: "INDIVIDUAL" | "GROUP";
+  orderStatus: string;
+  totalAmount: string;
+  paymentShare: {
+    id: string;
+    amountDue: string;
+    status: "PENDING" | "PAID";
+  };
+  payment: {
+    id: string;
+    amount: string;
+    currency: string;
+    provider: string;
+    status: "PENDING" | "SUCCEEDED" | "FAILED";
+    createdAt: string;
+    updatedAt: string;
+  } | null;
+}
+
+export function getOrderPaymentStatus(orderId: string): Promise<OrderPaymentStatusResponse> {
+  return fetchWithAuth(`/payments/orders/${orderId}/status`);
+}
+
+export interface CreatePaymentCheckoutResponse {
+  paymentId: string;
+  paymentShareId: string;
+  orderId: string;
+  amount: string;
+  currency: string;
+  status: string;
+  provider: string;
+  checkoutSessionId: string;
+  checkoutUrl: string;
+}
+
+export function createPaymentCheckout(paymentShareId: string): Promise<CreatePaymentCheckoutResponse> {
+  return fetchWithAuth("/payments/checkout", {
+    method: "POST",
+    body: JSON.stringify({ paymentShareId }),
+  });
+}
+
 // US-018: Update Vendor Order Status
 export function updateOrderStatus(
   orderId: string,
   status: string,
+  extra?: { note?: string; cancellationReason?: CancellationReason; cancellationNote?: string },
 ): Promise<any> {
   return fetchWithAuth(`/orders/vendor/${orderId}/status`, {
     method: "PATCH",
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({ status, ...extra }),
   });
+}
+
+// Group Orders
+
+export interface GroupOrderVendor {
+  id: string;
+  name: string;
+  status: string;
+  vendorType: string;
+  campusLocation: string | null;
+}
+
+export interface GroupOrderParticipantItem {
+  id: string;
+  productId: string;
+  name: string;
+  quantity: number;
+  unitPrice: string;
+  subtotal: string;
+}
+
+export interface GroupOrderParticipant {
+  participantId: string;
+  user: { id: string; fullName: string; email: string };
+  status: "INVITED" | "JOINED" | "LEFT";
+  joinedAt: string | null;
+  isOwner: boolean;
+  items: GroupOrderParticipantItem[];
+  subtotal: string;
+}
+
+export interface GroupOrderPaymentShare {
+  id: string;
+  payer: { id: string; fullName: string; email: string };
+  amountDue: string;
+  status: "PENDING" | "PAID";
+}
+
+export interface GroupOrderResponse {
+  id: string;
+  code: string;
+  status: "OPEN" | "LOCKED" | "FINALIZED" | "CANCELLED";
+  initiator: { id: string; fullName: string; email: string };
+  vendor: GroupOrderVendor | null;
+  participants: GroupOrderParticipant[];
+  participantCount: number;
+  authoritativeOrder: {
+    id: string;
+    status: string;
+    orderType: string;
+    totalAmount: string;
+    paymentSplitMode: "ITEM_BASED" | "EQUAL" | "CUSTOM" | null;
+    paymentShares: GroupOrderPaymentShare[];
+  } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AddGroupOrderItemResponse {
+  groupOrderId: string;
+  vendorId: string;
+  participantId: string;
+  cartId: string;
+  status: string;
+  items: GroupOrderParticipantItem[];
+  total: string;
+}
+
+export interface FinalizeGroupOrderResponse {
+  groupOrderId: string;
+  groupOrderStatus: string;
+  authoritativeOrder: {
+    id: string;
+    orderType: string;
+    status: string;
+    vendor: { id: string; name: string };
+    subtotal: string;
+    marketplaceFee: string;
+    totalAmount: string;
+    estimatedReadyAt: string | null;
+    items: Array<{
+      id: string;
+      productId: string;
+      name: string;
+      quantity: number;
+      unitPrice: string;
+      subtotal: string;
+      participant: { participantId: string; user: { id: string; fullName: string; email: string } } | null;
+    }>;
+  };
+}
+
+export interface SetPaymentSplitInput {
+  mode: "ITEM_BASED" | "EQUAL" | "CUSTOM";
+  customShares?: Array<{ participantId: string; amount: number }>;
+}
+
+export interface SetPaymentSplitResponse {
+  groupOrderId: string;
+  orderId: string;
+  paymentSplitMode: string;
+  orderTotal: string;
+  paymentShares: GroupOrderPaymentShare[];
+  totalAllocated: string;
+}
+
+export function createGroupOrder(vendorId?: string): Promise<GroupOrderResponse> {
+  return fetchWithAuth("/group-orders", {
+    method: "POST",
+    body: JSON.stringify(vendorId ? { vendorId } : {}),
+  });
+}
+
+export function joinGroupOrderByCode(code: string): Promise<GroupOrderResponse> {
+  return fetchWithAuth("/group-orders/join-by-code", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+}
+
+export function getGroupOrder(groupOrderId: string): Promise<GroupOrderResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}`);
+}
+
+export function lockGroupOrder(groupOrderId: string): Promise<GroupOrderResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/lock`, { method: "PATCH" });
+}
+
+export function addGroupOrderItem(
+  groupOrderId: string,
+  data: { productId: string; quantity: number },
+): Promise<AddGroupOrderItemResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/items`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function finalizeGroupOrder(
+  groupOrderId: string,
+): Promise<FinalizeGroupOrderResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/finalize`, { method: "POST" });
+}
+
+export function setGroupOrderPaymentSplit(
+  groupOrderId: string,
+  data: SetPaymentSplitInput,
+): Promise<SetPaymentSplitResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/payment-split`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export function pingGroupOrder(groupOrderId: string): Promise<{ message: string }> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/ping`, { method: "POST" });
+}
+
+// Notifications
+
+export interface NotificationItem {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  relatedEntityType: string | null;
+  relatedEntityId: string | null;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export function listNotifications(): Promise<NotificationItem[]> {
+  return fetchWithAuth("/notifications");
+}
+
+export function getUnreadNotificationCount(): Promise<{ unreadCount: number }> {
+  return fetchWithAuth("/notifications/unread-count");
+}
+
+export function markNotificationRead(id: string): Promise<{ message: string }> {
+  return fetchWithAuth(`/notifications/${id}/read`, { method: "PATCH" });
 }
 
 export function setActivePortal(portal: Portal): void {

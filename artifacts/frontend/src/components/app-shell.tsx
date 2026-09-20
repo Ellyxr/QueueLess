@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, ReactNode } from "react";
 import {
   Search,
   ShoppingBag,
-  Bell,
   Inbox,
   UserCircle2,
   ShoppingCart,
@@ -23,6 +22,8 @@ import {
   type Portal,
 } from "@/features/auth/api";
 import { CART_CHANGED_EVENT, getCartItems } from "@/features/cart/cart";
+import { OrderStatusWidget } from "@/components/order-status-widget";
+import { NotificationBell } from "@/components/notification-bell";
 
 interface AppShellProps {
   children: ReactNode;
@@ -194,7 +195,11 @@ export function AppShell({
                       icon: navIcons["Browse"],
                       onClick: () => (window.location.href = "/vendor"),
                     },
-                    { label: "Store", icon: <Store className="h-4 w-4" /> },
+                    {
+                      label: "Store",
+                      icon: <Store className="h-4 w-4" />,
+                      onClick: () => (window.location.href = "/vendor/storefront"),
+                    },
                     {
                       label: "Transactions",
                       icon: <ShoppingBag className="h-4 w-4" />,
@@ -354,13 +359,7 @@ export function AppShell({
                 >
                   <ShoppingBag className="h-4 w-4" />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="rounded-full border border-border/80 bg-background text-foreground"
-                >
-                  <Bell className="h-4 w-4" />
-                </Button>
+                <NotificationBell />
                 {!isLoginPage && (
                   <div className="flex items-center gap-2">
                     <Button
@@ -396,13 +395,7 @@ export function AppShell({
                 >
                   <ShoppingBag className="h-4 w-4" />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="rounded-full border border-border/80 bg-background text-foreground"
-                >
-                  <Bell className="h-4 w-4" />
-                </Button>
+                <NotificationBell />
               </div>
             )}
           </div>
@@ -436,6 +429,8 @@ export function AppShell({
                     window.location.href = "/";
                   } else if (label === "Home") {
                     window.location.href = "/vendor";
+                  } else if (label === "Store") {
+                    window.location.href = "/vendor/storefront";
                   } else if (label === "Profile") {
                     window.location.href = "/profile";
                   }
@@ -478,6 +473,8 @@ export function AppShell({
       </header>
 
       <div className="relative z-10 mt-4">{children}</div>
+
+      {hasToken && !isVendorPortal && <OrderStatusWidget />}
     </div>
   );
 }

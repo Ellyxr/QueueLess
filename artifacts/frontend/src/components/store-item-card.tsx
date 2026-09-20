@@ -2,6 +2,17 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Heart, Plus, Star } from "lucide-react";
 import { addCartItem } from "@/features/cart/cart";
+import { addGroupOrderItem } from "@/features/auth/api";
+import {
+  GROUP_ORDER_SESSION_CHANGED_EVENT,
+  getGroupOrderSession,
+} from "@/features/group-orders/group-order-session";
+
+interface StoreItemCardExtra {
+  id: string;
+  name: string;
+  price: number;
+}
 
 interface StoreItemCardProps {
   id: string;
@@ -11,6 +22,7 @@ interface StoreItemCardProps {
   price: number;
   storeName?: string;
   vendorId?: string;
+  extras?: StoreItemCardExtra[];
 }
 
 export function StoreItemCard({
@@ -21,17 +33,13 @@ export function StoreItemCard({
   price,
   storeName,
   vendorId,
+  extras,
 }: StoreItemCardProps) {
   const [isFavorited, setIsFavorited] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
+  const [groupOrderError, setGroupOrderError] = useState<string | null>(null);
 
-  const handleAddToCart = () => {
-    if (isAdding) return;
-
-    setIsAdding(true);
-    addCartItem({ id, image, name, price, storeName, vendorId });
-
-    // Find the cart button in the AppShell.
+  const runFlyToCartAnimation = () => {
     const cart = document.querySelector(
       "[data-cart-target]"
     ) as HTMLElement | null;
@@ -119,6 +127,43 @@ export function StoreItemCard({
           }
         );
       });
+  };
+
+  const handleAddToCart = async () => {
+    if (isAdding) return;
+
+    const session = getGroupOrderSession();
+
+    if (session) {
+      if (session.vendorId && vendorId && session.vendorId !== vendorId) {
+        setGroupOrderError(
+          `Your group order is for ${session.vendorName || "another shop"} — finish or leave it before ordering elsewhere.`,
+        );
+        return;
+      }
+
+      setGroupOrderError(null);
+      setIsAdding(true);
+
+      try {
+        await addGroupOrderItem(session.groupOrderId, {
+          productId: id,
+          quantity: 1,
+        });
+        window.dispatchEvent(new Event(GROUP_ORDER_SESSION_CHANGED_EVENT));
+        runFlyToCartAnimation();
+      } catch (error) {
+        setIsAdding(false);
+        setGroupOrderError(
+          error instanceof Error ? error.message : "Could not add item to the group order.",
+        );
+      }
+      return;
+    }
+
+    setIsAdding(true);
+    addCartItem({ id, image, name, price, storeName, vendorId, availableExtras: extras ?? [] });
+    runFlyToCartAnimation();
   };
 
   return (
@@ -222,6 +267,12 @@ export function StoreItemCard({
             </span>
           </motion.button>
         </div>
+
+        {groupOrderError && (
+          <p className="mt-2 text-[10px] leading-tight text-destructive">
+            {groupOrderError}
+          </p>
+        )}
       </div>
     </motion.div>
   );
