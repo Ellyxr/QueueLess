@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
@@ -31,6 +32,22 @@ export class VendorsController {
   @Get('mine')
   async getMyVendor(@Req() request: { user: JwtPayload }) {
     return this.vendorsService.getVendorForOwner(request.user.sub);
+  }
+
+  @Get('mine/ledger')
+  async getMyLedgerBalance(@Req() request: { user: JwtPayload }) {
+    return this.vendorsService.getVendorLedgerBalance(request.user.sub);
+  }
+
+  @Post('mine/payout')
+  async payoutMyBalance(
+    @Req() request: { user: JwtPayload },
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ) {
+    return this.vendorsService.payoutVendorBalance(
+      request.user.sub,
+      idempotencyKey,
+    );
   }
 
   @Get('favorites/mine')

@@ -13,10 +13,11 @@ import { startOrderTracking } from "@/features/orders/order-tracking";
 import {
   clearGroupOrderSession,
   setGroupOrderSession,
+  GROUP_ORDER_SESSION_CHANGED_EVENT,
   type GroupOrderSession,
 } from "@/features/group-orders/group-order-session";
 
-const POLL_INTERVAL_MS = 8000;
+const POLL_INTERVAL_MS = 3000;
 const currency = (amount: string | number) =>
   `₱${Number(amount).toLocaleString("en-PH", { minimumFractionDigits: 2 })}`;
 
@@ -68,9 +69,11 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
 
     poll();
     const timer = window.setInterval(poll, POLL_INTERVAL_MS);
+    window.addEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, poll);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      window.removeEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, poll);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.groupOrderId]);
