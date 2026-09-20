@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -237,6 +238,39 @@ async addGroupOrderItem(
     dto,
   );
 }
+
+  @Delete(':groupOrderId/items/:itemId')
+  @Roles('BUYER')
+  @ApiOperation({
+    summary: 'Remove an item from the current user group cart',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Item removed from group order successfully',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Group order is closed',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'User is not a joined participant of the group order',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Group order or item not found in the caller\'s cart',
+  })
+  async removeGroupOrderItem(
+    @CurrentUser() user: { sub: string },
+    @Param('groupOrderId') groupOrderId: string,
+    @Param('itemId') itemId: string,
+  ) {
+    return this.groupOrdersService.removeGroupOrderItem(
+      user.sub,
+      groupOrderId,
+      itemId,
+    );
+  }
 
 @Post(':groupOrderId/finalize')
 @Roles('BUYER')
