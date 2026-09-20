@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, CookingPot, Grip, X } from "lucide-react";
+import { ChevronDown, CookingPot, Grip, LifeBuoy, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   getTrackedOrderIds,
@@ -9,10 +9,14 @@ import {
 import {
   AUTH_STATE_CHANGED_EVENT,
   confirmOrderPickup,
+  createPaymentCheckout,
   getOrderStatus,
   pingGroupOrder,
   type OrderStatusResponse,
 } from "@/features/auth/api";
+import { RefundRequestDialog } from "@/features/refunds/refund-request-dialog";
+
+const REFUND_HIDDEN_STATUSES = new Set(["PENDING", "CANCELLED"]);
 
 const POLL_INTERVAL_MS = 8000;
 
@@ -155,6 +159,10 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
   const [isCompleting, setIsCompleting] = useState(false);
   const [isPinging, setIsPinging] = useState(false);
   const [pingSent, setPingSent] = useState(false);
+  const [isRefundDialogOpen, setIsRefundDialogOpen] = useState(false);
+  const [refundMessage, setRefundMessage] = useState<string | null>(null);
+  const [isPaying, setIsPaying] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
   const [dragOffset2d, setDragOffset2d] = useState({ x: 0, y: 0 });
   const dragOffset = useRef({ x: 0, y: 0 });
   const isDragging = useRef(false);
@@ -217,6 +225,19 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
       // leave the widget as-is; the next poll will reconcile
     } finally {
       setIsCompleting(false);
+    }
+  };
+
+  const handlePayShare = async () => {
+    if (!order?.myPaymentShare || isPaying) return;
+    setIsPaying(true);
+    setPayError(null);
+    try {
+      const checkout = await createPaymentCheckout(order.myPaymentShare.id);
+      window.location.href = checkout.checkoutUrl;
+    } catch (error) {
+      setPayError(error instanceof Error ? error.message : "Could not start checkout.");
+      setIsPaying(false);
     }
   };
 
@@ -380,6 +401,22 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
             </div>
           )}
 
+          {order.myPaymentShare && order.myPaymentShare.status === "PENDING" && (
+            <div className="mt-3 space-y-1.5">
+              <button
+                type="button"
+                onClick={handlePayShare}
+                disabled={isPaying}
+                className="w-full rounded-full bg-primary py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
+              >
+                {isPaying
+                  ? "Redirecting to checkout..."
+                  : `Pay my share (₱${order.myPaymentShare.amountDue})`}
+              </button>
+              {payError && <p className="text-center text-[11px] text-destructive">{payError}</p>}
+            </div>
+          )}
+
           {order.status === "READY_FOR_PICKUP" && order.canComplete && (
             <button
               type="button"
@@ -403,6 +440,39 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
                 {pingSent ? "Owner notified" : isPinging ? "Pinging..." : "Ping owner"}
               </button>
             )}
+
+          {!REFUND_HIDDEN_STATUSES.has(order.status) && !order.refund && (
+            <button
+              type="button"
+              onClick={() => setIsRefundDialogOpen(true)}
+              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-full border border-border py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
+            >
+              <LifeBuoy className="h-3.5 w-3.5" />
+              Need help with this order?
+            </button>
+          )}
+
+          {refundMessage && (
+            <p className="mt-2 text-center text-[11px] font-medium text-emerald-600">
+              {refundMessage}
+            </p>
+          )}
+
+          <RefundRequestDialog
+            open={isRefundDialogOpen}
+            onOpenChange={setIsRefundDialogOpen}
+            orderId={orderId}
+            order={{
+              status: order.status,
+              paidAt: order.paidAt,
+              buyerContactPingAt: order.buyerContactPingAt,
+            }}
+            onSuccess={(message) => {
+              setRefundMessage(message);
+              window.setTimeout(() => setRefundMessage(null), 5000);
+              getOrderStatus(orderId).then(setOrder).catch(() => {});
+            }}
+          />
 
           <img
             src="/favicon.svg"

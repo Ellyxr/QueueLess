@@ -54,6 +54,7 @@ export interface StorePageProps {
     name: string;
     description: string;
   }) => void | Promise<void>;
+  onBack?: () => void;
 }
 
 export default function StorePage({
@@ -72,6 +73,7 @@ export default function StorePage({
   editable = false,
   onReorderCategories,
   onSaveStoreDetails,
+  onBack,
 }: StorePageProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [orderedCategories, setOrderedCategories] = useState(categories);
@@ -124,6 +126,10 @@ export default function StorePage({
   };
 
   const handleBack = () => {
+    if (onBack) {
+      onBack();
+      return;
+    }
     window.history.back();
   };
 

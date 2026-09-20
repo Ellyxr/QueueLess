@@ -123,6 +123,8 @@ model Vendor {
   subscriptions       VendorSubscription[]
   owner               User                       @relation("VendorOwner", fields: [ownerUserId], references: [id])
   favoritedBy         VendorFavorite[]           @relation("VendorFavoritedBy")
+  ledgerEntries       VendorLedgerEntry[]
+  payouts             Payout[]
 
   @@index([ownerUserId])
   @@index([status])
@@ -292,6 +294,8 @@ model Order {
   totalAmount       Decimal               @db.Decimal(10, 2)
   estimatedReadyAt  DateTime?             @db.Timestamptz(6)
   pickupConfirmedAt DateTime?             @db.Timestamptz(6)
+  paidAt            DateTime?             @db.Timestamptz(6)
+  buyerContactPingAt DateTime?            @db.Timestamptz(6)
   createdAt         DateTime              @default(now()) @db.Timestamptz(6)
   updatedAt         DateTime              @updatedAt @db.Timestamptz(6)
   idempotencyKeys   OrderIdempotencyKey[]
@@ -305,6 +309,8 @@ model Order {
   pasabuyRequests   PasabuyRequest[]
   paymentShares     PaymentShare[]
   reportsTargeting  Report[]              @relation("ReportTargetOrder")
+  ledgerEntry       VendorLedgerEntry?
+  refunds           Refund[]
 
   @@index([customerId])
   @@index([vendorId])
@@ -454,6 +460,7 @@ model Payment {
   currency             String              @default("PHP")
   provider             PaymentProvider     @default(PAYMONGO)
   providerPaymentId    String?
+  providerPaymentResourceId String?
   status               PaymentStatus       @default(PENDING)
   createdAt            DateTime            @default(now()) @db.Timestamptz(6)
   updatedAt            DateTime            @updatedAt @db.Timestamptz(6)
@@ -468,27 +475,64 @@ model Payment {
   @@index([payerUserId])
   @@index([status])
   @@index([providerPaymentId])
+  @@index([providerPaymentResourceId])
   @@map("payments")
 }
 
 model Refund {
-  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  paymentId         String       @db.Uuid
-  orderItemId       String?      @db.Uuid
-  amount            Decimal      @db.Decimal(10, 2)
+  id                String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentId         String           @db.Uuid
+  orderId           String?          @db.Uuid
+  orderItemId       String?          @db.Uuid
+  amount            Decimal          @db.Decimal(10, 2)
   reason            String?
-  status            RefundStatus @default(REQUESTED)
-  requestedByUserId String       @db.Uuid
+  category          String?
+  status            RefundStatus     @default(REQUESTED)
+  initiatedBy       RefundInitiator  @default(BUYER)
+  requestedByUserId String           @db.Uuid
   providerRefundId  String?
-  processedAt       DateTime?    @db.Timestamptz(6)
-  createdAt         DateTime     @default(now()) @db.Timestamptz(6)
-  orderItem         OrderItem?   @relation(fields: [orderItemId], references: [id])
-  payment           Payment      @relation(fields: [paymentId], references: [id])
-  requestedBy       User         @relation("RefundRequestedBy", fields: [requestedByUserId], references: [id])
+  processedAt       DateTime?        @db.Timestamptz(6)
+  createdAt         DateTime         @default(now()) @db.Timestamptz(6)
+  order             Order?           @relation(fields: [orderId], references: [id])
+  orderItem         OrderItem?       @relation(fields: [orderItemId], references: [id])
+  payment           Payment          @relation(fields: [paymentId], references: [id])
+  requestedBy       User             @relation("RefundRequestedBy", fields: [requestedByUserId], references: [id])
 
   @@index([paymentId])
+  @@index([orderId])
   @@index([orderItemId])
   @@map("refunds")
+}
+
+model VendorLedgerEntry {
+  id        String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId  String          @db.Uuid
+  orderId   String?         @unique @db.Uuid
+  payoutId  String?         @db.Uuid
+  type      LedgerEntryType
+  amount    Decimal         @db.Decimal(10, 2)
+  createdAt DateTime        @default(now()) @db.Timestamptz(6)
+  vendor    Vendor          @relation(fields: [vendorId], references: [id])
+  order     Order?          @relation(fields: [orderId], references: [id])
+  payout    Payout?         @relation(fields: [payoutId], references: [id])
+
+  @@index([vendorId])
+  @@index([vendorId, createdAt])
+  @@map("vendor_ledger_entries")
+}
+
+model Payout {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId       String       @db.Uuid
+  amount         Decimal      @db.Decimal(10, 2)
+  status         PayoutStatus @default(PAYOUT_COMPLETED)
+  idempotencyKey String?      @unique
+  createdAt      DateTime     @default(now()) @db.Timestamptz(6)
+  vendor         Vendor       @relation(fields: [vendorId], references: [id])
+  entries        VendorLedgerEntry[]
+
+  @@index([vendorId])
+  @@map("payouts")
 }
 
 model PasabuyRequest {
@@ -693,6 +737,7 @@ enum CancellationReason {
   NOT_AVAILABLE
   CUSTOMER_REQUEST
   CLOSING_EARLY
+  AUTO_REFUND_TIMEOUT
   OTHER
 }
 
@@ -742,6 +787,20 @@ enum RefundStatus {
   APPROVED
   PROCESSED
   DENIED
+}
+
+enum RefundInitiator {
+  BUYER
+  SYSTEM
+}
+
+enum LedgerEntryType {
+  ORDER_CREDIT
+  PAYOUT_DEBIT
+}
+
+enum PayoutStatus {
+  PAYOUT_COMPLETED
 }
 
 enum PasabuyStatus {

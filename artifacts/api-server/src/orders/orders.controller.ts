@@ -22,6 +22,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import { RequestOrderRefundDto } from '../refunds/dto/request-order-refund.dto';
 
 import { CreateOrderDto } from './dto/create-order.dto';
 import { OrdersService } from './orders.service';
@@ -163,7 +164,35 @@ export class OrdersController {
   }
 
 
-    @Patch(':orderId/pickup')
+    @Post(':orderId/contact-vendor')
+  @UseGuards(RolesGuard)
+  @Roles('BUYER')
+  @ApiOperation({
+    summary: 'Notify the vendor that the buyer needs an update on this order',
+  })
+  async contactVendor(
+    @CurrentUser() user: JwtPayload,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.ordersService.contactVendor(user.sub, orderId);
+  }
+
+  @Post(':orderId/refund-request')
+  @UseGuards(RolesGuard)
+  @Roles('BUYER')
+  @ApiOperation({
+    summary:
+      'Request a refund for an order — auto-refunded when a timeout rule is met, otherwise queued for admin review',
+  })
+  async requestRefund(
+    @CurrentUser() user: JwtPayload,
+    @Param('orderId') orderId: string,
+    @Body() dto: RequestOrderRefundDto,
+  ) {
+    return this.ordersService.requestRefund(user.sub, orderId, dto);
+  }
+
+  @Patch(':orderId/pickup')
   @UseGuards(RolesGuard)
   @Roles('BUYER')
   @ApiOperation({
