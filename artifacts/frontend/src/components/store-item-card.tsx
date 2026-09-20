@@ -229,7 +229,10 @@ export function StoreItemCard({
         <div className="mt-3 flex h-9 items-center justify-between">
           <button
             type="button"
-            onClick={() => setIsFavorited((current) => !current)}
+            onClick={(event) => {
+              event.stopPropagation();
+              setIsFavorited((current) => !current);
+            }}
             className="flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-all duration-200 hover:bg-destructive/10 hover:text-destructive active:scale-90"
             aria-label={
               isFavorited
@@ -248,7 +251,10 @@ export function StoreItemCard({
 
           <motion.button
             type="button"
-            onClick={handleAddToCart}
+            onClick={(event) => {
+              event.stopPropagation();
+              handleAddToCart();
+            }}
             whileHover={{ scale: 1.03 }}
             whileTap={{ scale: 0.94 }}
             transition={{

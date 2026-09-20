@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, Crown, Loader2, Users } from "lucide-react";
+import { Check, Copy, Crown, Loader2, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   finalizeGroupOrder,
   getGroupOrder,
   lockGroupOrder,
   pingGroupOrder,
+  removeGroupOrderItem,
   setGroupOrderPaymentSplit,
   type GroupOrderResponse,
 } from "@/features/auth/api";
@@ -35,7 +36,16 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
   const [splitMode, setSplitMode] = useState<SplitMode>("EQUAL");
   const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
   const [stage, setStage] = useState<Stage>("building");
+  const [removingItemId, setRemovingItemId] = useState<string | null>(null);
   const hasTrackedFinalOrder = useRef(false);
+
+  const currentUserId = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("user") ?? "{}").id ?? null;
+    } catch {
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,6 +107,21 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
       window.setTimeout(() => setCodeCopied(false), 1500);
     } catch {
       // clipboard unavailable — ignore
+    }
+  };
+
+  const handleRemoveItem = async (itemId: string) => {
+    if (removingItemId) return;
+    setRemovingItemId(itemId);
+    setActionError(null);
+    try {
+      await removeGroupOrderItem(session.groupOrderId, itemId);
+      const refreshed = await getGroupOrder(session.groupOrderId);
+      setGroupOrder(refreshed);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not remove that item.");
+    } finally {
+      setRemovingItemId(null);
     }
   };
 
@@ -281,12 +306,17 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
       ) : (
         <>
           <section className="rounded-3xl border border-border/80 bg-card p-4 shadow-sm sm:p-5">
-            <div className="mb-4 flex items-center justify-between">
+            <div className="mb-1 flex items-center justify-between">
               <h2 className="flex items-center gap-2 font-semibold">
                 <Users className="h-4 w-4" /> Members ({groupOrder.participantCount})
               </h2>
               <span className="text-sm font-semibold">{currency(groupTotal)}</span>
             </div>
+            {splitMode === "EQUAL" && joinedParticipants.length > 1 && (
+              <p className="mb-3 text-xs text-muted-foreground">
+                Equal split: {currency(groupTotal / joinedParticipants.length)} each
+              </p>
+            )}
             <div className="divide-y divide-border/70">
               {joinedParticipants.map((participant) => (
                 <div key={participant.participantId} className="py-3 first:pt-0 last:pb-0">
@@ -300,11 +330,24 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
                   {participant.items.length > 0 ? (
                     <ul className="mt-1 space-y-0.5">
                       {participant.items.map((item) => (
-                        <li key={item.id} className="flex justify-between text-xs text-muted-foreground">
+                        <li key={item.id} className="flex items-center justify-between text-xs text-muted-foreground">
                           <span>
                             {item.name} x{item.quantity}
                           </span>
-                          <span>{currency(item.subtotal)}</span>
+                          <span className="flex items-center gap-2">
+                            {currency(item.subtotal)}
+                            {participant.user.id === currentUserId && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveItem(item.id)}
+                                disabled={removingItemId === item.id}
+                                aria-label={`Remove ${item.name}`}
+                                className="text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            )}
+                          </span>
                         </li>
                       ))}
                     </ul>

@@ -1010,16 +1010,10 @@ export default function MarketplacePage({
                   </div>
                 </div>
 
-                <div className="md:hidden">
-                  <div className="overflow-x-auto pb-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                    <div className="flex min-w-[980px] gap-4">
-                      {filteredFeatured.map((vendor) => (
-                        <div key={vendor.name} className="w-[220px] min-w-[220px] flex-none">
-                          <VendorCard {...vendor} />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                <div className="flex flex-col gap-4 md:hidden">
+                  {filteredFeatured.map((vendor) => (
+                    <VendorCard key={vendor.name} {...vendor} />
+                  ))}
                 </div>
 
                 <div className="hidden md:grid md:grid-cols-3 md:gap-4 [grid-auto-flow:dense]">
@@ -1112,16 +1106,10 @@ export default function MarketplacePage({
                   <p className="mb-4 text-xs text-destructive">{groupOrderError}</p>
                 )}
 
-                <div className="md:hidden">
-                  <div className="overflow-x-auto pb-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-                    <div className="flex min-w-[980px] gap-4">
-                      {filteredLocal.map((vendor) => (
-                        <div key={vendor.name} className="w-[220px] min-w-[220px] flex-none">
-                          <VendorCard {...vendor} />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                <div className="flex flex-col gap-4 md:hidden">
+                  {filteredLocal.map((vendor) => (
+                    <VendorCard key={vendor.name} {...vendor} />
+                  ))}
                 </div>
 
                 <div className="hidden md:grid md:grid-cols-3 md:gap-4 [grid-auto-flow:dense]">
