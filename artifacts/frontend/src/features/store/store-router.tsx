@@ -1,60 +1,15 @@
-import { useEffect, useState } from "react";
-import { favoriteVendor, getVendorStorefront, unfavoriteVendor } from "@/features/auth/api";
-import StorePage, { type StorePageProps } from "./storepage";
-import { toStorePageProps } from "./store-mapper";
+import { useState } from "react";
+import StorePage from "./storepage";
+import { useVendorStorefront } from "./use-vendor-storefront";
 
 export function StoreRouter() {
-  const [vendorId, setVendorId] = useState<string | null>(null);
-  const [storeData, setStoreData] = useState<StorePageProps | null>(null);
-  const [isNotFound, setIsNotFound] = useState(false);
-  const [isFavoriteBusy, setIsFavoriteBusy] = useState(false);
+  const [vendorId] = useState<string | null>(() =>
+    window.location.pathname.split("/").filter(Boolean).at(-1) ?? null,
+  );
+  const { storeData, isNotFound, isFavoriteBusy, handleToggleFavorite } =
+    useVendorStorefront(vendorId);
 
-  useEffect(() => {
-    const id = window.location.pathname.split("/").filter(Boolean).at(-1);
-
-    if (!id) {
-      setIsNotFound(true);
-      return;
-    }
-
-    setVendorId(id);
-    getVendorStorefront(id)
-      .then((vendor) => setStoreData(toStorePageProps(vendor)))
-      .catch(() => setIsNotFound(true));
-  }, []);
-
-  const handleToggleFavorite = async () => {
-    if (!vendorId || !storeData || isFavoriteBusy) return;
-    setIsFavoriteBusy(true);
-    const wasFavorited = storeData.isFavorited;
-    setStoreData((prev) =>
-      prev
-        ? {
-            ...prev,
-            isFavorited: !wasFavorited,
-            favoritesCount: prev.favoritesCount + (wasFavorited ? -1 : 1),
-          }
-        : prev,
-    );
-    try {
-      const status = wasFavorited
-        ? await unfavoriteVendor(vendorId)
-        : await favoriteVendor(vendorId);
-      setStoreData((prev) =>
-        prev
-          ? { ...prev, isFavorited: status.isFavoritedByMe, favoritesCount: status.favoritesCount }
-          : prev,
-      );
-    } catch {
-      setStoreData((prev) =>
-        prev ? { ...prev, isFavorited: wasFavorited, favoritesCount: storeData.favoritesCount } : prev,
-      );
-    } finally {
-      setIsFavoriteBusy(false);
-    }
-  };
-
-  if (isNotFound) {
+  if (!vendorId || isNotFound) {
     return (
       <main className="flex min-h-dvh items-center justify-center bg-background px-4">
         <div className="text-center">

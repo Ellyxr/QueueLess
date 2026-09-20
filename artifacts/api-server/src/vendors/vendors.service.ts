@@ -1,10 +1,12 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { VendorStatus } from '@prisma/client';
+import { LedgerEntryType, Prisma, VendorStatus } from '@prisma/client';
 import type { UserRole } from '../auth/roles';
 import { UpdateVendorDto } from './dto/update-vendor.dto';
 
@@ -269,5 +271,119 @@ export class VendorsService {
         updatedAt: true,
       },
     });
+  }
+
+  async getVendorLedgerBalance(ownerUserId: string) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { ownerUserId },
+      select: { id: true },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found for this user');
+    }
+
+    const balance = await this.sumLedgerBalance(vendor.id);
+
+    return { balance: balance.toFixed(2) };
+  }
+
+  async payoutVendorBalance(ownerUserId: string, idempotencyKey: string | undefined) {
+    const normalizedKey = idempotencyKey?.trim();
+
+    if (!normalizedKey) {
+      throw new BadRequestException('Idempotency-Key header is required');
+    }
+
+    if (normalizedKey.length > 255) {
+      throw new BadRequestException(
+        'Idempotency-Key must not exceed 255 characters',
+      );
+    }
+
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { ownerUserId },
+      select: { id: true },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found for this user');
+    }
+
+    const existing = await this.prisma.payout.findUnique({
+      where: { idempotencyKey: normalizedKey },
+    });
+
+    if (existing) {
+      if (existing.vendorId !== vendor.id) {
+        throw new ConflictException(
+          'Idempotency-Key has already been used for another vendor',
+        );
+      }
+
+      return { id: existing.id, amount: existing.amount.toFixed(2), status: existing.status };
+    }
+
+    try {
+      const payout = await this.prisma.$transaction(async (tx) => {
+        const balance = await this.sumLedgerBalance(vendor.id, tx);
+
+        if (balance.lessThanOrEqualTo(0)) {
+          throw new BadRequestException('No balance available to transfer out');
+        }
+
+        const created = await tx.payout.create({
+          data: {
+            vendorId: vendor.id,
+            amount: balance,
+            idempotencyKey: normalizedKey,
+          },
+        });
+
+        await tx.vendorLedgerEntry.create({
+          data: {
+            vendorId: vendor.id,
+            payoutId: created.id,
+            type: LedgerEntryType.PAYOUT_DEBIT,
+            amount: balance.negated(),
+          },
+        });
+
+        return created;
+      });
+
+      return { id: payout.id, amount: payout.amount.toFixed(2), status: payout.status };
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const replay = await this.prisma.payout.findUnique({
+          where: { idempotencyKey: normalizedKey },
+        });
+
+        if (replay) {
+          return { id: replay.id, amount: replay.amount.toFixed(2), status: replay.status };
+        }
+
+        throw new ConflictException(
+          'A payout request with this Idempotency-Key is already being processed',
+        );
+      }
+
+      throw error;
+    }
+  }
+
+  private async sumLedgerBalance(
+    vendorId: string,
+    client: PrismaService | Prisma.TransactionClient = this.prisma,
+  ) {
+    const result = await client.vendorLedgerEntry.aggregate({
+      where: { vendorId },
+      _sum: { amount: true },
+    });
+
+    return result._sum.amount ?? new Prisma.Decimal(0);
   }
 }
