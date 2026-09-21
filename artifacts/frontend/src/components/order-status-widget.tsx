@@ -494,7 +494,7 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
           />
 
           <img
-            src="/favicon.svg"
+            src="/favicon.png"
             alt="QueueLess"
             className="mx-auto mt-3 h-7 w-7 object-contain"
           />

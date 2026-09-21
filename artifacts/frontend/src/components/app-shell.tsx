@@ -176,7 +176,7 @@ export function AppShell({
             onClick={() => (window.location.href = "/")}
           >
             <div className="flex h-10 w-10 items-center justify-center rounded-xl text-primary-foreground">
-              <img src="/favicon.svg" alt="logo" />
+              <img src="/favicon.png" alt="logo" />
             </div>
             <div className="hidden sm:block">
               <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
@@ -423,7 +423,7 @@ export function AppShell({
             <SheetContent side="right" className="flex w-4/5 flex-col gap-0 p-0 sm:max-w-xs md:hidden">
               <SheetHeader className="border-b border-border/80 px-5 py-4 text-left">
                 <SheetTitle className="flex items-center gap-2 text-base">
-                  <img src="/favicon.svg" alt="logo" className="h-6 w-6" />
+                  <img src="/favicon.png" alt="logo" className="h-6 w-6" />
                   <span>QueueLess</span>
                 </SheetTitle>
               </SheetHeader>
