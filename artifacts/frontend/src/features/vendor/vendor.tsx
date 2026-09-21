@@ -50,6 +50,7 @@ import {
   updateProduct,
   updateVendorStorefront,
   updateVendorPreorderAvailability,
+  updateVendorAvailability,
   updateOrderStatus,
   payoutVendorBalance,
   type VendorProduct,
@@ -85,6 +86,12 @@ interface PreorderDayState {
   closeTime: string;
 }
 
+interface StoreDayState {
+  isOpen: boolean;
+  openTime: string;
+  closeTime: string;
+}
+
 const WEEKDAYS: Array<{ key: Weekday; label: string }> = [
   { key: 'MONDAY', label: 'Monday' },
   { key: 'TUESDAY', label: 'Tuesday' },
@@ -98,6 +105,12 @@ function createDefaultPreorderDays(): Record<Weekday, PreorderDayState> {
   return Object.fromEntries(
     WEEKDAYS.map(({ key }) => [key, { isEnabled: false, openTime: '09:00', closeTime: '17:00' }]),
   ) as Record<Weekday, PreorderDayState>;
+}
+
+function createDefaultStoreDays(): Record<Weekday, StoreDayState> {
+  return Object.fromEntries(
+    WEEKDAYS.map(({ key }) => [key, { isOpen: false, openTime: '09:00', closeTime: '17:00' }]),
+  ) as Record<Weekday, StoreDayState>;
 }
 
 function getNextOrderStatus(
@@ -161,10 +174,15 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   const [isStorefrontLoading, setIsStorefrontLoading] = useState(true);
   const [isStorefrontSaving, setIsStorefrontSaving] = useState(false);
   const [preorderEnabled, setPreorderEnabled] = useState(false);
+  const [preorderSameAsStoreHours, setPreorderSameAsStoreHours] = useState(true);
   const [preorderDays, setPreorderDays] = useState<Record<Weekday, PreorderDayState>>(
     () => createDefaultPreorderDays(),
   );
   const [isPreorderSaving, setIsPreorderSaving] = useState(false);
+  const [storeDays, setStoreDays] = useState<Record<Weekday, StoreDayState>>(
+    () => createDefaultStoreDays(),
+  );
+  const [isAvailabilitySaving, setIsAvailabilitySaving] = useState(false);
   const [isProductSaving, setIsProductSaving] = useState(false);
   const [isProductDeleting, setIsProductDeleting] = useState(false);
   const [productSearch, setProductSearch] = useState('');
@@ -213,12 +231,26 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
           campusLocation: vendorData.campusLocation || '',
         });
         setPreorderEnabled(vendorData.preorderEnabled ?? false);
+        setPreorderSameAsStoreHours(vendorData.preorderSameAsStoreHours ?? true);
         if (vendorData.preorderAvailability) {
           setPreorderDays((prev) => {
             const next = { ...prev };
             for (const day of vendorData.preorderAvailability!) {
               next[day.dayOfWeek] = {
                 isEnabled: day.isEnabled,
+                openTime: day.openTime ?? '09:00',
+                closeTime: day.closeTime ?? '17:00',
+              };
+            }
+            return next;
+          });
+        }
+        if (vendorData.availabilityDays) {
+          setStoreDays((prev) => {
+            const next = { ...prev };
+            for (const day of vendorData.availabilityDays!) {
+              next[day.dayOfWeek] = {
+                isOpen: day.isOpen,
                 openTime: day.openTime ?? '09:00',
                 closeTime: day.closeTime ?? '17:00',
               };
@@ -327,11 +359,13 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   const handleSavePreorderAvailability = async () => {
     if (!vendor || isPreorderSaving) return;
 
-    for (const { key, label } of WEEKDAYS) {
-      const day = preorderDays[key];
-      if (day.isEnabled && day.openTime >= day.closeTime) {
-        showToast(`${label}'s close time must be after its open time.`, 'error');
-        return;
+    if (!preorderSameAsStoreHours) {
+      for (const { key, label } of WEEKDAYS) {
+        const day = preorderDays[key];
+        if (day.isEnabled && day.openTime >= day.closeTime) {
+          showToast(`${label}'s close time must be after its open time.`, 'error');
+          return;
+        }
       }
     }
 
@@ -339,16 +373,24 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     try {
       const updated = await updateVendorPreorderAvailability(vendor.id, {
         preorderEnabled,
-        days: WEEKDAYS.map(({ key }) => ({
-          dayOfWeek: key,
-          isEnabled: preorderDays[key].isEnabled,
-          openTime: preorderDays[key].isEnabled ? preorderDays[key].openTime : null,
-          closeTime: preorderDays[key].isEnabled ? preorderDays[key].closeTime : null,
-        })),
+        sameAsStoreHours: preorderSameAsStoreHours,
+        days: preorderSameAsStoreHours
+          ? undefined
+          : WEEKDAYS.map(({ key }) => ({
+              dayOfWeek: key,
+              isEnabled: preorderDays[key].isEnabled,
+              openTime: preorderDays[key].isEnabled ? preorderDays[key].openTime : null,
+              closeTime: preorderDays[key].isEnabled ? preorderDays[key].closeTime : null,
+            })),
       });
       setVendor((prev) =>
         prev
-          ? { ...prev, preorderEnabled: updated.preorderEnabled, preorderAvailability: updated.preorderAvailability }
+          ? {
+              ...prev,
+              preorderEnabled: updated.preorderEnabled,
+              preorderSameAsStoreHours: updated.preorderSameAsStoreHours,
+              preorderAvailability: updated.preorderAvailability,
+            }
           : prev,
       );
       showToast('Preorder availability saved.');
@@ -356,6 +398,36 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
       showToast(error instanceof Error ? error.message : 'Unable to save preorder availability.', 'error');
     } finally {
       setIsPreorderSaving(false);
+    }
+  };
+
+  const handleSaveAvailability = async () => {
+    if (!vendor || isAvailabilitySaving) return;
+
+    for (const { key, label } of WEEKDAYS) {
+      const day = storeDays[key];
+      if (day.isOpen && day.openTime >= day.closeTime) {
+        showToast(`${label}'s close time must be after its open time.`, 'error');
+        return;
+      }
+    }
+
+    setIsAvailabilitySaving(true);
+    try {
+      const updated = await updateVendorAvailability(vendor.id, {
+        days: WEEKDAYS.map(({ key }) => ({
+          dayOfWeek: key,
+          isOpen: storeDays[key].isOpen,
+          openTime: storeDays[key].isOpen ? storeDays[key].openTime : null,
+          closeTime: storeDays[key].isOpen ? storeDays[key].closeTime : null,
+        })),
+      });
+      setVendor((prev) => (prev ? { ...prev, availabilityDays: updated.availability } : prev));
+      showToast('Store availability saved.');
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Unable to save store availability.', 'error');
+    } finally {
+      setIsAvailabilitySaving(false);
     }
   };
 
@@ -771,6 +843,83 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
           </Card>
         </section>
 
+        {/* Store availability */}
+        <section className="mt-8">
+          <div className="mb-4">
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Availability</p>
+            <h2 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">Store availability</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Set the days and times buyers can order from you. Outside these hours, your storefront
+              shows as closed and buyers can't add items to their cart.
+            </p>
+          </div>
+          <Card className="border-card-border/80 bg-card/90 shadow-sm">
+            <CardContent className="p-5 sm:p-6">
+              <div className="space-y-2">
+                {WEEKDAYS.map(({ key, label }) => {
+                  const day = storeDays[key];
+                  return (
+                    <div
+                      key={key}
+                      className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-background/60 px-3 py-2.5"
+                    >
+                      <label className="flex w-28 shrink-0 items-center gap-2 text-sm font-medium text-foreground">
+                        <input
+                          type="checkbox"
+                          checked={day.isOpen}
+                          onChange={(event) =>
+                            setStoreDays((prev) => ({
+                              ...prev,
+                              [key]: { ...prev[key], isOpen: event.target.checked },
+                            }))
+                          }
+                          className="h-4 w-4 accent-primary"
+                        />
+                        {label}
+                      </label>
+                      <div className="flex items-center gap-2 text-sm">
+                        <input
+                          type="time"
+                          value={day.openTime}
+                          disabled={!day.isOpen}
+                          onChange={(event) =>
+                            setStoreDays((prev) => ({
+                              ...prev,
+                              [key]: { ...prev[key], openTime: event.target.value },
+                            }))
+                          }
+                          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm disabled:opacity-50"
+                        />
+                        <span className="text-muted-foreground">to</span>
+                        <input
+                          type="time"
+                          value={day.closeTime}
+                          disabled={!day.isOpen}
+                          onChange={(event) =>
+                            setStoreDays((prev) => ({
+                              ...prev,
+                              [key]: { ...prev[key], closeTime: event.target.value },
+                            }))
+                          }
+                          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm disabled:opacity-50"
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <Button
+                type="button"
+                onClick={handleSaveAvailability}
+                disabled={isAvailabilitySaving}
+                className="mt-4 rounded-full px-5"
+              >
+                {isAvailabilitySaving ? 'Saving...' : 'Save store availability'}
+              </Button>
+            </CardContent>
+          </Card>
+        </section>
+
         {/* Preorder availability */}
         <section className="mt-8">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -796,6 +945,23 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                   below.
                 </p>
               )}
+              <label
+                className={`mb-4 flex items-center gap-2 text-sm font-medium text-foreground ${!preorderEnabled ? 'opacity-50' : ''}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={preorderSameAsStoreHours}
+                  disabled={!preorderEnabled}
+                  onChange={(event) => setPreorderSameAsStoreHours(event.target.checked)}
+                  className="h-4 w-4 accent-primary"
+                />
+                Same as store availability
+              </label>
+              {preorderSameAsStoreHours ? (
+                <p className={`text-sm text-muted-foreground ${!preorderEnabled ? 'opacity-50' : ''}`}>
+                  Preorders will follow the store availability hours set above.
+                </p>
+              ) : (
               <div className={`space-y-2 ${!preorderEnabled ? 'pointer-events-none opacity-50' : ''}`}>
                 {WEEKDAYS.map(({ key, label }) => {
                   const day = preorderDays[key];
@@ -849,6 +1015,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                   );
                 })}
               </div>
+              )}
               <Button
                 type="button"
                 onClick={handleSavePreorderAvailability}

@@ -1,8 +1,52 @@
 import type { VendorStorefront } from "@/features/auth/api";
 import { EXTRA_CATEGORY } from "@/lib/product-extras";
-import type { StorePageProps } from "./storepage";
+import type { StorePageProps, StoreScheduleRow } from "./storepage";
 
 type StoreCategory = StorePageProps["categories"][number];
+
+const WEEKDAY_LABELS: Record<string, string> = {
+  MONDAY: "Mon",
+  TUESDAY: "Tue",
+  WEDNESDAY: "Wed",
+  THURSDAY: "Thu",
+  FRIDAY: "Fri",
+  SATURDAY: "Sat",
+};
+
+const WEEKDAY_ORDER = Object.keys(WEEKDAY_LABELS);
+
+function formatTimeLabel(time: string): string {
+  const [hourStr, minuteStr] = time.split(":");
+  const hour24 = Number(hourStr);
+  const minute = Number(minuteStr);
+  const period = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${hour12}:${minute.toString().padStart(2, "0")} ${period}`;
+}
+
+function buildScheduleRows(
+  days: Array<{
+    dayOfWeek: string;
+    isOpen?: boolean;
+    isEnabled?: boolean;
+    openTime: string | null;
+    closeTime: string | null;
+  }>,
+): StoreScheduleRow[] {
+  const byDay = new Map(days.map((day) => [day.dayOfWeek, day]));
+  return WEEKDAY_ORDER.map((dayOfWeek) => {
+    const entry = byDay.get(dayOfWeek);
+    const isActive = entry ? (entry.isOpen ?? entry.isEnabled ?? false) : false;
+    return {
+      dayLabel: WEEKDAY_LABELS[dayOfWeek],
+      isActive,
+      hoursLabel:
+        isActive && entry?.openTime && entry?.closeTime
+          ? `${formatTimeLabel(entry.openTime)} – ${formatTimeLabel(entry.closeTime)}`
+          : "Closed",
+    };
+  });
+}
 
 export function sortCategoriesByOrder(
   categories: StoreCategory[],
@@ -73,5 +117,16 @@ export function toStorePageProps(vendor: VendorStorefront): StorePageProps {
       "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1200&q=80",
     avatarInitial: vendor.name.charAt(0).toUpperCase() || "S",
     categories: orderedCategories,
+    isOpenNow: vendor.isOpenNow,
+    nextAvailableLabel: vendor.nextAvailableLabel,
+    availabilitySchedule:
+      vendor.availabilityDays && vendor.availabilityDays.length > 0
+        ? buildScheduleRows(vendor.availabilityDays)
+        : undefined,
+    preorderEnabled: vendor.preorderEnabled,
+    preorderSchedule:
+      vendor.preorderEnabled && vendor.preorderAvailability && vendor.preorderAvailability.length > 0
+        ? buildScheduleRows(vendor.preorderAvailability)
+        : undefined,
   };
 }

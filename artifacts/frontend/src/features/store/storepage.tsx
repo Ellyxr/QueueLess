@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
+  CalendarClock,
   Check,
   Clock,
   GripVertical,
@@ -35,6 +36,12 @@ interface StoreCategory {
   items: MenuItem[];
 }
 
+export interface StoreScheduleRow {
+  dayLabel: string;
+  isActive: boolean;
+  hoursLabel: string;
+}
+
 export interface StorePageProps {
   storeName: string;
   description?: string | null;
@@ -55,6 +62,12 @@ export interface StorePageProps {
     description: string;
   }) => void | Promise<void>;
   onBack?: () => void;
+  /** Whether the vendor is currently within its configured availability window. Undefined means no schedule was configured (always orderable). */
+  isOpenNow?: boolean;
+  nextAvailableLabel?: string | null;
+  availabilitySchedule?: StoreScheduleRow[];
+  preorderEnabled?: boolean;
+  preorderSchedule?: StoreScheduleRow[];
 }
 
 export default function StorePage({
@@ -74,6 +87,11 @@ export default function StorePage({
   onReorderCategories,
   onSaveStoreDetails,
   onBack,
+  isOpenNow,
+  nextAvailableLabel,
+  availabilitySchedule,
+  preorderEnabled,
+  preorderSchedule,
 }: StorePageProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [orderedCategories, setOrderedCategories] = useState(categories);
@@ -315,6 +333,56 @@ export default function StorePage({
                     <MapPinHouseIcon className="h-4 w-4 shrink-0" />
                     <span>{campusLocation || "No Location"}</span>
                   </p>
+
+                  {isOpenNow === false && (
+                    <div className="mx-auto mt-4 flex max-w-xl items-center justify-center gap-2 rounded-full border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive">
+                      <CalendarClock className="h-4 w-4 shrink-0" />
+                      <span>
+                        Closed right now
+                        {nextAvailableLabel ? ` — will be available ${nextAvailableLabel}` : ""}.
+                      </span>
+                    </div>
+                  )}
+
+                  {availabilitySchedule && (
+                    <div className="mx-auto mt-4 max-w-xl rounded-2xl border border-border/80 bg-card/60 p-4">
+                      <p className="mb-2 flex items-center justify-center gap-1.5 text-[10px] font-mono uppercase tracking-[0.14em] text-muted-foreground">
+                        <Clock className="h-3.5 w-3.5" /> Store hours
+                      </p>
+                      <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-3">
+                        {availabilitySchedule.map((row) => (
+                          <div key={row.dayLabel} className="flex items-center justify-between gap-2">
+                            <span className="font-medium text-foreground">{row.dayLabel}</span>
+                            <span
+                              className={row.isActive ? "text-muted-foreground" : "text-muted-foreground/60"}
+                            >
+                              {row.hoursLabel}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {preorderEnabled && preorderSchedule && (
+                    <div className="mx-auto mt-3 max-w-xl rounded-2xl border border-primary/20 bg-primary/5 p-4">
+                      <p className="mb-2 flex items-center justify-center gap-1.5 text-[10px] font-mono uppercase tracking-[0.14em] text-primary">
+                        <CalendarClock className="h-3.5 w-3.5" /> Preorders available
+                      </p>
+                      <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-3">
+                        {preorderSchedule.map((row) => (
+                          <div key={row.dayLabel} className="flex items-center justify-between gap-2">
+                            <span className="font-medium text-foreground">{row.dayLabel}</span>
+                            <span
+                              className={row.isActive ? "text-muted-foreground" : "text-muted-foreground/60"}
+                            >
+                              {row.hoursLabel}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -378,6 +446,7 @@ export default function StorePage({
                             price={item.price}
                             storeName={storeName}
                             extras={item.extras}
+                            disabled={isOpenNow === false}
                           />
                         ))}
                       </div>

@@ -113,6 +113,7 @@ model Vendor {
   updatedAt           DateTime                   @updatedAt @db.Timestamptz(6)
   businessName        String?
   preorderEnabled     Boolean                    @default(false)
+  preorderSameAsStoreHours Boolean               @default(true)
   carts               Cart[]
   eventParticipations EventVendorParticipation[]
   featuredListings    FeaturedListing[]
@@ -127,6 +128,7 @@ model Vendor {
   ledgerEntries       VendorLedgerEntry[]
   payouts             Payout[]
   preorderAvailability VendorPreorderAvailability[]
+  availability        VendorAvailability[]
 
   @@index([ownerUserId])
   @@index([status])
@@ -150,6 +152,25 @@ model VendorPreorderAvailability {
   @@unique([vendorId, dayOfWeek])
   @@index([vendorId])
   @@map("vendor_preorder_availability")
+}
+
+model VendorAvailability {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId  String  @db.Uuid
+  dayOfWeek Weekday
+  isOpen    Boolean @default(false)
+  /// 24-hour "HH:mm" local time; null while the day is closed.
+  openTime  String? @db.VarChar(5)
+  /// 24-hour "HH:mm" local time; null while the day is closed.
+  closeTime String? @db.VarChar(5)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@unique([vendorId, dayOfWeek])
+  @@index([vendorId])
+  @@map("vendor_availability")
 }
 
 model VendorFavorite {
