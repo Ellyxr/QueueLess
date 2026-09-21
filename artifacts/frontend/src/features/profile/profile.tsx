@@ -39,6 +39,8 @@ import {
   type VendorSummary,
 } from "@/features/auth/api";
 import { RefundRequestDialog } from "@/features/refunds/refund-request-dialog";
+import { PasabuyOrderEntry } from "@/features/pasabuy/pasabuy-order-entry";
+import { PasabuyStudentIdCard } from "@/features/pasabuy/pasabuy-student-id-card";
 
 const REFUND_HIDDEN_STATUSES = new Set(["PENDING", "CANCELLED"]);
 import { useRequireAuth } from "@/hooks/use-require-auth";
@@ -555,6 +557,8 @@ export default function ProfilePage() {
             </CardContent>
           </Card>
 
+          <PasabuyStudentIdCard />
+
           <Card className="border-card-border/80 bg-card/90 shadow-sm">
             <CardHeader>
               <CardTitle className="text-2xl tracking-tighter">
@@ -674,6 +678,16 @@ export default function ProfilePage() {
                             {new Date(order.createdAt).toLocaleDateString()}
                           </p>
                         </div>
+                        <PasabuyOrderEntry
+                          orderStatus={order.status}
+                          order={{
+                            orderId: order.id,
+                            reference: order.id.slice(0, 8).toUpperCase(),
+                            items: order.items.map((item) => `${item.name} x${item.quantity}`).join(", "),
+                            vendorName: order.vendor.name,
+                            pickupLocation: order.vendor.name,
+                          }}
+                        />
                         {!REFUND_HIDDEN_STATUSES.has(order.status) && !order.refund && (
                           <button
                             type="button"

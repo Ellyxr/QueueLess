@@ -11,6 +11,7 @@ import {
   Store,
   Shield,
   LogOut,
+  Bike,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,6 +43,7 @@ const navIcons: Record<string, React.ReactNode> = {
   Cart: <ShoppingCart className="h-4 w-4" />,
   Vendor: <Store className="h-4 w-4" />,
   Admin: <Shield className="h-4 w-4" />,
+  Pasabuy: <Bike className="h-4 w-4" />,
 };
 
 export function AppShell({
@@ -270,6 +272,17 @@ export function AppShell({
                       </span>
                       <span>Search</span>
                     </Button>
+
+                    <Button
+                      variant="ghost"
+                      onClick={() => (window.location.href = "/pasabuy")}
+                      className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-foreground hover:bg-secondary"
+                    >
+                      <span className="flex w-0 shrink-0 -translate-x-2 items-center overflow-hidden opacity-0 transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100">
+                        {navIcons["Pasabuy"]}
+                      </span>
+                      <span>Pasabuy</span>
+                    </Button>
                   </>
                 )}
               </div>
@@ -427,6 +440,7 @@ export function AppShell({
                   : [
                       { label: "Browse", icon: Compass },
                       { label: "Cart", icon: ShoppingCart },
+                      { label: "Pasabuy", icon: Bike },
                       { label: "Search", icon: Search },
                     ]
                 ).map(({ label, icon: Icon }) => (
@@ -438,6 +452,8 @@ export function AppShell({
                         setIsSearchOpen(true);
                       } else if (label === "Cart") {
                         window.location.href = "/cart";
+                      } else if (label === "Pasabuy") {
+                        window.location.href = "/pasabuy";
                       } else if (label === "Browse") {
                         window.location.href = "/";
                       } else if (label === "Home") {
