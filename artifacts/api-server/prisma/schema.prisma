@@ -213,6 +213,8 @@ model Product {
   preparationTimeMinutes Int               @default(15)
   category               String?
   isAvailable            Boolean           @default(true)
+  imageUrl               String?
+  imageFileId            String?
   createdAt              DateTime          @default(now()) @db.Timestamptz(6)
   updatedAt              DateTime          @updatedAt @db.Timestamptz(6)
   cartItems              CartItem[]
