@@ -44,6 +44,7 @@ import {
   type GroupOrderSession,
 } from "@/features/group-orders/group-order-session";
 import { StorefrontPane } from "./storefront-pane";
+import { PasabuyBanner } from "@/features/pasabuy/pasabuy-banner";
 
 const categories = [
   "Pizza",
@@ -891,6 +892,8 @@ export default function MarketplacePage({
             image="https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=1200&q=80"
           />
         </section>
+
+        <PasabuyBanner />
 
         {/* US-011: Category Filters Section */}
         <section className="mt-8">
