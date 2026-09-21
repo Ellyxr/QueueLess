@@ -6,9 +6,17 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { LedgerEntryType, Prisma, VendorStatus } from '@prisma/client';
+import { LedgerEntryType, Prisma, VendorStatus, Weekday } from '@prisma/client';
 import type { UserRole } from '../auth/roles';
 import { UpdateVendorDto } from './dto/update-vendor.dto';
+import { UpdateVendorPreorderAvailabilityDto } from './dto/update-vendor-preorder-availability.dto';
+
+const PREORDER_AVAILABILITY_SELECT = {
+  dayOfWeek: true,
+  isEnabled: true,
+  openTime: true,
+  closeTime: true,
+} satisfies Prisma.VendorPreorderAvailabilitySelect;
 
 @Injectable()
 export class VendorsService {
@@ -191,6 +199,10 @@ export class VendorsService {
         categoryOrder: true,
         vendorType: true,
         status: true,
+        preorderEnabled: true,
+        preorderAvailability: {
+          select: PREORDER_AVAILABILITY_SELECT,
+        },
       },
     });
 
@@ -269,6 +281,95 @@ export class VendorsService {
         status: true,
         createdAt: true,
         updatedAt: true,
+      },
+    });
+  }
+
+  async updatePreorderAvailability(
+    userId: string,
+    vendorId: string,
+    dto: UpdateVendorPreorderAvailabilityDto,
+    roles: UserRole[],
+  ) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: {
+        id: vendorId,
+      },
+      select: {
+        id: true,
+        ownerUserId: true,
+      },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found');
+    }
+
+    const isAdmin = roles.includes('ADMIN');
+    const isOwner = vendor.ownerUserId === userId;
+
+    if (!isAdmin && !isOwner) {
+      throw new ForbiddenException(
+        'You do not have permission to modify this vendor',
+      );
+    }
+
+    const seenDays = new Set<Weekday>();
+
+    for (const day of dto.days) {
+      if (seenDays.has(day.dayOfWeek)) {
+        throw new BadRequestException(
+          `${day.dayOfWeek} was listed more than once`,
+        );
+      }
+      seenDays.add(day.dayOfWeek);
+
+      if (day.isEnabled) {
+        if (!day.openTime || !day.closeTime) {
+          throw new BadRequestException(
+            `${day.dayOfWeek} is enabled but is missing an open or close time`,
+          );
+        }
+
+        if (day.openTime >= day.closeTime) {
+          throw new BadRequestException(
+            `${day.dayOfWeek}'s close time must be after its open time`,
+          );
+        }
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.vendor.update({
+        where: { id: vendorId },
+        data: { preorderEnabled: dto.preorderEnabled },
+      });
+
+      await tx.vendorPreorderAvailability.deleteMany({
+        where: { vendorId },
+      });
+
+      if (dto.days.length > 0) {
+        await tx.vendorPreorderAvailability.createMany({
+          data: dto.days.map((day) => ({
+            vendorId,
+            dayOfWeek: day.dayOfWeek,
+            isEnabled: day.isEnabled,
+            openTime: day.isEnabled ? day.openTime! : null,
+            closeTime: day.isEnabled ? day.closeTime! : null,
+          })),
+        });
+      }
+    });
+
+    return this.prisma.vendor.findUniqueOrThrow({
+      where: { id: vendorId },
+      select: {
+        id: true,
+        preorderEnabled: true,
+        preorderAvailability: {
+          select: PREORDER_AVAILABILITY_SELECT,
+        },
       },
     });
   }
