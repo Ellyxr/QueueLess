@@ -21,6 +21,7 @@ import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { FeaturedListingsModule } from './featured-listings/featured-listings.module';
 import { QrModule } from './qr/qr.module';
 import { AdminModule } from './admin/admin.module';
+import { ImagekitModule } from './imagekit/imagekit.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { AdminModule } from './admin/admin.module';
     SubscriptionsModule,
     FeaturedListingsModule,
     AdminModule,
+    ImagekitModule,
   ],
 })
 export class AppModule {}
