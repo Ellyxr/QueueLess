@@ -50,12 +50,21 @@ export class UpdateVendorPreorderAvailabilityDto {
   preorderEnabled!: boolean;
 
   @ApiProperty({
-    type: [VendorPreorderDayDto],
-    description: 'One entry per weekday, Monday through Saturday.',
+    description:
+      'When true, preorder availability mirrors the vendor\'s store availability and `days` is ignored.',
   })
+  @IsBoolean()
+  sameAsStoreHours!: boolean;
+
+  @ApiPropertyOptional({
+    type: [VendorPreorderDayDto],
+    description:
+      'One entry per weekday, Monday through Saturday. Required when sameAsStoreHours is false.',
+  })
+  @IsOptional()
   @IsArray()
   @ArrayMaxSize(6)
   @ValidateNested({ each: true })
   @Type(() => VendorPreorderDayDto)
-  days!: VendorPreorderDayDto[];
+  days?: VendorPreorderDayDto[];
 }
