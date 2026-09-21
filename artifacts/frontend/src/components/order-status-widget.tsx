@@ -401,7 +401,9 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
             </div>
           )}
 
-          {order.myPaymentShare && order.myPaymentShare.status === "PENDING" && (
+          {order.orderType === "GROUP" &&
+            order.myPaymentShare &&
+            order.myPaymentShare.status === "PENDING" && (
             <div className="mt-3 space-y-1.5">
               <button
                 type="button"

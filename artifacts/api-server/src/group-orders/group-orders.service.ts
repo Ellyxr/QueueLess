@@ -608,6 +608,63 @@ export class GroupOrdersService {
     });
   }
 
+  async cancelGroupOrder(userId: string, groupOrderId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const groupOrder = await tx.groupOrder.findUnique({
+        where: {
+          id: groupOrderId,
+        },
+        select: {
+          id: true,
+          initiatorUserId: true,
+          status: true,
+        },
+      });
+
+      if (!groupOrder) {
+        throw new NotFoundException('Group order not found');
+      }
+
+      if (groupOrder.initiatorUserId !== userId) {
+        throw new ForbiddenException(
+          'Only the group order initiator can delete this group order',
+        );
+      }
+
+      if (groupOrder.status !== 'OPEN' && groupOrder.status !== 'LOCKED') {
+        throw new BadRequestException(
+          'Only an open or locked group order can be deleted',
+        );
+      }
+
+      const result = await tx.groupOrder.updateMany({
+        where: {
+          id: groupOrderId,
+          initiatorUserId: userId,
+          status: groupOrder.status,
+        },
+        data: {
+          status: 'CANCELLED',
+        },
+      });
+
+      if (result.count !== 1) {
+        throw new ConflictException(
+          'Group order could not be deleted because its status changed',
+        );
+      }
+
+      const updatedGroupOrder = await tx.groupOrder.findUniqueOrThrow({
+        where: {
+          id: groupOrderId,
+        },
+        include: groupOrderInclude,
+      });
+
+      return this.buildGroupOrderResponse(updatedGroupOrder);
+    });
+  }
+
   async pingOwner(userId: string, groupOrderId: string) {
     const groupOrder = await this.prisma.groupOrder.findUnique({
       where: { id: groupOrderId },

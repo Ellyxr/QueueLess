@@ -112,6 +112,7 @@ model Vendor {
   createdAt           DateTime                   @default(now()) @db.Timestamptz(6)
   updatedAt           DateTime                   @updatedAt @db.Timestamptz(6)
   businessName        String?
+  preorderEnabled     Boolean                    @default(false)
   carts               Cart[]
   eventParticipations EventVendorParticipation[]
   featuredListings    FeaturedListing[]
@@ -125,10 +126,30 @@ model Vendor {
   favoritedBy         VendorFavorite[]           @relation("VendorFavoritedBy")
   ledgerEntries       VendorLedgerEntry[]
   payouts             Payout[]
+  preorderAvailability VendorPreorderAvailability[]
 
   @@index([ownerUserId])
   @@index([status])
   @@map("vendors")
+}
+
+model VendorPreorderAvailability {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId  String  @db.Uuid
+  dayOfWeek Weekday
+  isEnabled Boolean @default(false)
+  /// 24-hour "HH:mm" local time; null while the day is disabled.
+  openTime  String? @db.VarChar(5)
+  /// 24-hour "HH:mm" local time; null while the day is disabled.
+  closeTime String? @db.VarChar(5)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@unique([vendorId, dayOfWeek])
+  @@index([vendorId])
+  @@map("vendor_preorder_availability")
 }
 
 model VendorFavorite {
@@ -710,6 +731,15 @@ enum UserRole {
 enum VendorType {
   SAMPALOC_LANE
   STUDENT
+}
+
+enum Weekday {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
 }
 
 enum VendorStatus {

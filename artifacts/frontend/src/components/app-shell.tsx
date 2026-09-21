@@ -13,6 +13,12 @@ import {
   LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { User } from "@/types/auth";
 import {
   AUTH_STATE_CHANGED_EVENT,
@@ -28,7 +34,6 @@ import { NotificationBell } from "@/components/notification-bell";
 interface AppShellProps {
   children: ReactNode;
   username?: string;
-  isLoggedIn?: boolean;
 }
 
 const navIcons: Record<string, React.ReactNode> = {
@@ -42,7 +47,6 @@ const navIcons: Record<string, React.ReactNode> = {
 export function AppShell({
   children,
   username = "Jamie",
-  isLoggedIn = true,
 }: AppShellProps) {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -161,8 +165,8 @@ export function AppShell({
         }`}
       >
         <div
-          className={`flex items-center justify-between gap-3 mx-6 ${
-            isScrolled ? "mx-8" : "mx-26"
+          className={`flex items-center justify-between gap-3 mx-1 sm:mx-6 ${
+            isScrolled ? "md:mx-8" : "md:mx-26"
           }`}
         >
           <div
@@ -319,7 +323,7 @@ export function AppShell({
                 onClick={() =>
                   switchPortal(isVendorPortal ? "buyer" : "vendor")
                 }
-                className="rounded-full px-4 py-2 font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+                className="hidden rounded-full px-4 py-2 font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30 sm:inline-flex"
               >
                 {isVendorPortal ? "Buyer Portal" : "Vendor Portal"}
               </Button>
@@ -329,7 +333,7 @@ export function AppShell({
               <Button
                 variant="ghost"
                 onClick={() => (window.location.href = "/admin")}
-                className="group flex items-center gap-1.5 rounded-full px-4 py-2 font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/30"
+                className="group hidden items-center gap-1.5 rounded-full px-4 py-2 font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/30 sm:inline-flex"
               >
                 <span className="w-0 -translate-x-2 opacity-0 overflow-hidden transition-all duration-300 ease-in-out group-hover:w-4 group-hover:translate-x-0 group-hover:opacity-100 flex items-center shrink-0">
                   {navIcons["Admin"]}
@@ -401,74 +405,122 @@ export function AppShell({
           </div>
         </div>
 
-        {hasToken && isMobileMenuOpen && (
-          <div className="mt-3 space-y-2 border-t border-border/80 pt-3 md:hidden">
-            {(isVendorPortal
-              ? [
-                  { label: "Home", icon: Compass },
-                  { label: "Store", icon: Store },
-                  { label: "Transactions", icon: ShoppingBag },
-                  { label: "Inbox", icon: Inbox },
-                  { label: "Profile", icon: UserCircle2 },
-                ]
-              : [
-                  { label: "Browse", icon: Compass },
-                  { label: "Cart", icon: ShoppingCart },
-                  { label: "Search", icon: Search },
-                ]
-            ).map(({ label, icon: Icon }) => (
-              <Button
-                key={label}
-                variant="ghost"
-                onClick={() => {
-                  if (label === "Search") {
-                    setIsSearchOpen(true);
-                  } else if (label === "Cart") {
-                    window.location.href = "/cart";
-                  } else if (label === "Browse") {
-                    window.location.href = "/";
-                  } else if (label === "Home") {
-                    window.location.href = "/vendor";
-                  } else if (label === "Store") {
-                    window.location.href = "/vendor/storefront";
-                  } else if (label === "Profile") {
-                    window.location.href = "/profile";
-                  }
-                  setIsMobileMenuOpen(false);
-                }}
-                className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2 text-left font-medium"
-              >
-                <Icon className="h-4 w-4" />
-                <span className="relative">
-                  {label}
-                  {label === "Cart" && showCartBadge && (
-                    <span className="absolute -right-5 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">
-                      {cartCount > 9 ? "9+" : cartCount}
-                    </span>
-                  )}
-                </span>
-              </Button>
-            ))}
+        {hasToken && (
+          <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
+            <SheetContent side="right" className="flex w-4/5 flex-col gap-0 p-0 sm:max-w-xs md:hidden">
+              <SheetHeader className="border-b border-border/80 px-5 py-4 text-left">
+                <SheetTitle className="flex items-center gap-2 text-base">
+                  <img src="/favicon.svg" alt="logo" className="h-6 w-6" />
+                  <span>QueueLess</span>
+                </SheetTitle>
+              </SheetHeader>
 
-            {isLoggedIn ? (
-              <Button
-                variant="secondary"
-                onClick={() => (window.location.href = "/profile")}
-                className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2"
-              >
-                <UserCircle2 className="h-4 w-4" />
-                {username}
-              </Button>
-            ) : (
-              <Button
-                variant="default"
-                onClick={() => (window.location.href = "/login")}
-                className="w-full rounded-full px-4 py-2"
-              >
-                Log In
-              </Button>
-            )}
-          </div>
+              <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
+                {(isVendorPortal
+                  ? [
+                      { label: "Home", icon: Compass },
+                      { label: "Store", icon: Store },
+                      { label: "Transactions", icon: ShoppingBag },
+                      { label: "Inbox", icon: Inbox },
+                      { label: "Profile", icon: UserCircle2 },
+                    ]
+                  : [
+                      { label: "Browse", icon: Compass },
+                      { label: "Cart", icon: ShoppingCart },
+                      { label: "Search", icon: Search },
+                    ]
+                ).map(({ label, icon: Icon }) => (
+                  <Button
+                    key={label}
+                    variant="ghost"
+                    onClick={() => {
+                      if (label === "Search") {
+                        setIsSearchOpen(true);
+                      } else if (label === "Cart") {
+                        window.location.href = "/cart";
+                      } else if (label === "Browse") {
+                        window.location.href = "/";
+                      } else if (label === "Home") {
+                        window.location.href = "/vendor";
+                      } else if (label === "Store") {
+                        window.location.href = "/vendor/storefront";
+                      } else if (label === "Profile") {
+                        window.location.href = "/profile";
+                      }
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2 text-left font-medium"
+                  >
+                    <Icon className="h-4 w-4" />
+                    <span className="relative">
+                      {label}
+                      {label === "Cart" && showCartBadge && (
+                        <span className="absolute -right-5 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-bold text-destructive-foreground">
+                          {cartCount > 9 ? "9+" : cartCount}
+                        </span>
+                      )}
+                    </span>
+                  </Button>
+                ))}
+
+                {isStudentVendor && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => switchPortal(isVendorPortal ? "buyer" : "vendor")}
+                    className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2 text-left font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+                  >
+                    <Store className="h-4 w-4" />
+                    {isVendorPortal ? "Buyer Portal" : "Vendor Portal"}
+                  </Button>
+                )}
+
+                {user?.role === "admin" && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      window.location.href = "/admin";
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2 text-left font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/30"
+                  >
+                    {navIcons["Admin"]}
+                    Admin Panel
+                  </Button>
+                )}
+              </nav>
+
+              <div className="space-y-2 border-t border-border/80 px-3 py-4">
+                {!isLoginPage && user !== null ? (
+                  <>
+                    <Button
+                      variant="secondary"
+                      onClick={() => (window.location.href = "/profile")}
+                      className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2"
+                    >
+                      <UserCircle2 className="h-4 w-4" />
+                      {user?.fullName || username}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={logoutUser}
+                      className="flex w-full items-center justify-start gap-2 rounded-full px-3 py-2 text-destructive hover:bg-destructive/10"
+                    >
+                      <LogOut className="h-4 w-4" />
+                      Log out
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    variant="default"
+                    onClick={() => (window.location.href = "/login")}
+                    className="w-full rounded-full px-4 py-2"
+                  >
+                    Log In
+                  </Button>
+                )}
+              </div>
+            </SheetContent>
+          </Sheet>
         )}
       </header>
 

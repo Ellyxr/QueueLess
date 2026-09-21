@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { ImagePlus, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -13,6 +14,8 @@ import {
   requestOrderRefund,
   type RefundCategory,
 } from "@/features/auth/api";
+
+const MAX_ATTACHMENTS = 4;
 
 const FIVE_MIN_MS = 5 * 60 * 1000;
 const TWO_MIN_MS = 2 * 60 * 1000;
@@ -60,6 +63,18 @@ export function RefundRequestDialog({
   const [isContacting, setIsContacting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [buyerContactPingAt, setBuyerContactPingAt] = useState(order.buyerContactPingAt);
+  const [attachments, setAttachments] = useState<File[]>([]);
+
+  const attachmentPreviews = useMemo(
+    () => attachments.map((file) => URL.createObjectURL(file)),
+    [attachments],
+  );
+
+  useEffect(() => {
+    return () => {
+      attachmentPreviews.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [attachmentPreviews]);
 
   const vendorAcceptEligible = useMemo(() => {
     if (order.status !== "PAID" || !order.paidAt) return false;
@@ -75,6 +90,18 @@ export function RefundRequestDialog({
     setCategory(null);
     setDescription("");
     setError(null);
+    setAttachments([]);
+  };
+
+  const handleAddAttachments = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setAttachments((current) =>
+      [...current, ...Array.from(files)].slice(0, MAX_ATTACHMENTS),
+    );
+  };
+
+  const handleRemoveAttachment = (index: number) => {
+    setAttachments((current) => current.filter((_, i) => i !== index));
   };
 
   const handleContactVendor = async () => {
@@ -166,6 +193,46 @@ export function RefundRequestDialog({
             className="min-h-20 w-full rounded-xl border border-border bg-background p-3 text-sm outline-none"
             maxLength={500}
           />
+        )}
+
+        {category && !selectedOption?.auto && (
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-2">
+              {attachmentPreviews.map((src, index) => (
+                <div key={src} className="relative h-16 w-16 overflow-hidden rounded-lg border border-border">
+                  <img src={src} alt={`Attachment ${index + 1}`} className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveAttachment(index)}
+                    aria-label="Remove attachment"
+                    className="absolute right-0.5 top-0.5 rounded-full bg-black/60 p-0.5 text-white"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+              {attachments.length < MAX_ATTACHMENTS && (
+                <label className="flex h-16 w-16 cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border text-muted-foreground hover:bg-secondary/40">
+                  <ImagePlus className="h-4 w-4" />
+                  <span className="text-[10px]">Add</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(event) => {
+                      handleAddAttachments(event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Attach up to {MAX_ATTACHMENTS} photos to help explain what happened. Photos are only
+              shown here and aren't submitted with your request.
+            </p>
+          </div>
         )}
 
         {category === "VENDOR_NOT_ACCEPTED" && !vendorAcceptEligible && (

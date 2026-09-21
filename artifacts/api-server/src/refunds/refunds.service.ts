@@ -207,6 +207,8 @@ export class RefundsService {
                   orderId: true,
                   order: {
                     select: {
+                      createdAt: true,
+                      groupOrderId: true,
                       vendor: {
                         select: {
                           businessName: true,
@@ -239,6 +241,10 @@ export class RefundsService {
         vendorName:
           paymentShare?.order.vendor
             .businessName ?? null,
+        orderedAt:
+          paymentShare?.order.createdAt ?? null,
+        isGroupOrder:
+          paymentShare?.order.groupOrderId != null,
         amount: Number(
           refund.amount.toFixed(2),
         ),
