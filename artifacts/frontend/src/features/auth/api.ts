@@ -52,6 +52,13 @@ export interface VendorPreorderDay {
   closeTime: string | null;
 }
 
+export interface VendorAvailabilityDay {
+  dayOfWeek: Weekday;
+  isOpen: boolean;
+  openTime: string | null;
+  closeTime: string | null;
+}
+
 export interface VendorStorefront {
   id: string;
   name: string;
@@ -64,7 +71,12 @@ export interface VendorStorefront {
   favoritesCount?: number;
   isFavoritedByMe?: boolean;
   preorderEnabled?: boolean;
+  preorderSameAsStoreHours?: boolean;
   preorderAvailability?: VendorPreorderDay[];
+  availabilityDays?: VendorAvailabilityDay[];
+  /** Only present on the buyer-facing storefront response, not the vendor's own settings fetch. */
+  isOpenNow?: boolean;
+  nextAvailableLabel?: string | null;
 }
 
 export interface VendorSummary {
@@ -501,14 +513,34 @@ export function updateVendorStorefront(
 
 export interface UpdateVendorPreorderAvailabilityInput {
   preorderEnabled: boolean;
-  days: VendorPreorderDay[];
+  sameAsStoreHours: boolean;
+  days?: VendorPreorderDay[];
 }
 
 export function updateVendorPreorderAvailability(
   vendorId: string,
   data: UpdateVendorPreorderAvailabilityInput,
-): Promise<{ id: string; preorderEnabled: boolean; preorderAvailability: VendorPreorderDay[] }> {
+): Promise<{
+  id: string;
+  preorderEnabled: boolean;
+  preorderSameAsStoreHours: boolean;
+  preorderAvailability: VendorPreorderDay[];
+}> {
   return fetchWithAuth(`/vendors/${vendorId}/preorder-availability`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export interface UpdateVendorAvailabilityInput {
+  days: VendorAvailabilityDay[];
+}
+
+export function updateVendorAvailability(
+  vendorId: string,
+  data: UpdateVendorAvailabilityInput,
+): Promise<{ id: string; availability: VendorAvailabilityDay[] }> {
+  return fetchWithAuth(`/vendors/${vendorId}/availability`, {
     method: "PATCH",
     body: JSON.stringify(data),
   });
