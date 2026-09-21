@@ -60,6 +60,8 @@ import {
   type Weekday,
 } from '@/features/auth/api';
 import { EXTRA_CATEGORY } from '@/lib/product-extras';
+import { PasabuyVendorCard } from '@/features/pasabuy/pasabuy-vendor-card';
+import { getActiveRequestForOrder } from '@/features/pasabuy/pasabuy-mock-store';
 
 const weekSalesChartConfig: ChartConfig = {
   amount: {
@@ -1518,6 +1520,11 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                     <span className="font-semibold text-foreground">{selectedOrder.isPasabuyRequest ? 'Yes' : 'No'}</span>
                   </div>
                 </div>
+
+                {selectedOrder.isPasabuyRequest && (() => {
+                  const pasabuyRequest = getActiveRequestForOrder(selectedOrder.id);
+                  return pasabuyRequest ? <PasabuyVendorCard request={pasabuyRequest} /> : null;
+                })()}
 
                 <div>
                   <h4 className="font-semibold text-foreground mb-2">Order Items</h4>
