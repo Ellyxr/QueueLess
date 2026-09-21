@@ -20,6 +20,8 @@ const PRODUCT_SELECT = {
   preparationTimeMinutes: true,
   category: true,
   isAvailable: true,
+  imageUrl: true,
+  imageFileId: true,
   createdAt: true,
   updatedAt: true,
   eligibleExtras: {
@@ -79,6 +81,8 @@ export class ProductsService {
         preparationTimeMinutes: true,
         category: true,
         isAvailable: true,
+        imageUrl: true,
+        imageFileId: true,
       },
 
       orderBy: {
@@ -101,6 +105,8 @@ export class ProductsService {
         preparationTimeMinutes: true,
         category: true,
         isAvailable: true,
+        imageUrl: true,
+        imageFileId: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -182,6 +188,8 @@ export class ProductsService {
           preparationTimeMinutes: dto.preparationTimeMinutes ?? 15,
           category,
           isAvailable: dto.isAvailable ?? true,
+          imageUrl: dto.imageUrl?.trim() || null,
+          imageFileId: dto.imageFileId?.trim() || null,
           ...(eligibleExtraIds.length > 0
             ? { eligibleExtras: { connect: eligibleExtraIds.map((id) => ({ id })) } }
             : {}),
@@ -254,6 +262,14 @@ export class ProductsService {
 
     if (dto.isAvailable !== undefined) {
       data.isAvailable = dto.isAvailable;
+    }
+    
+     if (dto.imageUrl !== undefined) {
+      data.imageUrl = dto.imageUrl.trim() || null;
+    }
+
+    if (dto.imageFileId !== undefined) {
+      data.imageFileId = dto.imageFileId.trim() || null;
     }
 
     if (dto.eligibleExtraIds !== undefined) {

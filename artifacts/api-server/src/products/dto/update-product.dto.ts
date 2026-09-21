@@ -51,4 +51,14 @@ export class UpdateProductDto {
   @ArrayMaxSize(50)
   @IsUUID(undefined, { each: true })
   eligibleExtraIds?: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  imageUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  imageFileId?: string;
 }
