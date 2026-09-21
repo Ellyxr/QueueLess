@@ -272,6 +272,37 @@ async addGroupOrderItem(
     );
   }
 
+  @Delete(':groupOrderId')
+  @Roles('BUYER')
+  @ApiOperation({
+    summary: 'Delete (cancel) a group order as its owner',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Group order deleted successfully',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Group order cannot be deleted in its current state',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Only the group order initiator can delete the group order',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Group order not found',
+  })
+  async cancelGroupOrder(
+    @CurrentUser() user: { sub: string },
+    @Param('groupOrderId') groupOrderId: string,
+  ) {
+    return this.groupOrdersService.cancelGroupOrder(
+      user.sub,
+      groupOrderId,
+    );
+  }
+
 @Post(':groupOrderId/finalize')
 @Roles('BUYER')
 @ApiOperation({

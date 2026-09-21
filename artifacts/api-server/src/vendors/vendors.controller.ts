@@ -16,6 +16,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { UpdateVendorDto } from './dto/update-vendor.dto';
+import { UpdateVendorPreorderAvailabilityDto } from './dto/update-vendor-preorder-availability.dto';
 import { VendorsService } from './vendors.service';
 
 @ApiBearerAuth()
@@ -91,6 +92,22 @@ export class VendorsController {
     @Req() request: { user: JwtPayload },
   ) {
     return this.vendorsService.updateVendorStorefront(
+      request.user.sub,
+      vendorId,
+      dto,
+      request.user.roles,
+    );
+  }
+
+  @Patch(':vendorId/preorder-availability')
+  @UseGuards(RolesGuard)
+  @Roles('VENDOR_OWNER', 'ADMIN')
+  async updatePreorderAvailability(
+    @Param('vendorId') vendorId: string,
+    @Body() dto: UpdateVendorPreorderAvailabilityDto,
+    @Req() request: { user: JwtPayload },
+  ) {
+    return this.vendorsService.updatePreorderAvailability(
       request.user.sub,
       vendorId,
       dto,
