@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -48,11 +48,15 @@ import {
 } from "@/components/ui/table";
 import { AdminShell } from "./admin-shell";
 import {
-  createEmptyAdminUser,
-  MOCK_USERS,
+  createAdminUser,
+  listAdminUsers,
+  updateAdminUserEmail,
+  updateAdminUserPassword,
+  updateAdminUserRoles,
+  updateAdminUserStatus,
   type AdminUserRole,
   type AdminUserRow,
-} from "./admin-data";
+} from "@/features/auth/api";
 
 const ROLE_LABEL: Record<AdminUserRole, string> = {
   student: "Student",
@@ -66,15 +70,43 @@ const ROLE_BADGE_CLASS: Record<AdminUserRole, string> = {
   admin: "bg-amber-500/10 text-amber-600",
 };
 
+type RoleTab = "all" | "student" | "vendor" | "student_vendor";
+
+const ROLE_TABS: Array<{ label: string; value: RoleTab }> = [
+  { label: "All", value: "all" },
+  { label: "Student", value: "student" },
+  { label: "Vendor", value: "vendor" },
+  { label: "Student Vendor", value: "student_vendor" },
+];
+
 function toggleRole(roles: AdminUserRole[], role: AdminUserRole): AdminUserRole[] {
   const has = roles.includes(role);
   if (has && roles.length === 1) return roles; // keep at least one role
   return has ? roles.filter((r) => r !== role) : [...roles, role];
 }
 
+function matchesRoleTab(user: AdminUserRow, tab: RoleTab): boolean {
+  const isStudent = user.roles.includes("student");
+  const isVendor = user.roles.includes("vendor");
+  switch (tab) {
+    case "all":
+      return true;
+    case "student":
+      return isStudent && !isVendor;
+    case "vendor":
+      return isVendor && !isStudent;
+    case "student_vendor":
+      return isStudent && isVendor;
+  }
+}
+
 export default function AdminUsersPage() {
-  const [users, setUsers] = useState<AdminUserRow[]>(MOCK_USERS);
+  const [users, setUsers] = useState<AdminUserRow[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [roleTab, setRoleTab] = useState<RoleTab>("all");
   const [showArchived, setShowArchived] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [accessUserId, setAccessUserId] = useState<string | null>(null);
@@ -83,58 +115,155 @@ export default function AdminUsersPage() {
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState<AdminUserRole>("student");
+  const [isCreating, setIsCreating] = useState(false);
 
   const [draftEmail, setDraftEmail] = useState("");
   const [draftPassword, setDraftPassword] = useState("");
+  const [isSavingAccess, setIsSavingAccess] = useState(false);
+
+  const loadUsers = () => {
+    setIsLoading(true);
+    setLoadError(null);
+    listAdminUsers()
+      .then(setUsers)
+      .catch((err: unknown) => setLoadError(err instanceof Error ? err.message : "Could not load users."))
+      .finally(() => setIsLoading(false));
+  };
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     return users.filter((user) => {
       if (!showArchived && user.isArchived) return false;
+      if (!matchesRoleTab(user, roleTab)) return false;
       if (!term) return true;
       return (
-        user.fullName.toLowerCase().includes(term) || user.email.toLowerCase().includes(term)
+        user.fullName.toLowerCase().includes(term) ||
+        (user.email ?? "").toLowerCase().includes(term)
       );
     });
-  }, [users, search, showArchived]);
+  }, [users, search, showArchived, roleTab]);
 
-  const updateUser = (id: string, patch: Partial<AdminUserRow>) => {
+  const updateUserLocal = (id: string, patch: Partial<AdminUserRow>) => {
     setUsers((prev) => prev.map((user) => (user.id === id ? { ...user, ...patch } : user)));
   };
 
-  const handleCreateUser = () => {
-    if (!newFullName.trim() || !newEmail.trim() || !newPassword.trim()) return;
-    const created = createEmptyAdminUser({
-      fullName: newFullName.trim(),
-      email: newEmail.trim(),
-      role: newRole,
-    });
-    setUsers((prev) => [created, ...prev]);
-    setIsCreateOpen(false);
-    setNewFullName("");
-    setNewEmail("");
-    setNewPassword("");
-    setNewRole("student");
+  const handleToggleRole = async (user: AdminUserRow, role: AdminUserRole) => {
+    setActionError(null);
+    try {
+      const updated = await updateAdminUserRoles(user.id, toggleRole(user.roles, role));
+      updateUserLocal(user.id, updated);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not update roles.");
+    }
+  };
+
+  const handleToggleActive = async (user: AdminUserRow) => {
+    setActionError(null);
+    try {
+      const updated = await updateAdminUserStatus(user.id, { isActive: !user.isActive });
+      updateUserLocal(user.id, updated);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not update status.");
+    }
+  };
+
+  const handleToggleArchived = async (user: AdminUserRow) => {
+    setActionError(null);
+    try {
+      const updated = await updateAdminUserStatus(user.id, { isArchived: !user.isArchived });
+      updateUserLocal(user.id, updated);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not update status.");
+    }
+  };
+
+  const handleCreateUser = async () => {
+    if (!newFullName.trim() || !newEmail.trim() || !newPassword.trim() || isCreating) return;
+    setIsCreating(true);
+    setActionError(null);
+    try {
+      const created = await createAdminUser({
+        fullName: newFullName.trim(),
+        email: newEmail.trim(),
+        password: newPassword,
+        role: newRole,
+      });
+      setUsers((prev) => [created, ...prev]);
+      setIsCreateOpen(false);
+      setNewFullName("");
+      setNewEmail("");
+      setNewPassword("");
+      setNewRole("student");
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not create user.");
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const accessUser = users.find((user) => user.id === accessUserId) ?? null;
 
   const openAccessDialog = (user: AdminUserRow) => {
-    setDraftEmail(user.email);
+    setDraftEmail(user.email ?? "");
     setDraftPassword("");
+    setActionError(null);
     setAccessUserId(user.id);
   };
 
-  const saveAccessChanges = () => {
-    if (!accessUser) return;
-    updateUser(accessUser.id, { email: draftEmail.trim() || accessUser.email });
-    setAccessUserId(null);
+  const saveAccessChanges = async () => {
+    if (!accessUser || isSavingAccess) return;
+    setIsSavingAccess(true);
+    setActionError(null);
+    try {
+      let latest = accessUser;
+      const trimmedEmail = draftEmail.trim();
+      if (trimmedEmail && trimmedEmail !== accessUser.email) {
+        latest = await updateAdminUserEmail(accessUser.id, trimmedEmail);
+      }
+      if (draftPassword.trim()) {
+        await updateAdminUserPassword(accessUser.id, draftPassword.trim());
+      }
+      updateUserLocal(accessUser.id, latest);
+      setAccessUserId(null);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not save changes.");
+    } finally {
+      setIsSavingAccess(false);
+    }
   };
 
   return (
     <AdminShell>
-      <div className="mb-6 rounded-2xl border border-dashed border-amber-500/40 bg-amber-500/5 px-4 py-3 text-xs text-amber-700 dark:text-amber-400">
-        Showing placeholder data — none of these actions persist yet. See AddressMe.md.
+      {loadError && (
+        <div className="mb-4 rounded-2xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-xs text-destructive">
+          {loadError}
+        </div>
+      )}
+      {actionError && (
+        <div className="mb-4 rounded-2xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-xs text-destructive">
+          {actionError}
+        </div>
+      )}
+
+      <div className="mb-4 flex flex-wrap gap-2">
+        {ROLE_TABS.map(({ label, value }) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setRoleTab(value)}
+            className={`rounded-full px-4 py-1.5 text-xs font-semibold transition-colors ${
+              roleTab === value
+                ? "bg-primary text-primary-foreground"
+                : "border border-border text-muted-foreground hover:bg-secondary"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       <Card className="border-card-border/80 bg-card/90 shadow-sm">
@@ -166,7 +295,9 @@ export default function AdminUsersPage() {
             </label>
           </div>
 
-          {filtered.length === 0 ? (
+          {isLoading ? (
+            <p className="py-10 text-center text-sm text-muted-foreground">Loading users...</p>
+          ) : filtered.length === 0 ? (
             <p className="py-10 text-center text-sm text-muted-foreground">No users found.</p>
           ) : (
             <Table>
@@ -184,7 +315,7 @@ export default function AdminUsersPage() {
                 {filtered.map((user) => (
                   <TableRow key={user.id} className={user.isArchived ? "opacity-60" : ""}>
                     <TableCell className="font-medium text-foreground">{user.fullName}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{user.email}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{user.email ?? "—"}</TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-1">
                         {user.roles.map((role) => (
@@ -237,17 +368,13 @@ export default function AdminUsersPage() {
                             <DropdownMenuCheckboxItem
                               key={role}
                               checked={user.roles.includes(role)}
-                              onCheckedChange={() =>
-                                updateUser(user.id, { roles: toggleRole(user.roles, role) })
-                              }
+                              onCheckedChange={() => handleToggleRole(user, role)}
                             >
                               {ROLE_LABEL[role]}
                             </DropdownMenuCheckboxItem>
                           ))}
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            onClick={() => updateUser(user.id, { isActive: !user.isActive })}
-                          >
+                          <DropdownMenuItem onClick={() => handleToggleActive(user)}>
                             {user.isActive ? (
                               <>
                                 <Ban className="mr-2 h-4 w-4" /> Deactivate
@@ -258,9 +385,7 @@ export default function AdminUsersPage() {
                               </>
                             )}
                           </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => updateUser(user.id, { isArchived: !user.isArchived })}
-                          >
+                          <DropdownMenuItem onClick={() => handleToggleArchived(user)}>
                             {user.isArchived ? (
                               <>
                                 <ArchiveRestore className="mr-2 h-4 w-4" /> Unarchive
@@ -333,10 +458,10 @@ export default function AdminUsersPage() {
             </Button>
             <Button
               className="rounded-full"
-              disabled={!newFullName.trim() || !newEmail.trim() || !newPassword.trim()}
+              disabled={!newFullName.trim() || !newEmail.trim() || !newPassword.trim() || isCreating}
               onClick={handleCreateUser}
             >
-              Create user
+              {isCreating ? "Creating..." : "Create user"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -385,8 +510,8 @@ export default function AdminUsersPage() {
                   Close
                 </Button>
                 {accessUser.dataAccessGranted && (
-                  <Button className="rounded-full" onClick={saveAccessChanges}>
-                    Save changes
+                  <Button className="rounded-full" disabled={isSavingAccess} onClick={saveAccessChanges}>
+                    {isSavingAccess ? "Saving..." : "Save changes"}
                   </Button>
                 )}
               </DialogFooter>

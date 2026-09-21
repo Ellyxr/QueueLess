@@ -1,7 +1,16 @@
 import { useEffect, useState } from "react";
+import { Eye } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -38,6 +47,9 @@ export default function AdminRefundsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
+
+  const detailRefund = refunds.find((refund) => refund.id === detailId) ?? null;
 
   useEffect(() => {
     setIsLoading(true);
@@ -110,6 +122,7 @@ export default function AdminRefundsPage() {
                   <TableHead>Reason</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Requested</TableHead>
+                  <TableHead className="text-right">Details</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -136,6 +149,17 @@ export default function AdminRefundsPage() {
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {new Date(refund.createdAt).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="rounded-full"
+                        aria-label="View more"
+                        onClick={() => setDetailId(refund.id)}
+                      >
+                        <Eye className="h-4 w-4" />
+                      </Button>
                     </TableCell>
                     <TableCell className="text-right">
                       {refund.status === "REQUESTED" ? (
@@ -180,6 +204,85 @@ export default function AdminRefundsPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={detailRefund !== null} onOpenChange={(open) => !open && setDetailId(null)}>
+        <DialogContent>
+          {detailRefund && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Refund case details</DialogTitle>
+                <DialogDescription>{detailRefund.requesterName}</DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-3 text-sm">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Complainant email</span>
+                  <span className="font-medium text-foreground">
+                    {detailRefund.requesterEmail ?? "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Vendor</span>
+                  <span className="font-medium text-foreground">
+                    {detailRefund.vendorName ?? "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Order reference</span>
+                  <span className="font-mono text-xs text-foreground">
+                    {detailRefund.orderId ?? "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Group order</span>
+                  <span className="font-medium text-foreground">
+                    {detailRefund.isGroupOrder ? "Yes" : "No"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Order placed</span>
+                  <span className="font-medium text-foreground">
+                    {detailRefund.orderedAt
+                      ? new Date(detailRefund.orderedAt).toLocaleString()
+                      : "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Complaint filed</span>
+                  <span className="font-medium text-foreground">
+                    {new Date(detailRefund.createdAt).toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Amount</span>
+                  <span className="font-medium text-foreground">
+                    {currency(detailRefund.amount)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Status</span>
+                  <Badge variant="secondary" className={STATUS_BADGE_CLASS[detailRefund.status]}>
+                    {detailRefund.status}
+                  </Badge>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">Comments</span>
+                  <p className="rounded-[14px] border border-border bg-secondary/30 p-3 text-foreground">
+                    {detailRefund.category ? `${detailRefund.category}: ` : ""}
+                    {detailRefund.reason || "No additional comments provided."}
+                  </p>
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" className="rounded-full" onClick={() => setDetailId(null)}>
+                  Close
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </AdminShell>
   );
 }

@@ -43,6 +43,15 @@ export interface ProductInput {
   eligibleExtraIds?: string[];
 }
 
+export type Weekday = "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY" | "SATURDAY";
+
+export interface VendorPreorderDay {
+  dayOfWeek: Weekday;
+  isEnabled: boolean;
+  openTime: string | null;
+  closeTime: string | null;
+}
+
 export interface VendorStorefront {
   id: string;
   name: string;
@@ -54,6 +63,8 @@ export interface VendorStorefront {
   products?: VendorProduct[];
   favoritesCount?: number;
   isFavoritedByMe?: boolean;
+  preorderEnabled?: boolean;
+  preorderAvailability?: VendorPreorderDay[];
 }
 
 export interface VendorSummary {
@@ -379,6 +390,8 @@ export interface AdminRefundRow {
   requesterName: string;
   requesterEmail: string | null;
   vendorName: string | null;
+  orderedAt: string | null;
+  isGroupOrder: boolean;
   amount: number;
   currency: string;
   reason: string;
@@ -393,6 +406,77 @@ export interface AdminRefundRow {
 export function listAdminRefunds(status?: string): Promise<AdminRefundRow[]> {
   const query = status && status !== "ALL" ? `?status=${status}` : "";
   return fetchWithAuth(`/refunds${query}`);
+}
+
+export type AdminUserRole = "student" | "vendor" | "admin";
+
+export interface AdminUserRow {
+  id: string;
+  fullName: string;
+  email: string | null;
+  roles: AdminUserRole[];
+  isActive: boolean;
+  isArchived: boolean;
+  /** Whether this user has granted the admin permission to view/change their email & password. */
+  dataAccessGranted: boolean;
+  createdAt: string;
+}
+
+export function listAdminUsers(search?: string, role?: AdminUserRole): Promise<AdminUserRow[]> {
+  const params = new URLSearchParams();
+  if (search) params.set("search", search);
+  if (role) params.set("role", role);
+  const query = params.toString();
+  return fetchWithAuth(`/admin/users${query ? `?${query}` : ""}`);
+}
+
+export function createAdminUser(data: {
+  fullName: string;
+  email: string;
+  password: string;
+  role: AdminUserRole;
+}): Promise<AdminUserRow> {
+  return fetchWithAuth(`/admin/users`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateAdminUserRoles(
+  userId: string,
+  roles: AdminUserRole[],
+): Promise<AdminUserRow> {
+  return fetchWithAuth(`/admin/users/${userId}/roles`, {
+    method: "PATCH",
+    body: JSON.stringify({ roles }),
+  });
+}
+
+export function updateAdminUserStatus(
+  userId: string,
+  data: { isActive?: boolean; isArchived?: boolean },
+): Promise<AdminUserRow> {
+  return fetchWithAuth(`/admin/users/${userId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateAdminUserEmail(userId: string, email: string): Promise<AdminUserRow> {
+  return fetchWithAuth(`/admin/users/${userId}/email`, {
+    method: "PATCH",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function updateAdminUserPassword(
+  userId: string,
+  password: string,
+): Promise<{ message: string }> {
+  return fetchWithAuth(`/admin/users/${userId}/password`, {
+    method: "PATCH",
+    body: JSON.stringify({ password }),
+  });
 }
 
 export function updateAdminRefundStatus(
@@ -410,6 +494,21 @@ export function updateVendorStorefront(
   data: UpdateVendorInput,
 ): Promise<VendorStorefront> {
   return fetchWithAuth(`/vendors/${vendorId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export interface UpdateVendorPreorderAvailabilityInput {
+  preorderEnabled: boolean;
+  days: VendorPreorderDay[];
+}
+
+export function updateVendorPreorderAvailability(
+  vendorId: string,
+  data: UpdateVendorPreorderAvailabilityInput,
+): Promise<{ id: string; preorderEnabled: boolean; preorderAvailability: VendorPreorderDay[] }> {
+  return fetchWithAuth(`/vendors/${vendorId}/preorder-availability`, {
     method: "PATCH",
     body: JSON.stringify(data),
   });
@@ -694,6 +793,10 @@ export function setGroupOrderPaymentSplit(
 
 export function pingGroupOrder(groupOrderId: string): Promise<{ message: string }> {
   return fetchWithAuth(`/group-orders/${groupOrderId}/ping`, { method: "POST" });
+}
+
+export function cancelGroupOrder(groupOrderId: string): Promise<GroupOrderResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}`, { method: "DELETE" });
 }
 
 // Notifications

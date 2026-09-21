@@ -2,6 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Crown, Loader2, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  cancelGroupOrder,
   finalizeGroupOrder,
   getGroupOrder,
   lockGroupOrder,
@@ -37,6 +48,8 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
   const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
   const [stage, setStage] = useState<Stage>("building");
   const [removingItemId, setRemovingItemId] = useState<string | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false);
   const hasTrackedFinalOrder = useRef(false);
 
   const currentUserId = useMemo(() => {
@@ -122,6 +135,21 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
       setActionError(error instanceof Error ? error.message : "Could not remove that item.");
     } finally {
       setRemovingItemId(null);
+    }
+  };
+
+  const handleCancelGroupOrder = async () => {
+    if (isCancelling) return;
+    setIsCancelling(true);
+    setActionError(null);
+    try {
+      await cancelGroupOrder(session.groupOrderId);
+      clearGroupOrderSession();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not delete the group order.");
+    } finally {
+      setIsCancelling(false);
+      setIsCancelDialogOpen(false);
     }
   };
 
@@ -249,7 +277,23 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
         </div>
       )}
 
-      {stage === "placed" ? (
+      {groupOrder.status === "CANCELLED" ? (
+        <section className="rounded-3xl border border-destructive/30 bg-card p-8 text-center shadow-sm">
+          <h2 className="text-xl font-semibold">Group order deleted</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {session.isOwner
+              ? "You deleted this group order."
+              : `${groupOrder.initiator.fullName} deleted the group order.`}
+          </p>
+          <Button
+            variant="outline"
+            className="mt-4 rounded-full"
+            onClick={() => clearGroupOrderSession()}
+          >
+            Back to cart
+          </Button>
+        </section>
+      ) : stage === "placed" ? (
         <section className="rounded-3xl border border-emerald-500/30 bg-card p-8 text-center shadow-sm">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-white">
             <Check className="h-7 w-7" />
@@ -394,6 +438,14 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
               >
                 {isPlacing ? "Placing..." : "Place Group Order"}
               </Button>
+              <Button
+                variant="outline"
+                className="mt-2 w-full rounded-full text-destructive hover:text-destructive"
+                disabled={isPlacing || isCancelling}
+                onClick={() => setIsCancelDialogOpen(true)}
+              >
+                Delete group order
+              </Button>
             </section>
           ) : (
             <section className="mt-4 rounded-3xl border border-border/80 bg-card p-5 text-center shadow-sm">
@@ -413,6 +465,30 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
           )}
         </>
       )}
+
+      <AlertDialog open={isCancelDialogOpen} onOpenChange={setIsCancelDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this group order?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will end the group order for everyone. Members will no longer be able to add
+              items or check out with this group.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isCancelling}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isCancelling}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleCancelGroupOrder();
+              }}
+            >
+              {isCancelling ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </main>
   );
 }
