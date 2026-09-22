@@ -6,5 +6,6 @@ import { PaymongoService } from './paymongo.service';
 @Module({
   controllers: [PaymentsController],
   providers: [PaymentsService, PaymongoService],
+  exports: [PaymongoService],
 })
 export class PaymentsModule {}

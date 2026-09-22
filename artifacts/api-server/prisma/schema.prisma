@@ -454,6 +454,7 @@ model Payment {
   currency             String              @default("PHP")
   provider             PaymentProvider     @default(PAYMONGO)
   providerPaymentId    String?
+  providerPaymentResourceId String?
   status               PaymentStatus       @default(PENDING)
   createdAt            DateTime            @default(now()) @db.Timestamptz(6)
   updatedAt            DateTime            @updatedAt @db.Timestamptz(6)
@@ -468,6 +469,7 @@ model Payment {
   @@index([payerUserId])
   @@index([status])
   @@index([providerPaymentId])
+  @@index([providerPaymentResourceId])
   @@map("payments")
 }
 

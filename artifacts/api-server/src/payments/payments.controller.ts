@@ -180,22 +180,19 @@ export class PaymentsController {
 
     try {
       const result =
-        await this.paymentsService.handleWebhookEvent(
-          request.body,
-        );
+        await this.paymentsService.handleWebhookEvent(request.body);
 
       this.logger.log(
-        `PayMongo webhook handled: eventType=${
-          result.eventType ?? 'unknown'
-        }, processed=${result.processed}, duplicate=${
-          result.duplicate ?? false
-        }`,
+        `PayMongo webhook handled: eventType=${result.eventType}, processed=${result.processed}, duplicate=${result.duplicate ?? false}`,
       );
 
       return result;
     } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error);
+
       this.logger.warn(
-        'PayMongo webhook rejected: event validation or processing failed',
+        `PayMongo webhook rejected: event validation or processing failed: ${message}`,
       );
 
       throw error;
