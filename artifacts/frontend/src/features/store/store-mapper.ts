@@ -86,6 +86,7 @@ export function toStorePageProps(vendor: VendorStorefront): StorePageProps {
       id: product.id,
       vendorId: vendor.id,
       image:
+        product.imageUrl ||
         "https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80",
       name: product.name,
       flavorProfile: product.description || "Freshly prepared",
