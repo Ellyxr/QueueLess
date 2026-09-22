@@ -30,7 +30,50 @@ export interface VendorProduct {
   category: string | null;
   preparationTimeMinutes: number;
   isAvailable: boolean;
+  imageUrl?: string | null;
+  imageFileId?: string | null;
   eligibleExtras?: EligibleExtra[];
+}
+
+export interface ImagekitAuthResponse {
+  token: string;
+  expire: number;
+  signature: string;
+}
+
+export function getImagekitAuth(): Promise<ImagekitAuthResponse> {
+  return fetchWithAuth("/imagekit/auth");
+}
+
+export interface ImagekitUploadResult {
+  url: string;
+  fileId: string;
+}
+
+export async function uploadProductImage(file: File): Promise<ImagekitUploadResult> {
+  const auth = await getImagekitAuth();
+
+  const form = new FormData();
+  form.append("file", file);
+  form.append("fileName", file.name);
+  form.append("publicKey", import.meta.env.VITE_IMAGEKIT_PUBLIC_KEY);
+  form.append("signature", auth.signature);
+  form.append("expire", String(auth.expire));
+  form.append("token", auth.token);
+  form.append("folder", "/products");
+
+  const response = await fetch("https://upload.imagekit.io/api/v1/files/upload", {
+    method: "POST",
+    body: form,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || "Image upload failed.");
+  }
+
+  const result = await response.json();
+  return { url: result.url, fileId: result.fileId };
 }
 
 export interface ProductInput {
@@ -41,6 +84,8 @@ export interface ProductInput {
   preparationTimeMinutes: number;
   isAvailable?: boolean;
   eligibleExtraIds?: string[];
+  imageUrl?: string;
+  imageFileId?: string;
 }
 
 export type Weekday = "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY" | "SATURDAY";
