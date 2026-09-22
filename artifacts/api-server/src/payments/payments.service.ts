@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  LedgerEntryType,
   OrderStatus,
   PaymentPurpose,
   PaymentStatus,
@@ -13,12 +14,14 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PaymongoService } from './paymongo.service';
+import { RefundsService } from '../refunds/refunds.service';
 
 @Injectable()
 export class PaymentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly paymongoService: PaymongoService,
+    private readonly refundsService: RefundsService,
   ) {}
 
   async createCheckout(
@@ -469,6 +472,7 @@ export class PaymentsService {
               notes?: string;
               created_at?: number;
               updated_at?: number;
+
             };
           };
         };
@@ -695,6 +699,8 @@ export class PaymentsService {
       );
     }
 
+
+
     const payment = await this.prisma.payment.findFirst({
       where: {
         providerPaymentId: checkoutSession.id,
@@ -783,9 +789,32 @@ export class PaymentsService {
     }
 
     if (payment.paymentShares.length === 0) {
-      throw new BadRequestException(
-        'Payment has no linked payment share',
+      // Payment succeeded at PayMongo but nothing was ever linked to it —
+      // refund automatically rather than leaving the buyer out of pocket.
+      await this.prisma.payment.updateMany({
+        where: { id: payment.id, status: { not: PaymentStatus.SUCCEEDED } },
+        data: {
+          status: PaymentStatus.SUCCEEDED,
+          providerPaymentResourceId,
+        },
+      });
+
+      await this.refundsService.autoRefundPayment(
+        payment.id,
+        'ORPHANED_PAYMENT',
+        'Payment succeeded but no order was linked to it.',
       );
+
+      return {
+        received: true,
+        processed: true,
+        duplicate: false,
+        eventType,
+        paymentId: payment.id,
+        orderId: null,
+        orderMarkedPaid: false,
+        autoRefunded: true,
+      };
     }
 
     const orderIds = [
@@ -804,88 +833,135 @@ export class PaymentsService {
 
     const orderId = orderIds[0];
 
-    const result = await this.prisma.$transaction(
-      async (tx) => {
-        const paymentUpdate = await tx.payment.updateMany({
-          where: {
-            id: payment.id,
-            status: {
-              not: PaymentStatus.SUCCEEDED,
-            },
+    const result = await this.prisma.$transaction(async (tx) => {
+      const paymentUpdate = await tx.payment.updateMany({
+        where: {
+          id: payment.id,
+          status: {
+            not: PaymentStatus.SUCCEEDED,
           },
-          data: {
-            status: PaymentStatus.SUCCEEDED,
-            providerPaymentResourceId,
-          },
-        });
+        },
+        data: {
+          status: PaymentStatus.SUCCEEDED,
+          providerPaymentResourceId,
+        },
+      });
 
-        if (paymentUpdate.count === 0) {
-          return {
-            duplicate: true,
-            orderId,
-            orderMarkedPaid: false,
-            unpaidShares: await tx.paymentShare.count({
-              where: {
-                orderId,
-                status: PaymentShareStatus.PENDING,
-              },
-            }),
-          };
-        }
-
-        await tx.paymentShare.updateMany({
-          where: {
-            paymentId: payment.id,
-            status: PaymentShareStatus.PENDING,
-          },
-          data: {
-            status: PaymentShareStatus.PAID,
-          },
-        });
-
-        const unpaidShares =
-          await tx.paymentShare.count({
+      if (paymentUpdate.count === 0) {
+        return {
+          duplicate: true,
+          duplicatePayment: false,
+          orderId,
+          orderMarkedPaid: false,
+          unpaidShares: await tx.paymentShare.count({
             where: {
               orderId,
               status: PaymentShareStatus.PENDING,
             },
-          });
+          }),
+        };
+      }
 
-        let orderMarkedPaid = false;
+      const existingOrder = await tx.order.findUnique({
+        where: { id: orderId },
+        select: { status: true },
+      });
 
-        if (unpaidShares === 0) {
-          const orderUpdate = await tx.order.updateMany({
-            where: {
-              id: orderId,
-              status: OrderStatus.PENDING,
-            },
-            data: {
-              status: OrderStatus.PAID,
-            },
-          });
-
-          if (orderUpdate.count === 1) {
-            await tx.orderStatusHistory.create({
-              data: {
-                orderId,
-                status: OrderStatus.PAID,
-                changedByUserId: null,
-                note: 'Payment confirmed by PayMongo webhook',
-              },
-            });
-
-            orderMarkedPaid = true;
-          }
-        }
-
+      if (
+        existingOrder &&
+        existingOrder.status !== OrderStatus.PENDING
+      ) {
         return {
           duplicate: false,
+          duplicatePayment: true,
           orderId,
-          orderMarkedPaid,
-          unpaidShares,
+          orderMarkedPaid: false,
+          unpaidShares: 0,
         };
-      },
-    );
+      }
+
+      await tx.paymentShare.updateMany({
+        where: {
+          paymentId: payment.id,
+          status: PaymentShareStatus.PENDING,
+        },
+        data: {
+          status: PaymentShareStatus.PAID,
+        },
+      });
+
+      const unpaidShares = await tx.paymentShare.count({
+        where: {
+          orderId,
+          status: PaymentShareStatus.PENDING,
+        },
+      });
+
+      let orderMarkedPaid = false;
+
+      if (unpaidShares === 0) {
+        const orderUpdate = await tx.order.updateMany({
+          where: {
+            id: orderId,
+            status: OrderStatus.PENDING,
+          },
+          data: {
+            status: OrderStatus.PAID,
+            paidAt: new Date(),
+          },
+        });
+
+        if (orderUpdate.count === 1) {
+          await tx.orderStatusHistory.create({
+            data: {
+              orderId,
+              status: OrderStatus.PAID,
+              changedByUserId: null,
+              note: 'Payment confirmed by PayMongo webhook',
+            },
+          });
+
+          const order = await tx.order.findUnique({
+            where: { id: orderId },
+            select: {
+              vendorId: true,
+              totalAmount: true,
+              marketplaceFee: true,
+            },
+          });
+
+          if (order) {
+            await tx.vendorLedgerEntry.create({
+              data: {
+                vendorId: order.vendorId,
+                orderId,
+                type: LedgerEntryType.ORDER_CREDIT,
+                amount: order.totalAmount.sub(order.marketplaceFee),
+              },
+            });
+          }
+
+          orderMarkedPaid = true;
+        }
+      }
+
+      return {
+        duplicate: false,
+        duplicatePayment: false,
+        orderId,
+        orderMarkedPaid,
+        unpaidShares,
+      };
+    });
+
+    if (result.duplicatePayment) {
+      await this.refundsService.autoRefundPayment(
+        payment.id,
+        'DUPLICATE_PAYMENT',
+        'This order was already paid by another payment.',
+        orderId,
+      );
+    }
 
     return {
       received: true,
@@ -896,6 +972,7 @@ export class PaymentsService {
       orderId: result.orderId,
       orderMarkedPaid: result.orderMarkedPaid,
       remainingUnpaidShares: result.unpaidShares,
+      autoRefunded: result.duplicatePayment,
     };
   }
 }

@@ -6,16 +6,25 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron } from '@nestjs/schedule';
 import { CancellationReason, OrderStatus, Prisma } from '@prisma/client';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { RefundsService } from '../refunds/refunds.service';
+import { NotificationsService } from '../notifications/notifications.service';
+
+const VENDOR_CONTACT_PING_COOLDOWN_MS = 2 * 60 * 1000;
+const VENDOR_ACCEPT_TIMEOUT_MS = 5 * 60 * 1000;
+const VENDOR_UNRESPONSIVE_TIMEOUT_MS = 2 * 60 * 1000;
 
 @Injectable()
 export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly refundsService: RefundsService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async createOrder(
@@ -409,6 +418,8 @@ export class OrdersService {
         status: true,
         totalAmount: true,
         createdAt: true,
+        paidAt: true,
+        buyerContactPingAt: true,
         vendor: { select: { id: true, name: true } },
         items: {
           orderBy: { createdAt: 'asc' },
@@ -418,6 +429,11 @@ export class OrdersService {
             product: { select: { id: true, name: true } },
           },
         },
+        refunds: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { status: true, category: true },
+        },
       },
     });
 
@@ -426,12 +442,15 @@ export class OrdersService {
       status: order.status,
       total: order.totalAmount.toFixed(2),
       createdAt: order.createdAt,
+      paidAt: order.paidAt,
+      buyerContactPingAt: order.buyerContactPingAt,
       vendor: order.vendor,
       items: order.items.map((item) => ({
         productId: item.product.id,
         name: item.product.name,
         quantity: item.quantity,
       })),
+      refund: order.refunds[0] ?? null,
     }));
   }
 
@@ -464,6 +483,21 @@ export class OrdersService {
         estimatedReadyAt: true,
         updatedAt: true,
         pickupConfirmedAt: true,
+        paidAt: true,
+        buyerContactPingAt: true,
+        refunds: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { status: true, category: true },
+        },
+        paymentShares: {
+          select: {
+            id: true,
+            payerUserId: true,
+            amountDue: true,
+            status: true,
+          },
+        },
         vendor: {
           select: {
             id: true,
@@ -532,6 +566,17 @@ export class OrdersService {
       ? isOwner || order.groupOrder.initiator.allowParticipantOrderCompletion
       : true;
 
+    const myShare = order.paymentShares.find(
+      (share) => share.payerUserId === userId,
+    );
+    const myPaymentShare = myShare
+      ? {
+          id: myShare.id,
+          amountDue: myShare.amountDue.toFixed(2),
+          status: myShare.status,
+        }
+      : null;
+
     return {
       orderId: order.id,
       orderType: order.orderType,
@@ -541,6 +586,10 @@ export class OrdersService {
       cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
       estimatedWaitMinutes,
+      paidAt: order.paidAt,
+      buyerContactPingAt: order.buyerContactPingAt,
+      refund: order.refunds[0] ?? null,
+      myPaymentShare,
       updatedAt: order.updatedAt,
       vendor: order.vendor,
       items: order.items.map((item) => ({
@@ -688,6 +737,7 @@ export class OrdersService {
 
     const note = dto.note?.trim() || null;
     const isCancelling = dto.status === OrderStatus.CANCELLED;
+    let justCancelled = false;
 
     const updatedOrder = await this.prisma.$transaction(
       async (tx) => {
@@ -731,6 +781,8 @@ export class OrdersService {
             },
           });
         }
+
+        justCancelled = isCancelling;
 
         if (dto.status === OrderStatus.PAID) {
           throw new BadRequestException(
@@ -797,6 +849,14 @@ export class OrdersService {
         return updated;
       },
     );
+
+    if (justCancelled) {
+      await this.refundsService.autoRefundOrderPayments(
+        orderId,
+        'VENDOR_CANCELLED',
+        note,
+      );
+    }
 
     return this.buildOrderResponse(updatedOrder);
   }
@@ -968,12 +1028,44 @@ export class OrdersService {
     ]);
     const pendingOrders = orders.filter((order) => pendingStatuses.has(order.status)).length;
 
+    const startOfWeek = new Date();
+    const dayOfWeek = startOfWeek.getDay();
+    const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    startOfWeek.setDate(startOfWeek.getDate() - daysSinceMonday);
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    const weekDayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+    const weekSalesTotals = [0, 0, 0, 0, 0, 0].map(() => new Prisma.Decimal(0));
+    const realizedStatuses = new Set(['PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'READY_FOR_PICKUP', 'COMPLETED']);
+
+    for (const order of orders) {
+      if (order.createdAt < startOfWeek || !realizedStatuses.has(order.status)) {
+        continue;
+      }
+
+      const dayIndex = (order.createdAt.getDay() + 6) % 7;
+
+      if (dayIndex < 6) {
+        weekSalesTotals[dayIndex] = weekSalesTotals[dayIndex].add(order.totalAmount);
+      }
+    }
+
+    const ledgerBalance = await this.prisma.vendorLedgerEntry.aggregate({
+      where: { vendorId: vendor.id },
+      _sum: { amount: true },
+    });
+
     return {
       todaySales: todaySales.toFixed(2),
       averageTicket: todayOrders.length
         ? todaySales.div(todayOrders.length).toFixed(2)
         : '0.00',
       pendingOrders,
+      ledgerBalance: (ledgerBalance._sum.amount ?? new Prisma.Decimal(0)).toFixed(2),
+      weekSales: weekDayLabels.map((day, index) => ({
+        day,
+        amount: weekSalesTotals[index].toFixed(2),
+      })),
       recentOrders: orders.slice(0, 5).map((order) => ({
         id: order.id,
         customer: order.customer.fullName,
@@ -1125,5 +1217,130 @@ export class OrdersService {
       estimatedWaitMinutes,
       subtotal: order.subtotal.toFixed(2),
     };
+  }
+
+  async contactVendor(userId: string, orderId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, customerId: userId },
+      select: {
+        id: true,
+        status: true,
+        vendor: {
+          select: { ownerUserId: true, name: true },
+        },
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    if (
+      order.status === OrderStatus.COMPLETED ||
+      order.status === OrderStatus.CANCELLED
+    ) {
+      throw new BadRequestException(
+        'This order has already been resolved.',
+      );
+    }
+
+    await this.prisma.order.update({
+      where: { id: orderId },
+      data: { buyerContactPingAt: new Date() },
+    });
+
+    const alreadyPinged = await this.notificationsService.hasRecentUnread(
+      'Order',
+      orderId,
+      'ORDER_BUYER_CONTACT',
+      VENDOR_CONTACT_PING_COOLDOWN_MS,
+    );
+
+    if (!alreadyPinged) {
+      await this.notificationsService.create(
+        order.vendor.ownerUserId,
+        'ORDER_BUYER_CONTACT',
+        'Buyer needs an update',
+        'A buyer is asking about their order — please update its status soon.',
+        'Order',
+        orderId,
+      );
+    }
+
+    return { message: 'Vendor notified' };
+  }
+
+  async requestRefund(
+    userId: string,
+    orderId: string,
+    dto: Parameters<RefundsService['requestOrderRefund']>[2],
+  ) {
+    return this.refundsService.requestOrderRefund(userId, orderId, dto);
+  }
+
+  /**
+   * Sweeps for orders stuck past the 5-min vendor-accept timeout or the
+   * 2-min post-contact timeout and auto-cancels + refunds them, so the
+   * automatic rules apply even if the buyer never reopens the app.
+   */
+  @Cron('*/1 * * * *')
+  async sweepStalledOrdersForAutoRefund() {
+    const now = Date.now();
+
+    const acceptTimeoutCutoff = new Date(now - VENDOR_ACCEPT_TIMEOUT_MS);
+    const stalledOnAccept = await this.prisma.order.findMany({
+      where: {
+        status: OrderStatus.PAID,
+        paidAt: { lte: acceptTimeoutCutoff },
+      },
+      select: { id: true },
+    });
+
+    for (const order of stalledOnAccept) {
+      await this.autoCancelAndRefund(order.id, 'VENDOR_NOT_ACCEPTED');
+    }
+
+    const unresponsiveCutoff = new Date(
+      now - VENDOR_UNRESPONSIVE_TIMEOUT_MS,
+    );
+    const stalledOnContact = await this.prisma.order.findMany({
+      where: {
+        status: { notIn: [OrderStatus.COMPLETED, OrderStatus.CANCELLED] },
+        buyerContactPingAt: { lte: unresponsiveCutoff },
+      },
+      select: { id: true, updatedAt: true, buyerContactPingAt: true },
+    });
+
+    for (const order of stalledOnContact) {
+      if (
+        order.buyerContactPingAt &&
+        order.updatedAt <= order.buyerContactPingAt
+      ) {
+        await this.autoCancelAndRefund(order.id, 'VENDOR_UNRESPONSIVE');
+      }
+    }
+  }
+
+  private async autoCancelAndRefund(orderId: string, category: string) {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: OrderStatus.CANCELLED,
+          cancellationReason: CancellationReason.AUTO_REFUND_TIMEOUT,
+        },
+      });
+
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId,
+          status: OrderStatus.CANCELLED,
+          changedByUserId: null,
+          note: `Auto-cancelled: ${category}`,
+        },
+      });
+    });
+
+    await this.refundsService.autoRefundOrderPayments(orderId, category, null);
   }
   }

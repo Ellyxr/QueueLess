@@ -16,10 +16,27 @@ import {
   Upload,
   Search,
   Eye,
+  Send,
+  Loader2,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import {
+  ChartContainer,
+  type ChartConfig,
+} from '@/components/ui/chart';
+import { Bar, BarChart } from 'recharts';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { createPortal } from 'react-dom';
 import { useLocation } from 'wouter';
 import { useRequireAuth } from '@/hooks/use-require-auth';
@@ -32,13 +49,27 @@ import {
   getVendorOrderQueue,
   updateProduct,
   updateVendorStorefront,
+  updateVendorPreorderAvailability,
+  updateVendorAvailability,
   updateOrderStatus,
+  payoutVendorBalance,
+  uploadProductImage,
   type VendorProduct,
   type VendorDashboard,
   type VendorStorefront,
   type VendorQueueOrder,
+  type Weekday,
 } from '@/features/auth/api';
 import { EXTRA_CATEGORY } from '@/lib/product-extras';
+import { PasabuyVendorCard } from '@/features/pasabuy/pasabuy-vendor-card';
+import { getActiveRequestForOrder } from '@/features/pasabuy/pasabuy-mock-store';
+
+const weekSalesChartConfig: ChartConfig = {
+  amount: {
+    label: 'Sales',
+    color: 'hsl(var(--primary-foreground))',
+  },
+};
 
 interface Product {
   id: string;
@@ -48,8 +79,42 @@ interface Product {
   category: string;
   preparationTimeMinutes: number;
   image?: string;
+  imageFileId?: string;
   isAvailable: boolean;
   eligibleExtraIds: string[];
+}
+
+interface PreorderDayState {
+  isEnabled: boolean;
+  openTime: string;
+  closeTime: string;
+}
+
+interface StoreDayState {
+  isOpen: boolean;
+  openTime: string;
+  closeTime: string;
+}
+
+const WEEKDAYS: Array<{ key: Weekday; label: string }> = [
+  { key: 'MONDAY', label: 'Monday' },
+  { key: 'TUESDAY', label: 'Tuesday' },
+  { key: 'WEDNESDAY', label: 'Wednesday' },
+  { key: 'THURSDAY', label: 'Thursday' },
+  { key: 'FRIDAY', label: 'Friday' },
+  { key: 'SATURDAY', label: 'Saturday' },
+];
+
+function createDefaultPreorderDays(): Record<Weekday, PreorderDayState> {
+  return Object.fromEntries(
+    WEEKDAYS.map(({ key }) => [key, { isEnabled: false, openTime: '09:00', closeTime: '17:00' }]),
+  ) as Record<Weekday, PreorderDayState>;
+}
+
+function createDefaultStoreDays(): Record<Weekday, StoreDayState> {
+  return Object.fromEntries(
+    WEEKDAYS.map(({ key }) => [key, { isOpen: false, openTime: '09:00', closeTime: '17:00' }]),
+  ) as Record<Weekday, StoreDayState>;
 }
 
 function getNextOrderStatus(
@@ -101,6 +166,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     category: '',
     preparationTime: '15',
     image: '',
+    imageFileId: '',
     eligibleExtraIds: [] as string[],
   });
   const [imagePreview, setImagePreview] = useState<string>('');
@@ -112,10 +178,22 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   const [storefrontErrors, setStorefrontErrors] = useState<{ name?: string; description?: string; campusLocation?: string }>({});
   const [isStorefrontLoading, setIsStorefrontLoading] = useState(true);
   const [isStorefrontSaving, setIsStorefrontSaving] = useState(false);
+  const [preorderEnabled, setPreorderEnabled] = useState(false);
+  const [preorderSameAsStoreHours, setPreorderSameAsStoreHours] = useState(true);
+  const [preorderDays, setPreorderDays] = useState<Record<Weekday, PreorderDayState>>(
+    () => createDefaultPreorderDays(),
+  );
+  const [isPreorderSaving, setIsPreorderSaving] = useState(false);
+  const [storeDays, setStoreDays] = useState<Record<Weekday, StoreDayState>>(
+    () => createDefaultStoreDays(),
+  );
+  const [isAvailabilitySaving, setIsAvailabilitySaving] = useState(false);
   const [isProductSaving, setIsProductSaving] = useState(false);
   const [isProductDeleting, setIsProductDeleting] = useState(false);
   const [productSearch, setProductSearch] = useState('');
   const [dashboard, setDashboard] = useState<VendorDashboard | null>(null);
+  const [isPayoutDialogOpen, setIsPayoutDialogOpen] = useState(false);
+  const [isPayoutLoading, setIsPayoutLoading] = useState(false);
 
   // US-017 State Management (Vendor Queue & Order Details)
   const [orderQueue, setOrderQueue] = useState<VendorQueueOrder[]>([]);
@@ -134,6 +212,20 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     setTimeout(() => setToastMessage(null), 3000);
   };
 
+  const handleTransferOut = async () => {
+    setIsPayoutLoading(true);
+    try {
+      const payout = await payoutVendorBalance(crypto.randomUUID());
+      setDashboard((prev) => (prev ? { ...prev, ledgerBalance: '0.00' } : prev));
+      showToast(`Transferred out ₱${Number(payout.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}.`, 'success');
+      setIsPayoutDialogOpen(false);
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Unable to process payout.', 'error');
+    } finally {
+      setIsPayoutLoading(false);
+    }
+  };
+
   useEffect(() => {
     getMyVendor()
       .then((vendorData) => {
@@ -143,6 +235,34 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
           description: vendorData.description || '',
           campusLocation: vendorData.campusLocation || '',
         });
+        setPreorderEnabled(vendorData.preorderEnabled ?? false);
+        setPreorderSameAsStoreHours(vendorData.preorderSameAsStoreHours ?? true);
+        if (vendorData.preorderAvailability) {
+          setPreorderDays((prev) => {
+            const next = { ...prev };
+            for (const day of vendorData.preorderAvailability!) {
+              next[day.dayOfWeek] = {
+                isEnabled: day.isEnabled,
+                openTime: day.openTime ?? '09:00',
+                closeTime: day.closeTime ?? '17:00',
+              };
+            }
+            return next;
+          });
+        }
+        if (vendorData.availabilityDays) {
+          setStoreDays((prev) => {
+            const next = { ...prev };
+            for (const day of vendorData.availabilityDays!) {
+              next[day.dayOfWeek] = {
+                isOpen: day.isOpen,
+                openTime: day.openTime ?? '09:00',
+                closeTime: day.closeTime ?? '17:00',
+              };
+            }
+            return next;
+          });
+        }
         return getVendorStorefront(vendorData.id);
       })
       .then((vendorData) => {
@@ -241,6 +361,81 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     }
   };
 
+  const handleSavePreorderAvailability = async () => {
+    if (!vendor || isPreorderSaving) return;
+
+    if (!preorderSameAsStoreHours) {
+      for (const { key, label } of WEEKDAYS) {
+        const day = preorderDays[key];
+        if (day.isEnabled && day.openTime >= day.closeTime) {
+          showToast(`${label}'s close time must be after its open time.`, 'error');
+          return;
+        }
+      }
+    }
+
+    setIsPreorderSaving(true);
+    try {
+      const updated = await updateVendorPreorderAvailability(vendor.id, {
+        preorderEnabled,
+        sameAsStoreHours: preorderSameAsStoreHours,
+        days: preorderSameAsStoreHours
+          ? undefined
+          : WEEKDAYS.map(({ key }) => ({
+              dayOfWeek: key,
+              isEnabled: preorderDays[key].isEnabled,
+              openTime: preorderDays[key].isEnabled ? preorderDays[key].openTime : null,
+              closeTime: preorderDays[key].isEnabled ? preorderDays[key].closeTime : null,
+            })),
+      });
+      setVendor((prev) =>
+        prev
+          ? {
+              ...prev,
+              preorderEnabled: updated.preorderEnabled,
+              preorderSameAsStoreHours: updated.preorderSameAsStoreHours,
+              preorderAvailability: updated.preorderAvailability,
+            }
+          : prev,
+      );
+      showToast('Preorder availability saved.');
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Unable to save preorder availability.', 'error');
+    } finally {
+      setIsPreorderSaving(false);
+    }
+  };
+
+  const handleSaveAvailability = async () => {
+    if (!vendor || isAvailabilitySaving) return;
+
+    for (const { key, label } of WEEKDAYS) {
+      const day = storeDays[key];
+      if (day.isOpen && day.openTime >= day.closeTime) {
+        showToast(`${label}'s close time must be after its open time.`, 'error');
+        return;
+      }
+    }
+
+    setIsAvailabilitySaving(true);
+    try {
+      const updated = await updateVendorAvailability(vendor.id, {
+        days: WEEKDAYS.map(({ key }) => ({
+          dayOfWeek: key,
+          isOpen: storeDays[key].isOpen,
+          openTime: storeDays[key].isOpen ? storeDays[key].openTime : null,
+          closeTime: storeDays[key].isOpen ? storeDays[key].closeTime : null,
+        })),
+      });
+      setVendor((prev) => (prev ? { ...prev, availabilityDays: updated.availability } : prev));
+      showToast('Store availability saved.');
+    } catch (error: unknown) {
+      showToast(error instanceof Error ? error.message : 'Unable to save store availability.', 'error');
+    } finally {
+      setIsAvailabilitySaving(false);
+    }
+  };
+
   const toProduct = (product: VendorProduct): Product => ({
     id: product.id,
     name: product.name,
@@ -248,7 +443,8 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     description: product.description || '',
     category: product.category || 'General',
     preparationTimeMinutes: product.preparationTimeMinutes ?? 15,
-    image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
+    image: product.imageUrl || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
+    imageFileId: product.imageFileId || undefined,
     isAvailable: product.isAvailable,
     eligibleExtraIds: product.eligibleExtras?.map((extra) => extra.id) ?? [],
   });
@@ -265,6 +461,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
         category: product.category || 'General',
         preparationTime: String(product.preparationTimeMinutes ?? 15),
         image: product.image || '',
+        imageFileId: product.imageFileId || '',
         eligibleExtraIds: product.eligibleExtraIds,
       });
       setImagePreview(product.image || '');
@@ -278,6 +475,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
         category: kind === 'extra' ? EXTRA_CATEGORY : '',
         preparationTime: '15',
         image: '',
+        imageFileId: '',
         eligibleExtraIds: [],
       });
       setImagePreview('');
@@ -288,18 +486,23 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   };
 
   // Handle Local File Upload from File Explorer / Gallery
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const result = reader.result as string;
-        setFormData((prev) => ({ ...prev, image: result }));
-        setImagePreview(result);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+
+const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  setIsUploadingImage(true);
+  try {
+    const { url, fileId } = await uploadProductImage(file);
+    setFormData((prev) => ({ ...prev, image: url, imageFileId: fileId }));
+    setImagePreview(url);
+  } catch (error: unknown) {
+    showToast(error instanceof Error ? error.message : 'Image upload failed.', 'error');
+  } finally {
+    setIsUploadingImage(false);
+  }
+};
 
   const validateForm = () => {
     const errors: { name?: string; price?: string; description?: string; preparationTime?: string } = {};
@@ -343,6 +546,8 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
         category: finalCategory,
         preparationTimeMinutes: Number(formData.preparationTime),
         isAvailable: editingProduct ? editingProduct.isAvailable : true,
+        imageUrl: formData.image || undefined,
+        imageFileId: formData.imageFileId || undefined,
         ...(modalKind === 'product' ? { eligibleExtraIds: formData.eligibleExtraIds } : {}),
       };
       const savedProduct = editingProduct
@@ -549,42 +754,71 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
             </div>
           </div>
 
-          <Card className="overflow-hidden border-primary/20 bg-gradient-to-br from-primary via-primary to-primary/85 text-primary-foreground shadow-md">
-            <CardContent className="flex flex-col gap-6 p-5 sm:p-8 lg:flex-row lg:items-center lg:justify-between">
+          <Card className="relative overflow-hidden border-primary/20 bg-gradient-to-br from-primary via-primary to-primary/85 text-primary-foreground shadow-md">
+            <ChartContainer
+              config={weekSalesChartConfig}
+              className="pointer-events-none absolute inset-0 aspect-auto opacity-25"
+            >
+              <BarChart
+                data={dashboard?.weekSales ?? []}
+                margin={{ top: 0, right: 0, left: 0, bottom: 0 }}
+              >
+                <Bar dataKey="amount" fill="currentColor" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ChartContainer>
+
+            <CardContent className="relative z-10 flex flex-col gap-6 p-5 sm:p-8 lg:flex-row lg:items-center lg:justify-between">
               <div className="max-w-md">
                 <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary-foreground/80">Total sales</p>
                 <div className="mt-3 flex items-end gap-3">
                   <span className="text-4xl font-bold tracking-[-0.07em] sm:text-5xl">₱{Number(dashboard?.todaySales || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>
                 </div>
-              </div>
-
-              <div className="flex min-w-[210px] flex-col gap-4 rounded-[22px] border border-primary-foreground/15 bg-primary-foreground/5 p-4 backdrop-blur-sm">
-                <div className="flex items-center justify-between text-sm text-primary-foreground/80">
-                  <span>vs last week</span>
-                  <span className="font-mono text-[10px] uppercase tracking-[0.12em]">+8.6k</span>
-                </div>
-                <div className="flex items-end gap-2">
-                  {[42, 58, 46, 78, 68, 90, 100].map((height, index) => (
-                    <div
-                      key={height + index}
-                      className="w-full rounded-t-full bg-primary-foreground/85"
-                      style={{ height: `${height}px` }}
-                    />
+                <div className="mt-4 flex items-center gap-4 text-[10px] uppercase tracking-[0.12em] text-primary-foreground/70">
+                  {(dashboard?.weekSales ?? []).map((day) => (
+                    <span key={day.day}>{day.day}</span>
                   ))}
                 </div>
-                <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.12em] text-primary-foreground/80">
-                  <span>Mon</span>
-                  <span>Tue</span>
-                  <span>Wed</span>
-                  <span>Thu</span>
-                  <span>Fri</span>
-                  <span>Sat</span>
-                  <span>Sun</span>
-                </div>
               </div>
+
+              <button
+                type="button"
+                onClick={() => setIsPayoutDialogOpen(true)}
+                className="group flex items-center gap-3 rounded-[22px] border border-primary-foreground/15 bg-primary-foreground/5 px-4 py-3 text-left backdrop-blur-sm transition-colors hover:bg-primary-foreground/15"
+              >
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-primary-foreground/80">Transfer out</p>
+                  <p className="font-mono text-lg font-semibold">₱{Number(dashboard?.ledgerBalance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</p>
+                </div>
+                <span className="flex h-9 w-0 items-center justify-center overflow-hidden rounded-full bg-primary-foreground/20 opacity-0 transition-all duration-300 ease-out group-hover:w-9 group-hover:opacity-100">
+                  <Send className="h-4 w-4 shrink-0 text-primary-foreground" />
+                </span>
+              </button>
             </CardContent>
           </Card>
         </section>
+
+        <AlertDialog open={isPayoutDialogOpen} onOpenChange={setIsPayoutDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Transfer out balance?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will transfer your current ledger balance of ₱{Number(dashboard?.ledgerBalance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })} and reset it to zero. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isPayoutLoading}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(event) => {
+                  event.preventDefault();
+                  handleTransferOut();
+                }}
+                disabled={isPayoutLoading}
+              >
+                {isPayoutLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Transfer out'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* Quick Actions */}
         <section className="mt-8">
@@ -620,6 +854,191 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                   </div>
                 </form>
               )}
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Store availability */}
+        <section className="mt-8">
+          <div className="mb-4">
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Availability</p>
+            <h2 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">Store availability</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Set the days and times buyers can order from you. Outside these hours, your storefront
+              shows as closed and buyers can't add items to their cart.
+            </p>
+          </div>
+          <Card className="border-card-border/80 bg-card/90 shadow-sm">
+            <CardContent className="p-5 sm:p-6">
+              <div className="space-y-2">
+                {WEEKDAYS.map(({ key, label }) => {
+                  const day = storeDays[key];
+                  return (
+                    <div
+                      key={key}
+                      className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-background/60 px-3 py-2.5"
+                    >
+                      <label className="flex w-28 shrink-0 items-center gap-2 text-sm font-medium text-foreground">
+                        <input
+                          type="checkbox"
+                          checked={day.isOpen}
+                          onChange={(event) =>
+                            setStoreDays((prev) => ({
+                              ...prev,
+                              [key]: { ...prev[key], isOpen: event.target.checked },
+                            }))
+                          }
+                          className="h-4 w-4 accent-primary"
+                        />
+                        {label}
+                      </label>
+                      <div className="flex items-center gap-2 text-sm">
+                        <input
+                          type="time"
+                          value={day.openTime}
+                          disabled={!day.isOpen}
+                          onChange={(event) =>
+                            setStoreDays((prev) => ({
+                              ...prev,
+                              [key]: { ...prev[key], openTime: event.target.value },
+                            }))
+                          }
+                          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm disabled:opacity-50"
+                        />
+                        <span className="text-muted-foreground">to</span>
+                        <input
+                          type="time"
+                          value={day.closeTime}
+                          disabled={!day.isOpen}
+                          onChange={(event) =>
+                            setStoreDays((prev) => ({
+                              ...prev,
+                              [key]: { ...prev[key], closeTime: event.target.value },
+                            }))
+                          }
+                          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm disabled:opacity-50"
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <Button
+                type="button"
+                onClick={handleSaveAvailability}
+                disabled={isAvailabilitySaving}
+                className="mt-4 rounded-full px-5"
+              >
+                {isAvailabilitySaving ? 'Saving...' : 'Save store availability'}
+              </Button>
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* Preorder availability */}
+        <section className="mt-8">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Preorders</p>
+              <h2 className="mt-2 text-2xl font-semibold tracking-[-0.05em] text-foreground">Preorder availability</h2>
+            </div>
+            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <input
+                type="checkbox"
+                checked={preorderEnabled}
+                onChange={(event) => setPreorderEnabled(event.target.checked)}
+                className="h-4 w-4 accent-primary"
+              />
+              Enable preorders
+            </label>
+          </div>
+          <Card className="border-card-border/80 bg-card/90 shadow-sm">
+            <CardContent className="p-5 sm:p-6">
+              {!preorderEnabled && (
+                <p className="mb-4 text-sm text-muted-foreground">
+                  Turn on preorders to let buyers schedule pickups on the days and times you choose
+                  below.
+                </p>
+              )}
+              <label
+                className={`mb-4 flex items-center gap-2 text-sm font-medium text-foreground ${!preorderEnabled ? 'opacity-50' : ''}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={preorderSameAsStoreHours}
+                  disabled={!preorderEnabled}
+                  onChange={(event) => setPreorderSameAsStoreHours(event.target.checked)}
+                  className="h-4 w-4 accent-primary"
+                />
+                Same as store availability
+              </label>
+              {preorderSameAsStoreHours ? (
+                <p className={`text-sm text-muted-foreground ${!preorderEnabled ? 'opacity-50' : ''}`}>
+                  Preorders will follow the store availability hours set above.
+                </p>
+              ) : (
+              <div className={`space-y-2 ${!preorderEnabled ? 'pointer-events-none opacity-50' : ''}`}>
+                {WEEKDAYS.map(({ key, label }) => {
+                  const day = preorderDays[key];
+                  return (
+                    <div
+                      key={key}
+                      className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-background/60 px-3 py-2.5"
+                    >
+                      <label className="flex w-28 shrink-0 items-center gap-2 text-sm font-medium text-foreground">
+                        <input
+                          type="checkbox"
+                          checked={day.isEnabled}
+                          onChange={(event) =>
+                            setPreorderDays((prev) => ({
+                              ...prev,
+                              [key]: { ...prev[key], isEnabled: event.target.checked },
+                            }))
+                          }
+                          className="h-4 w-4 accent-primary"
+                        />
+                        {label}
+                      </label>
+                      <div className="flex items-center gap-2 text-sm">
+                        <input
+                          type="time"
+                          value={day.openTime}
+                          disabled={!day.isEnabled}
+                          onChange={(event) =>
+                            setPreorderDays((prev) => ({
+                              ...prev,
+                              [key]: { ...prev[key], openTime: event.target.value },
+                            }))
+                          }
+                          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm disabled:opacity-50"
+                        />
+                        <span className="text-muted-foreground">to</span>
+                        <input
+                          type="time"
+                          value={day.closeTime}
+                          disabled={!day.isEnabled}
+                          onChange={(event) =>
+                            setPreorderDays((prev) => ({
+                              ...prev,
+                              [key]: { ...prev[key], closeTime: event.target.value },
+                            }))
+                          }
+                          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm disabled:opacity-50"
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              )}
+              <Button
+                type="button"
+                onClick={handleSavePreorderAvailability}
+                disabled={isPreorderSaving}
+                className="mt-4 rounded-full px-5"
+              >
+                {isPreorderSaving ? 'Saving...' : 'Save preorder availability'}
+              </Button>
             </CardContent>
           </Card>
         </section>
@@ -1114,6 +1533,11 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
                     <span className="font-semibold text-foreground">{selectedOrder.isPasabuyRequest ? 'Yes' : 'No'}</span>
                   </div>
                 </div>
+
+                {selectedOrder.isPasabuyRequest && (() => {
+                  const pasabuyRequest = getActiveRequestForOrder(selectedOrder.id);
+                  return pasabuyRequest ? <PasabuyVendorCard request={pasabuyRequest} /> : null;
+                })()}
 
                 <div>
                   <h4 className="font-semibold text-foreground mb-2">Order Items</h4>

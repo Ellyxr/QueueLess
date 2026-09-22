@@ -12,21 +12,14 @@ import {
   Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  createGroupOrder,
-  createOrder,
-  createPaymentCheckout,
-  fetchWithAuth,
-  getOrderPaymentStatus,
-  joinGroupOrderByCode,
-} from "@/features/auth/api";
+import { createGroupOrder, joinGroupOrderByCode } from "@/features/auth/api";
 import {
   canTrackNewOrder,
   getTrackedOrderIds,
   MAX_TRACKED_ORDERS,
   ORDER_TRACKING_CHANGED_EVENT,
-  startOrderTracking,
 } from "@/features/orders/order-tracking";
+import { createOrderForVendorItems, setCheckoutQueue } from "@/features/cart/checkout";
 import { GroupOrderCartView } from "@/features/group-orders/group-order-cart-view";
 import {
   GROUP_ORDER_SESSION_CHANGED_EVENT,
@@ -212,9 +205,19 @@ export default function CartPage() {
   const convenienceFee = items.length ? 5 : 0;
   const deliveryFee = delivery && items.length ? 35 : 0;
   const total = subtotal - promoDiscount + convenienceFee + deliveryFee;
-  const storeName = items[0]?.storeName && items[0].storeName.trim() !== "" 
-    ? items[0].storeName 
+  const storeName = items[0]?.storeName && items[0].storeName.trim() !== ""
+    ? items[0].storeName
     : "North Loop Kitchen";
+  const vendorCount = useMemo(
+    () => new Set(items.map((item) => item.vendorId || "unknown")).size,
+    [items],
+  );
+  let orderButtonLabel = vendorCount > 1 ? "Order Now (1st store)" : "Order Now";
+  if (isRedirectingToPaymongo) {
+    orderButtonLabel = "Redirecting to PayMongo...";
+  } else if (isSubmitting) {
+    orderButtonLabel = "Submitting...";
+  }
 
   const updateQuantity = (id: string, change: number) => {
     const nextItems = items
@@ -253,45 +256,35 @@ export default function CartPage() {
     }
     setIsSubmitting(true);
     try {
-      let activeCartId = "";
-      for (const item of items) {
-        console.log("Debugging item object:", item);
-        console.log("Current item id:", item.id);
-        
-        const cartResponse: any = await fetchWithAuth('/carts/items', {
-          method: 'POST',
-          body: JSON.stringify({
-            productId: item.id, 
-            quantity: item.quantity,
-          }),
-        });
-        
-        if (cartResponse?.cartId || cartResponse?.id) {
-          activeCartId = cartResponse.cartId || cartResponse.id;
-        }
-      }
+      // Items can come from several vendors — each vendor gets its own
+      // order (and its own PayMongo checkout session), one at a time.
+      // We place the first vendor's order now; the rest stay queued and
+      // are picked up automatically from the payment-success page once
+      // this one is paid for.
+      const vendorIds = Array.from(
+        new Set(items.map((item) => item.vendorId || "unknown")),
+      );
+      const firstVendorId = vendorIds[0];
+      const remainingVendorIds = vendorIds.slice(1);
 
-      if (!activeCartId) {
-        throw new Error("Could not retrieve active cart ID.");
-      }
+      const firstGroupItems = items
+        .filter((item) => (item.vendorId || "unknown") === firstVendorId)
+        .map((item) => ({ productId: item.id, quantity: item.quantity }));
 
-      const order = await createOrder({
-        cartId: activeCartId,
-        isPasabuyRequest: delivery,
-      });
+      const { checkoutUrl } = await createOrderForVendorItems(firstGroupItems, delivery);
 
-      const orderId = order?.id;
-      if (!orderId) {
-        throw new Error("Order was created without an id.");
-      }
-
-      startOrderTracking(orderId);
-      saveCartItems([]);
+      const remainingItems = items.filter(
+        (item) => (item.vendorId || "unknown") !== firstVendorId,
+      );
+      saveCartItems(remainingItems);
+      setCheckoutQueue(
+        remainingVendorIds.length > 0
+          ? { vendorIds: remainingVendorIds, isPasabuyRequest: delivery }
+          : null,
+      );
 
       setIsRedirectingToPaymongo(true);
-      const paymentStatus = await getOrderPaymentStatus(orderId);
-      const checkout = await createPaymentCheckout(paymentStatus.paymentShare.id);
-      window.location.href = checkout.checkoutUrl;
+      window.location.href = checkoutUrl;
     } catch (error) {
       console.error("Failed to submit order:", error);
       alert("Failed to submit order. Please try again.");
@@ -331,7 +324,8 @@ export default function CartPage() {
           return (
             <div className="text-left sm:text-right">
               <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground sm:justify-end">
-                <MapPin className="h-4 w-4 text-primary" /> {storeName}
+                <MapPin className="h-4 w-4 text-primary" />
+                {vendorCount > 1 ? `${vendorCount} stores` : storeName}
               </p>
               <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground sm:justify-end">
                 <Clock3 className="h-3.5 w-3.5" /> Pickup at Student Center •
@@ -407,11 +401,26 @@ export default function CartPage() {
                   {items.reduce((sum, item) => sum + item.quantity, 0)} items
                 </span>
               </div>
+              {vendorCount > 1 && (
+                <p className="mb-3 rounded-xl border border-dashed border-border bg-secondary/30 px-3 py-2 text-xs text-muted-foreground">
+                  Items from {vendorCount} different stores — you'll place and pay for one order
+                  per store, one after another.
+                </p>
+              )}
               <div className="divide-y divide-border/70">
-                {items.map((item) => {
+                {items.map((item, index) => {
                   const isExpanded = expandedItem === item.id;
+                  const previousVendorId = items[index - 1]?.vendorId || "unknown";
+                  const currentVendorId = item.vendorId || "unknown";
+                  const isNewVendorGroup =
+                    vendorCount > 1 && (index === 0 || currentVendorId !== previousVendorId);
                   return (
                     <div key={item.id} className="py-4 first:pt-0 last:pb-0">
+                      {isNewVendorGroup && (
+                        <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-primary">
+                          {item.storeName || "Store"}
+                        </p>
+                      )}
                       <div className="flex gap-3">
                         <img
                           src={item.image}
@@ -684,11 +693,7 @@ export default function CartPage() {
                 onClick={submitOrder}
                 className="mt-5 w-full rounded-full"
               >
-                {isRedirectingToPaymongo
-                  ? "Redirecting to PayMongo..."
-                  : isSubmitting
-                    ? "Submitting..."
-                    : "Order Now"}
+                {orderButtonLabel}
               </Button>
 
               <p className="mt-3 text-center text-[11px] text-muted-foreground">
