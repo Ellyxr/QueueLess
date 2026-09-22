@@ -12,8 +12,8 @@ import {
   RefundInitiator,
   RefundStatus,
 } from '@prisma/client';
-import { PrismaService } from '../common/prisma/prisma.service';
 import { PaymongoService } from '../payments/paymongo.service';
+import { PrismaService } from '../common/prisma/prisma.service';
 import {
   CreateRefundDto,
   RefundStatusQueryDto,
@@ -38,7 +38,6 @@ export class RefundsService {
     private readonly prisma: PrismaService,
     private readonly paymongoService: PaymongoService,
   ) {}
-
   async createRefund(
     userId: string,
     dto: CreateRefundDto,
@@ -266,22 +265,23 @@ export class RefundsService {
     dto: UpdateRefundStatusDto,
     actorUserId: string,
   ) {
-    const refund =
-      await this.prisma.refund.findUnique({
-        where: {
-          id: refundId,
-        },
-        select: {
-          id: true,
-          paymentId: true,
-          amount: true,
-          status: true,
-        },
-      });
+    const refund = await this.prisma.refund.findUnique({
+      where: { id: refundId },
+      select: {
+        id: true,
+        paymentId: true,
+        amount: true,
+        status: true,
+      },
+    });
 
     if (!refund) {
-      throw new NotFoundException(
-        'Refund request not found',
+      throw new NotFoundException('Refund request not found');
+    }
+
+    if (dto.status === RefundStatus.PROCESSED) {
+      throw new BadRequestException(
+        'Use the refund processing endpoint to process an approved refund',
       );
     }
 
@@ -293,85 +293,237 @@ export class RefundsService {
         RefundStatus.APPROVED,
         RefundStatus.DENIED,
       ],
-      APPROVED: [
-        RefundStatus.PROCESSED,
-      ],
+      APPROVED: [],
       PROCESSED: [],
       DENIED: [],
     };
 
-    /*
-     * Reject invalid state transitions.
-     *
-     * REQUESTED -> APPROVED or DENIED
-     * APPROVED  -> PROCESSED
-     */
     if (
-      !allowedTransitions[refund.status].includes(
-        dto.status,
-      )
+      !allowedTransitions[refund.status].includes(dto.status)
     ) {
       throw new ConflictException(
         `Refund cannot transition from ${refund.status} to ${dto.status}`,
       );
     }
 
-    let updatedRefund: {
-      id: string;
-      paymentId: string;
-      orderItemId: string | null;
-      amount: Prisma.Decimal;
-      reason: string | null;
-      status: RefundStatus;
-      providerRefundId: string | null;
-      processedAt: Date | null;
-      createdAt: Date;
+    const updatedRefund = await this.prisma.$transaction(
+      async (tx) => {
+        const updated = await tx.refund.update({
+          where: { id: refund.id },
+          data: { status: dto.status },
+          select: {
+            id: true,
+            paymentId: true,
+            orderItemId: true,
+            amount: true,
+            reason: true,
+            status: true,
+            providerRefundId: true,
+            processedAt: true,
+            createdAt: true,
+          },
+        });
+
+        await tx.auditRecord.create({
+          data: {
+            actorUserId,
+            actionType: 'REFUND_STATUS_UPDATED',
+            entityType: 'Refund',
+            entityId: refund.id,
+            beforeState: {
+              status: refund.status,
+            },
+            afterState: {
+              status: updated.status,
+            },
+          },
+        });
+
+        return updated;
+      },
+    );
+
+    return {
+      ...updatedRefund,
+      amount: updatedRefund.amount.toFixed(2),
     };
+  }
 
-    if (dto.status === RefundStatus.PROCESSED) {
-      // Moving money happens outside a DB transaction — an external API
-      // call must never hold a Postgres transaction open.
-      updatedRefund = await this.processRefundWithPaymongo(refund);
-    } else {
-      updatedRefund = await this.prisma.refund.update({
-        where: { id: refund.id },
-        data: {
-          status: dto.status,
-          processedAt: null,
-        },
-        select: {
-          id: true,
-          paymentId: true,
-          orderItemId: true,
-          amount: true,
-          reason: true,
-          status: true,
-          providerRefundId: true,
-          processedAt: true,
-          createdAt: true,
-        },
-      });
-    }
-
-    await this.prisma.auditRecord.create({
-      data: {
-        actorUserId,
-        actionType: 'REFUND_STATUS_UPDATED',
-        entityType: 'Refund',
-        entityId: refund.id,
-        beforeState: {
-          status: refund.status,
-        },
-        afterState: {
-          status: updatedRefund.status,
+  async processRefund(
+    refundId: string,
+    actorUserId: string | null,
+  ) {
+    const refund = await this.prisma.refund.findUnique({
+      where: { id: refundId },
+      select: {
+        id: true,
+        paymentId: true,
+        orderItemId: true,
+        amount: true,
+        reason: true,
+        status: true,
+        providerRefundId: true,
+        processedAt: true,
+        payment: {
+          select: {
+            status: true,
+            provider: true,
+            providerPaymentResourceId: true,
+          },
         },
       },
     });
 
+    if (!refund) {
+      throw new NotFoundException('Refund request not found');
+    }
+
+    if (
+      refund.status === RefundStatus.PROCESSED &&
+      refund.providerRefundId
+    ) {
+      return {
+        id: refund.id,
+        paymentId: refund.paymentId,
+        amount: refund.amount.toFixed(2),
+        status: refund.status,
+        providerRefundId: refund.providerRefundId,
+        processedAt: refund.processedAt,
+        idempotentReplay: true,
+      };
+    }
+
+    if (
+      refund.status === RefundStatus.APPROVED &&
+      refund.providerRefundId
+    ) {
+      throw new ConflictException(
+        'Refund has already been submitted to PayMongo and is awaiting confirmation',
+      );
+    }
+
+    if (refund.status !== RefundStatus.APPROVED) {
+      throw new ConflictException(
+        'Only approved refunds can be processed',
+      );
+    }
+
+    if (refund.payment.status !== PaymentStatus.SUCCEEDED) {
+      throw new ConflictException(
+        'Only successful payments can be refunded',
+      );
+    }
+
+    if (!refund.payment.providerPaymentResourceId) {
+      throw new ConflictException(
+        'PayMongo payment resource ID is unavailable for this payment',
+      );
+    }
+
+    const amountInCentavos = Number(
+      refund.amount.mul(100).toFixed(0),
+    );
+
+    const providerRefund = await this.paymongoService.createRefund({
+      paymentResourceId: refund.payment.providerPaymentResourceId,
+      amount: amountInCentavos,
+      reason: 'others',
+      notes: refund.reason ?? undefined,
+    });
+
+    const providerStatus = providerRefund.status.toLowerCase();
+
+    if (
+      providerStatus !== 'succeeded' &&
+      providerStatus !== 'pending'
+    ) {
+      throw new ConflictException(
+        `PayMongo refund returned unsupported status: ${providerRefund.status}`,
+      );
+    }
+
+    if (providerStatus === 'pending') {
+      await this.prisma.refund.update({
+        where: { id: refund.id },
+        data: {
+          providerRefundId: providerRefund.refundId,
+        },
+      });
+
+      return {
+        id: refund.id,
+        paymentId: refund.paymentId,
+        amount: refund.amount.toFixed(2),
+        status: RefundStatus.APPROVED,
+        providerRefundId: providerRefund.refundId,
+        processedAt: null,
+        providerStatus: 'pending',
+        idempotentReplay: false,
+      };
+    }
+
+    const processedAt = new Date();
+
+    const updatedRefund = await this.prisma.$transaction(
+      async (tx) => {
+        const updateResult = await tx.refund.updateMany({
+          where: {
+            id: refund.id,
+            status: RefundStatus.APPROVED,
+            providerRefundId: null,
+          },
+          data: {
+            status: RefundStatus.PROCESSED,
+            providerRefundId: providerRefund.refundId,
+            processedAt,
+          },
+        });
+
+        if (updateResult.count !== 1) {
+          throw new ConflictException(
+            'Refund has already been processed or changed',
+          );
+        }
+
+        const updated = await tx.refund.findUniqueOrThrow({
+          where: { id: refund.id },
+          select: {
+            id: true,
+            paymentId: true,
+            orderItemId: true,
+            amount: true,
+            reason: true,
+            status: true,
+            providerRefundId: true,
+            processedAt: true,
+            createdAt: true,
+          },
+        });
+
+        await tx.auditRecord.create({
+          data: {
+            actorUserId,
+            actionType: 'REFUND_PROCESSED',
+            entityType: 'Refund',
+            entityId: refund.id,
+            beforeState: {
+              status: RefundStatus.APPROVED,
+            },
+            afterState: {
+              status: RefundStatus.PROCESSED,
+              providerRefundId: providerRefund.refundId,
+            },
+          },
+        });
+
+        return updated;
+      },
+    );
+
     return {
       ...updatedRefund,
-      amount:
-        updatedRefund.amount.toFixed(2),
+      amount: updatedRefund.amount.toFixed(2),
+      idempotentReplay: false,
     };
   }
 
@@ -679,86 +831,7 @@ export class RefundsService {
       },
     });
 
-    return this.processRefundWithPaymongo(refund);
-  }
-
-  /**
-   * Calls PayMongo and moves the refund to PROCESSED. On failure, leaves
-   * the refund at its current (APPROVED) status so an admin can retry it
-   * manually via PATCH /refunds/:id rather than losing the record.
-   */
-  private async processRefundWithPaymongo(refund: {
-    id: string;
-    paymentId: string;
-    amount: Prisma.Decimal;
-  }) {
-    const payment = await this.prisma.payment.findUnique({
-      where: { id: refund.paymentId },
-      select: { providerPaymentResourceId: true },
-    });
-
-    if (!payment?.providerPaymentResourceId) {
-      return this.prisma.refund.findUniqueOrThrow({
-        where: { id: refund.id },
-        select: {
-          id: true,
-          paymentId: true,
-          orderItemId: true,
-          amount: true,
-          reason: true,
-          status: true,
-          providerRefundId: true,
-          processedAt: true,
-          createdAt: true,
-        },
-      });
-    }
-
-    try {
-      const amountCentavos = Math.round(
-        refund.amount.toNumber() * 100,
-      );
-
-      const result = await this.paymongoService.createRefund({
-        paymentResourceId: payment.providerPaymentResourceId,
-        amount: amountCentavos,
-      });
-
-      return this.prisma.refund.update({
-        where: { id: refund.id },
-        data: {
-          status: RefundStatus.PROCESSED,
-          providerRefundId: result.refundId,
-          processedAt: new Date(),
-        },
-        select: {
-          id: true,
-          paymentId: true,
-          orderItemId: true,
-          amount: true,
-          reason: true,
-          status: true,
-          providerRefundId: true,
-          processedAt: true,
-          createdAt: true,
-        },
-      });
-    } catch {
-      return this.prisma.refund.findUniqueOrThrow({
-        where: { id: refund.id },
-        select: {
-          id: true,
-          paymentId: true,
-          orderItemId: true,
-          amount: true,
-          reason: true,
-          status: true,
-          providerRefundId: true,
-          processedAt: true,
-          createdAt: true,
-        },
-      });
-    }
+    return this.processRefund(refund.id, null);
   }
 
   private async resolveRefundableAmount(

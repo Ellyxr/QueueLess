@@ -37,7 +37,13 @@ interface PaymongoRefundResponse {
     id: string;
     type: string;
     attributes: {
+      amount?: number;
+      currency?: string;
+      payment_id?: string;
+      reason?: string;
       status: string;
+      created_at?: number;
+      updated_at?: number;
     };
   };
 }
@@ -76,50 +82,59 @@ export class PaymongoService {
       );
     }
 
-    const authorization = Buffer.from(`${secretKey}:`).toString('base64');
+    const authorization = Buffer.from(
+      `${secretKey}:`,
+    ).toString('base64');
 
     const orderIdParam = `orderId=${encodeURIComponent(params.orderId)}`;
-    const successUrlWithOrder = `${successUrl}${successUrl.includes('?') ? '&' : '?'}${orderIdParam}`;
-    const cancelUrlWithOrder = `${cancelUrl}${cancelUrl.includes('?') ? '&' : '?'}${orderIdParam}`;
+
+    const successUrlWithOrder =
+      `${successUrl}${successUrl.includes('?') ? '&' : '?'}${orderIdParam}`;
+
+    const cancelUrlWithOrder =
+      `${cancelUrl}${cancelUrl.includes('?') ? '&' : '?'}${orderIdParam}`;
 
     try {
-      const response = await fetch(`${this.baseUrl}/checkout_sessions`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Basic ${authorization}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          data: {
-            attributes: {
-              line_items: [
-                {
-                  currency: 'PHP',
-                  amount: params.amount,
-                  name: 'QueueLess Order Payment',
-                  description: params.description,
-                  quantity: 1,
-                },
-              ],
-              payment_method_types: [
-                'card',
-                'gcash',
-                'paymaya',
-                'grab_pay',
-                'shopee_pay',
-                'qrph',
-              ],
-              description: params.description,
-              reference_number: params.referenceNumber,
-              success_url: successUrlWithOrder,
-              cancel_url: cancelUrlWithOrder,
-              send_email_receipt: false,
-              show_description: true,
-              show_line_items: true,
-            },
+      const response = await fetch(
+        `${this.baseUrl}/checkout_sessions`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${authorization}`,
+            'Content-Type': 'application/json',
           },
-        }),
-      });
+          body: JSON.stringify({
+            data: {
+              attributes: {
+                line_items: [
+                  {
+                    currency: 'PHP',
+                    amount: params.amount,
+                    name: 'QueueLess Order Payment',
+                    description: params.description,
+                    quantity: 1,
+                  },
+                ],
+                payment_method_types: [
+                  'card',
+                  'gcash',
+                  'paymaya',
+                  'grab_pay',
+                  'shopee_pay',
+                  'qrph',
+                ],
+                description: params.description,
+                reference_number: params.referenceNumber,
+                success_url: successUrlWithOrder,
+                cancel_url: cancelUrlWithOrder,
+                send_email_receipt: false,
+                show_description: true,
+                show_line_items: true,
+              },
+            },
+          }),
+        },
+      );
 
       const responseBody = (await response.json()) as
         | PaymongoCheckoutSessionResponse
@@ -164,7 +179,10 @@ export class PaymongoService {
 
   async createRefund(
     params: CreateRefundParams,
-  ): Promise<{ refundId: string; status: string }> {
+  ): Promise<{
+    refundId: string;
+    status: string;
+  }> {
     const secretKey =
       this.configService.get<string>('PAYMONGO_SECRET_KEY');
 
@@ -174,26 +192,55 @@ export class PaymongoService {
       );
     }
 
-    const authorization = Buffer.from(`${secretKey}:`).toString('base64');
+    if (
+      !params.paymentResourceId ||
+      !params.paymentResourceId.startsWith('pay_')
+    ) {
+      throw new BadGatewayException(
+        'A valid PayMongo payment resource ID is required',
+      );
+    }
+
+    if (
+      !Number.isInteger(params.amount) ||
+      params.amount < 100
+    ) {
+      throw new BadGatewayException(
+        'PayMongo refund amount must be at least PHP 1.00',
+      );
+    }
+
+    const authorization = Buffer.from(
+      `${secretKey}:`,
+    ).toString('base64');
 
     try {
-      const response = await fetch(`${this.baseUrl}/refunds`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Basic ${authorization}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          data: {
-            attributes: {
-              amount: params.amount,
-              payment_id: params.paymentResourceId,
-              reason: params.reason ?? 'others',
-              notes: params.notes,
-            },
+      /*
+       * Refunds use PayMongo's v1 endpoint even though checkout
+       * sessions use the v2 API.
+       */
+      const response = await fetch(
+        'https://api.paymongo.com/v1/refunds',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${authorization}`,
+            'Content-Type': 'application/json',
           },
-        }),
-      });
+          body: JSON.stringify({
+            data: {
+              attributes: {
+                amount: params.amount,
+                payment_id: params.paymentResourceId,
+                reason: params.reason ?? 'others',
+                notes:
+                  params.notes?.trim().slice(0, 255) ||
+                  'QueueLess administrator refund',
+              },
+            },
+          }),
+        },
+      );
 
       const responseBody = (await response.json()) as
         | PaymongoRefundResponse
@@ -212,12 +259,13 @@ export class PaymongoService {
 
         throw new BadGatewayException(
           errorDetail
-            ? `PayMongo: ${errorDetail}`
+            ? `PayMongo refund failed: ${errorDetail}`
             : 'Unable to create PayMongo refund',
         );
       }
 
-      const refund = responseBody as PaymongoRefundResponse;
+      const refund =
+        responseBody as PaymongoRefundResponse;
 
       return {
         refundId: refund.data.id,
@@ -229,17 +277,19 @@ export class PaymongoService {
       }
 
       throw new BadGatewayException(
-        'Unable to connect to PayMongo',
+        'Unable to connect to PayMongo refund service',
       );
     }
   }
 
-      verifyWebhookSignature(
+  verifyWebhookSignature(
     rawBody: Buffer,
     signatureHeader: string | undefined,
   ): void {
     const webhookSecret =
-      this.configService.get<string>('PAYMONGO_WEBHOOK_SECRET');
+      this.configService.get<string>(
+        'PAYMONGO_WEBHOOK_SECRET',
+      );
 
     if (!webhookSecret) {
       throw new InternalServerErrorException(
@@ -288,12 +338,16 @@ export class PaymongoService {
       );
     }
 
-    const currentTimestampSeconds = Math.floor(Date.now() / 1000);
-    const timestampToleranceSeconds = 300; // 5 minutes
+    const currentTimestampSeconds = Math.floor(
+      Date.now() / 1000,
+    );
+
+    const timestampToleranceSeconds = 300;
 
     if (
-      Math.abs(currentTimestampSeconds - timestampSeconds) >
-      timestampToleranceSeconds
+      Math.abs(
+        currentTimestampSeconds - timestampSeconds,
+      ) > timestampToleranceSeconds
     ) {
       throw new UnauthorizedException(
         'Expired PayMongo webhook signature',
@@ -302,9 +356,13 @@ export class PaymongoService {
 
     // QueueLess currently uses PayMongo Sandbox,
     // so only test signatures are accepted.
-    const receivedSignature = testSignaturePart?.substring(3);
+    const receivedSignature =
+      testSignaturePart?.substring(3);
 
-    if (liveSignaturePart?.substring(3) && !receivedSignature) {
+    if (
+      liveSignaturePart?.substring(3) &&
+      !receivedSignature
+    ) {
       throw new UnauthorizedException(
         'Live PayMongo webhook signatures are not accepted in Sandbox mode',
       );
@@ -316,7 +374,8 @@ export class PaymongoService {
       );
     }
 
-    const signedPayload = `${timestamp}.${rawBody.toString('utf8')}`;
+    const signedPayload =
+      `${timestamp}.${rawBody.toString('utf8')}`;
 
     const expectedSignature = createHmac(
       'sha256',
@@ -335,6 +394,11 @@ export class PaymongoService {
       'utf8',
     );
 
+    /*
+     * timingSafeEqual requires equal-length buffers.
+     * A malformed signature must be rejected instead of allowing
+     * timingSafeEqual to throw a RangeError.
+     */
     if (
       expectedBuffer.length !== receivedBuffer.length ||
       !timingSafeEqual(expectedBuffer, receivedBuffer)
