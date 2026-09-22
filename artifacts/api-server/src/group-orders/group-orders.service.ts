@@ -9,10 +9,10 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateGroupOrderDto } from './dto/create-group-order.dto';
 import { AddGroupOrderItemDto } from './dto/add-group-order-item.dto';
 import { JoinGroupOrderByCodeDto } from './dto/join-group-order-by-code.dto';
-import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { SetPaymentSplitDto } from './dto/set-payment-split.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { PricingService } from '../common/pricing/pricing.service';
 
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const CODE_LENGTH = 6;
@@ -72,8 +72,8 @@ type GroupOrderWithRelations = Prisma.GroupOrderGetPayload<{
 export class GroupOrdersService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly configService: ConfigService,
     private readonly notificationsService: NotificationsService,
+    private readonly pricingService: PricingService,
   ) {}
 
   private generateCode(): string {
@@ -916,11 +916,12 @@ export class GroupOrdersService {
 
       subtotal = subtotal.toDecimalPlaces(2);
 
-      const marketplaceFeeRate = this.getMarketplaceFeeRate();
+      const totals =
+        this.pricingService.calculateOrderTotals(subtotal);
 
-      const marketplaceFee = subtotal.mul(marketplaceFeeRate).div(100).toDecimalPlaces(2);
-
-      const totalAmount = subtotal.add(marketplaceFee).toDecimalPlaces(2);
+      subtotal = totals.subtotal;
+      const marketplaceFee = totals.marketplaceFee;
+      const totalAmount = totals.totalAmount;
 
       const estimatedReadyAt = new Date(Date.now() + estimatedWaitMinutes * 60_000);
 
@@ -1350,23 +1351,5 @@ export class GroupOrdersService {
     }
 
     return calculatedShares;
-  }
-
-  private getMarketplaceFeeRate(): Prisma.Decimal {
-    const rawRate = this.configService.get<string>('MARKETPLACE_FEE_RATE', '0');
-
-    let rate: Prisma.Decimal;
-
-    try {
-      rate = new Prisma.Decimal(rawRate);
-    } catch {
-      throw new BadRequestException('Invalid marketplace fee configuration');
-    }
-
-    if (rate.isNegative()) {
-      throw new BadRequestException('Invalid marketplace fee configuration');
-    }
-
-    return rate;
   }
 }
