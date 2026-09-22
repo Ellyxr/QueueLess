@@ -52,6 +52,8 @@ model PasabuyProfile {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String   @unique @db.Uuid
   studentId String   @unique
+  studentIdPhotoUrl  String?
+  verifiedAt         DateTime? @db.Timestamptz(6)
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
 
@@ -591,6 +593,11 @@ model PasabuyRequest {
   convenienceFee   Decimal                @db.Decimal(10, 2)
   totalAmount      Decimal                @db.Decimal(10, 2)
   acceptedAt       DateTime?              @db.Timestamptz(6)
+  pickupCode       String?
+  expiresAt        DateTime?             @db.Timestamptz(6)
+  paymentStatus    PasabuyPaymentStatus  @default(NOT_CHARGED)
+  paymentDeadline  DateTime?             @db.Timestamptz(6)
+  termsAcceptedAt  DateTime?             @db.Timestamptz(6)
   pickedUpAt       DateTime?              @db.Timestamptz(6)
   deliveredAt      DateTime?              @db.Timestamptz(6)
   cancelledAt      DateTime?              @db.Timestamptz(6)
@@ -859,10 +866,26 @@ enum PayoutStatus {
 enum PasabuyStatus {
   PENDING
   ACCEPTED
+  AWAITING_PAYMENT
   PAID
+  PICKUP_READY
+  PICKED_UP
   IN_PROGRESS
   DELIVERED
+  COMPLETED
   CANCELLED
+  EXPIRED
+  PAYMENT_EXPIRED
+  DISPUTED
+}
+
+enum PasabuyPaymentStatus {
+  NOT_CHARGED
+  AWAITING_PAYMENT
+  PAID
+  PAYMENT_FAILED
+  PAYMENT_EXPIRED
+  REFUNDED
 }
 
 enum ReportStatus {
