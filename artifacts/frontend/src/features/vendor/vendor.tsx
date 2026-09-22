@@ -53,6 +53,7 @@ import {
   updateVendorAvailability,
   updateOrderStatus,
   payoutVendorBalance,
+  uploadProductImage,
   type VendorProduct,
   type VendorDashboard,
   type VendorStorefront,
@@ -78,6 +79,7 @@ interface Product {
   category: string;
   preparationTimeMinutes: number;
   image?: string;
+  imageFileId?: string;
   isAvailable: boolean;
   eligibleExtraIds: string[];
 }
@@ -164,6 +166,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     category: '',
     preparationTime: '15',
     image: '',
+    imageFileId: '',
     eligibleExtraIds: [] as string[],
   });
   const [imagePreview, setImagePreview] = useState<string>('');
@@ -440,7 +443,8 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     description: product.description || '',
     category: product.category || 'General',
     preparationTimeMinutes: product.preparationTimeMinutes ?? 15,
-    image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
+    image: product.imageUrl || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
+    imageFileId: product.imageFileId || undefined,
     isAvailable: product.isAvailable,
     eligibleExtraIds: product.eligibleExtras?.map((extra) => extra.id) ?? [],
   });
@@ -457,6 +461,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
         category: product.category || 'General',
         preparationTime: String(product.preparationTimeMinutes ?? 15),
         image: product.image || '',
+        imageFileId: product.imageFileId || '',
         eligibleExtraIds: product.eligibleExtraIds,
       });
       setImagePreview(product.image || '');
@@ -470,6 +475,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
         category: kind === 'extra' ? EXTRA_CATEGORY : '',
         preparationTime: '15',
         image: '',
+        imageFileId: '',
         eligibleExtraIds: [],
       });
       setImagePreview('');
@@ -480,18 +486,23 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   };
 
   // Handle Local File Upload from File Explorer / Gallery
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const result = reader.result as string;
-        setFormData((prev) => ({ ...prev, image: result }));
-        setImagePreview(result);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+
+const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  setIsUploadingImage(true);
+  try {
+    const { url, fileId } = await uploadProductImage(file);
+    setFormData((prev) => ({ ...prev, image: url, imageFileId: fileId }));
+    setImagePreview(url);
+  } catch (error: unknown) {
+    showToast(error instanceof Error ? error.message : 'Image upload failed.', 'error');
+  } finally {
+    setIsUploadingImage(false);
+  }
+};
 
   const validateForm = () => {
     const errors: { name?: string; price?: string; description?: string; preparationTime?: string } = {};
@@ -535,6 +546,8 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
         category: finalCategory,
         preparationTimeMinutes: Number(formData.preparationTime),
         isAvailable: editingProduct ? editingProduct.isAvailable : true,
+        imageUrl: formData.image || undefined,
+        imageFileId: formData.imageFileId || undefined,
         ...(modalKind === 'product' ? { eligibleExtraIds: formData.eligibleExtraIds } : {}),
       };
       const savedProduct = editingProduct

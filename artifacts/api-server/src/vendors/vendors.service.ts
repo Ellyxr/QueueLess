@@ -56,6 +56,8 @@ export class VendorsService {
             category: true,
             preparationTimeMinutes: true,
             isAvailable: true,
+            imageUrl: true,
+            imageFileId: true,
             eligibleExtras: {
               select: {
                 id: true,
@@ -108,6 +110,8 @@ export class VendorsService {
             category: true,
             preparationTimeMinutes: true,
             isAvailable: true,
+            imageUrl: true,
+            imageFileId: true,
             eligibleExtras: {
               select: {
                 id: true,
