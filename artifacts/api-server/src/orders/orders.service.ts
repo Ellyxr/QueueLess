@@ -5,11 +5,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { CancellationReason, OrderStatus, Prisma } from '@prisma/client';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { PricingService } from '../common/pricing/pricing.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { RefundsService } from '../refunds/refunds.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -22,9 +22,9 @@ const VENDOR_UNRESPONSIVE_TIMEOUT_MS = 2 * 60 * 1000;
 export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly configService: ConfigService,
     private readonly refundsService: RefundsService,
     private readonly notificationsService: NotificationsService,
+    private readonly pricingService: PricingService,
   ) {}
 
   async createOrder(
@@ -206,17 +206,12 @@ export class OrdersService {
             };
           });
 
-          const marketplaceFeeRate =
-            this.getMarketplaceFeeRate();
+          const totals =
+            this.pricingService.calculateOrderTotals(subtotal);
 
-          const marketplaceFee = subtotal
-            .mul(marketplaceFeeRate)
-            .div(100)
-            .toDecimalPlaces(2);
-
-          const totalAmount = subtotal
-            .add(marketplaceFee)
-            .toDecimalPlaces(2);
+          subtotal = totals.subtotal;
+          const marketplaceFee = totals.marketplaceFee;
+          const totalAmount = totals.totalAmount;
 
           const checkoutResult =
             await tx.cart.updateMany({
@@ -281,7 +276,8 @@ export class OrdersService {
           });
 
             if (dto.isPasabuyRequest) {
-    const deliveryFee = this.getPasabuyDeliveryFee();
+    const deliveryFee =
+      this.pricingService.getPasabuyDeliveryFee();
 
     const itemDescription = cart.items
       .map(
@@ -1116,61 +1112,6 @@ export class OrdersService {
         `Invalid order status transition from ${currentStatus} to ${nextStatus}`,
       );
     }
-  }
-
-  private getMarketplaceFeeRate(): Prisma.Decimal {
-    const rawRate =
-      this.configService.get<string>(
-        'MARKETPLACE_FEE_RATE',
-        '0',
-      );
-
-    let rate: Prisma.Decimal;
-
-    try {
-      rate = new Prisma.Decimal(rawRate);
-    } catch {
-      throw new BadRequestException(
-        'MARKETPLACE_FEE_RATE must be a valid number',
-      );
-    }
-
-    if (
-      rate.lessThan(0) ||
-      rate.greaterThan(100)
-    ) {
-      throw new BadRequestException(
-        'MARKETPLACE_FEE_RATE must be between 0 and 100',
-      );
-    }
-
-    return rate;
-  }
-
-    private getPasabuyDeliveryFee(): Prisma.Decimal {
-    const rawFee =
-      this.configService.get<string>(
-        'PASABUY_DELIVERY_FEE',
-        '35',
-      );
-
-    let fee: Prisma.Decimal;
-
-    try {
-      fee = new Prisma.Decimal(rawFee);
-    } catch {
-      throw new BadRequestException(
-        'PASABUY_DELIVERY_FEE must be a valid number',
-      );
-    }
-
-    if (fee.lessThan(0)) {
-      throw new BadRequestException(
-        'PASABUY_DELIVERY_FEE must be zero or greater',
-      );
-    }
-
-    return fee;
   }
 
   private buildOrderResponse(

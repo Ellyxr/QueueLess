@@ -11,7 +11,7 @@ import { ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../auth/jwt.strategy';
-
+import { CalculateCartDto } from './dto/calculate-cart.dto';
 import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { CartDto } from './dto/cart.dto';
 import { CartsService } from './carts.service';
@@ -49,8 +49,12 @@ export class CartsController {
   @Post('calculate')
   async calculateCart(
     @CurrentUser() user: JwtPayload,
-    @Body() dto: CartDto,
+    @Body() dto: CalculateCartDto,
   ) {
-    return this.cartsService.calculateCart(user.sub, dto.cartId);
+    return this.cartsService.calculateCart(
+      user.sub,
+      dto.cartId,
+      dto.isPasabuyRequest ?? false,
+    );
   }
 }
