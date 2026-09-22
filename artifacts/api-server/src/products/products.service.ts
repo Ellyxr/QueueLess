@@ -263,7 +263,7 @@ export class ProductsService {
     if (dto.isAvailable !== undefined) {
       data.isAvailable = dto.isAvailable;
     }
-    
+
      if (dto.imageUrl !== undefined) {
       data.imageUrl = dto.imageUrl.trim() || null;
     }
