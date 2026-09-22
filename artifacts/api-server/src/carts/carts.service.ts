@@ -3,14 +3,18 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PrismaService } from '../common/prisma/prisma.service';
-import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { Prisma } from '@prisma/client';
 
+import { PricingService } from '../common/pricing/pricing.service';
+import { PrismaService } from '../common/prisma/prisma.service';
+import { AddCartItemDto } from './dto/add-cart-item.dto';
 
 @Injectable()
 export class CartsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly pricingService: PricingService,
+  ) {}
 
   async addItem(userId: string, dto: AddCartItemDto) {
     const product = await this.prisma.product.findUnique({
@@ -59,7 +63,7 @@ export class CartsService {
       },
     });
 
-        if (existingItem) {
+    if (existingItem) {
       await this.prisma.cartItem.update({
         where: { id: existingItem.id },
         data: {
@@ -165,7 +169,11 @@ export class CartsService {
     };
   }
 
-  async calculateCart(userId: string, cartId: string) {
+  async calculateCart(
+    userId: string,
+    cartId: string,
+    isPasabuyRequest = false,
+  ) {
     const cart = await this.prisma.cart.findFirst({
       where: {
         id: cartId,
@@ -185,67 +193,97 @@ export class CartsService {
       throw new NotFoundException('Cart not found');
     }
 
+    let subtotal = new Prisma.Decimal(0);
+
     const items = cart.items.map((item) => {
       const unitPrice = item.product.price;
-      const subtotal = unitPrice.mul(item.quantity);
+      const lineSubtotal = unitPrice
+        .mul(item.quantity)
+        .toDecimalPlaces(2);
+
+      subtotal = subtotal.add(lineSubtotal);
 
       return {
         productId: item.productId,
         name: item.product.name,
         quantity: item.quantity,
         unitPrice: unitPrice.toFixed(2),
-        subtotal: subtotal.toFixed(2),
+        subtotal: lineSubtotal.toFixed(2),
       };
     });
 
-    const total = cart.items.reduce(
-      (sum, item) => sum + item.product.price.toNumber() * item.quantity,
-      0,
-    );
+    const totals =
+      this.pricingService.calculateOrderTotals(subtotal);
+
+    const pasabuyDeliveryFee = isPasabuyRequest
+      ? this.pricingService.getPasabuyDeliveryFee()
+      : new Prisma.Decimal(0);
+
+    const finalTotal = totals.totalAmount
+      .add(pasabuyDeliveryFee)
+      .toDecimalPlaces(2);
 
     return {
       cartId: cart.id,
       items,
-      total: total.toFixed(2),
+      subtotal: totals.subtotal.toFixed(2),
+      fees: {
+        marketplaceFee: totals.marketplaceFee.toFixed(2),
+        pasabuyDeliveryFee: pasabuyDeliveryFee.toFixed(2),
+      },
+      totalAmount: finalTotal.toFixed(2),
     };
   }
-private buildCartResponse(
-  cart: Prisma.CartGetPayload<{
-    include: {
-      vendor: true;
-      items: {
-        include: {
-          product: true;
-        };
-      };
-    };
-  }>,
-) {
-  const total = cart.items.reduce(
-    (sum, item) =>
-      sum + item.product.price.toNumber() * item.quantity,
-    0,
-  );
 
-  return {
-    id: cart.id,
-    vendor: {
-      id: cart.vendor.id,
-      name: cart.vendor.name,
-      status: cart.vendor.status,
-    },
-    status: cart.status,
-    items: cart.items.map((item) => ({
-      id: item.id,
-      productId: item.productId,
-      name: item.product.name,
-      quantity: item.quantity,
-      unitPrice: item.product.price.toFixed(2),
-      subtotal: item.product.price
-        .mul(item.quantity)
-        .toFixed(2),
-    })),
-    total: total.toFixed(2),
-  };
-}
+    private buildCartResponse(
+      cart: Prisma.CartGetPayload<{
+        include: {
+          vendor: true;
+          items: {
+            include: {
+              product: true;
+            };
+          };
+        };
+      }>,
+    ) {
+    const subtotal = cart.items.reduce(
+      (sum, item) =>
+        sum.add(
+          item.product.price
+            .mul(item.quantity)
+            .toDecimalPlaces(2),
+        ),
+      new Prisma.Decimal(0),
+    );
+
+    const totals =
+      this.pricingService.calculateOrderTotals(subtotal);
+
+    return {
+      id: cart.id,
+      vendor: {
+        id: cart.vendor.id,
+        name: cart.vendor.name,
+        status: cart.vendor.status,
+      },
+      status: cart.status,
+      items: cart.items.map((item) => ({
+        id: item.id,
+        productId: item.productId,
+        name: item.product.name,
+        quantity: item.quantity,
+        unitPrice: item.product.price.toFixed(2),
+        subtotal: item.product.price
+          .mul(item.quantity)
+          .toDecimalPlaces(2)
+          .toFixed(2),
+      })),
+      subtotal: totals.subtotal.toFixed(2),
+      fees: {
+        marketplaceFee: totals.marketplaceFee.toFixed(2),
+      },
+      totalAmount: totals.totalAmount.toFixed(2),
+    };
+  }
 }
