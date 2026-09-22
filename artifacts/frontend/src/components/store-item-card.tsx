@@ -23,6 +23,8 @@ interface StoreItemCardProps {
   storeName?: string;
   vendorId?: string;
   extras?: StoreItemCardExtra[];
+  /** When true, ordering is disabled (e.g. the store is closed right now). */
+  disabled?: boolean;
 }
 
 export function StoreItemCard({
@@ -34,6 +36,7 @@ export function StoreItemCard({
   storeName,
   vendorId,
   extras,
+  disabled = false,
 }: StoreItemCardProps) {
   const [isFavorited, setIsFavorited] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
@@ -130,7 +133,7 @@ export function StoreItemCard({
   };
 
   const handleAddToCart = async () => {
-    if (isAdding) return;
+    if (isAdding || disabled) return;
 
     const session = getGroupOrderSession();
 
@@ -229,7 +232,10 @@ export function StoreItemCard({
         <div className="mt-3 flex h-9 items-center justify-between">
           <button
             type="button"
-            onClick={() => setIsFavorited((current) => !current)}
+            onClick={(event) => {
+              event.stopPropagation();
+              setIsFavorited((current) => !current);
+            }}
             className="flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-all duration-200 hover:bg-destructive/10 hover:text-destructive active:scale-90"
             aria-label={
               isFavorited
@@ -248,21 +254,25 @@ export function StoreItemCard({
 
           <motion.button
             type="button"
-            onClick={handleAddToCart}
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.94 }}
+            disabled={disabled}
+            onClick={(event) => {
+              event.stopPropagation();
+              handleAddToCart();
+            }}
+            whileHover={disabled ? undefined : { scale: 1.03 }}
+            whileTap={disabled ? undefined : { scale: 0.94 }}
             transition={{
               duration: 0.2,
               ease: [0.22, 1, 0.36, 1],
             }}
-            className="group/cart relative flex h-9 items-center gap-1.5 overflow-hidden rounded-full bg-primary px-3 text-primary-foreground shadow-sm transition-shadow duration-300 hover:shadow-md"
-            aria-label={`Add ${name} to cart`}
+            className="group/cart relative flex h-9 items-center gap-1.5 overflow-hidden rounded-full bg-primary px-3 text-primary-foreground shadow-sm transition-shadow duration-300 hover:shadow-md disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none disabled:hover:shadow-none"
+            aria-label={disabled ? `${name} is unavailable right now` : `Add ${name} to cart`}
           >
             <Plus className="h-4 w-4 shrink-0 transition-transform duration-300 group-hover/cart:rotate-90" />
 
             <span className="grid grid-cols-[0fr] transition-[grid-template-columns] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover/cart:grid-cols-[1fr]">
               <span className="overflow-hidden whitespace-nowrap text-xs font-medium">
-                Add to Cart
+                {disabled ? "Closed" : "Add to Cart"}
               </span>
             </span>
           </motion.button>

@@ -52,6 +52,8 @@ model PasabuyProfile {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String   @unique @db.Uuid
   studentId String   @unique
+  studentIdPhotoUrl  String?
+  verifiedAt         DateTime? @db.Timestamptz(6)
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
 
@@ -112,6 +114,8 @@ model Vendor {
   createdAt           DateTime                   @default(now()) @db.Timestamptz(6)
   updatedAt           DateTime                   @updatedAt @db.Timestamptz(6)
   businessName        String?
+  preorderEnabled     Boolean                    @default(false)
+  preorderSameAsStoreHours Boolean               @default(true)
   carts               Cart[]
   eventParticipations EventVendorParticipation[]
   featuredListings    FeaturedListing[]
@@ -123,10 +127,52 @@ model Vendor {
   subscriptions       VendorSubscription[]
   owner               User                       @relation("VendorOwner", fields: [ownerUserId], references: [id])
   favoritedBy         VendorFavorite[]           @relation("VendorFavoritedBy")
+  ledgerEntries       VendorLedgerEntry[]
+  payouts             Payout[]
+  preorderAvailability VendorPreorderAvailability[]
+  availability        VendorAvailability[]
 
   @@index([ownerUserId])
   @@index([status])
   @@map("vendors")
+}
+
+model VendorPreorderAvailability {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId  String  @db.Uuid
+  dayOfWeek Weekday
+  isEnabled Boolean @default(false)
+  /// 24-hour "HH:mm" local time; null while the day is disabled.
+  openTime  String? @db.VarChar(5)
+  /// 24-hour "HH:mm" local time; null while the day is disabled.
+  closeTime String? @db.VarChar(5)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@unique([vendorId, dayOfWeek])
+  @@index([vendorId])
+  @@map("vendor_preorder_availability")
+}
+
+model VendorAvailability {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId  String  @db.Uuid
+  dayOfWeek Weekday
+  isOpen    Boolean @default(false)
+  /// 24-hour "HH:mm" local time; null while the day is closed.
+  openTime  String? @db.VarChar(5)
+  /// 24-hour "HH:mm" local time; null while the day is closed.
+  closeTime String? @db.VarChar(5)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@unique([vendorId, dayOfWeek])
+  @@index([vendorId])
+  @@map("vendor_availability")
 }
 
 model VendorFavorite {
@@ -169,6 +215,8 @@ model Product {
   preparationTimeMinutes Int               @default(15)
   category               String?
   isAvailable            Boolean           @default(true)
+  imageUrl               String?
+  imageFileId            String?
   createdAt              DateTime          @default(now()) @db.Timestamptz(6)
   updatedAt              DateTime          @updatedAt @db.Timestamptz(6)
   cartItems              CartItem[]
@@ -292,6 +340,8 @@ model Order {
   totalAmount       Decimal               @db.Decimal(10, 2)
   estimatedReadyAt  DateTime?             @db.Timestamptz(6)
   pickupConfirmedAt DateTime?             @db.Timestamptz(6)
+  paidAt            DateTime?             @db.Timestamptz(6)
+  buyerContactPingAt DateTime?            @db.Timestamptz(6)
   createdAt         DateTime              @default(now()) @db.Timestamptz(6)
   updatedAt         DateTime              @updatedAt @db.Timestamptz(6)
   idempotencyKeys   OrderIdempotencyKey[]
@@ -305,6 +355,8 @@ model Order {
   pasabuyRequests   PasabuyRequest[]
   paymentShares     PaymentShare[]
   reportsTargeting  Report[]              @relation("ReportTargetOrder")
+  ledgerEntry       VendorLedgerEntry?
+  refunds           Refund[]
 
   @@index([customerId])
   @@index([vendorId])
@@ -474,23 +526,59 @@ model Payment {
 }
 
 model Refund {
-  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  paymentId         String       @db.Uuid
-  orderItemId       String?      @db.Uuid
-  amount            Decimal      @db.Decimal(10, 2)
+  id                String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentId         String           @db.Uuid
+  orderId           String?          @db.Uuid
+  orderItemId       String?          @db.Uuid
+  amount            Decimal          @db.Decimal(10, 2)
   reason            String?
-  status            RefundStatus @default(REQUESTED)
-  requestedByUserId String       @db.Uuid
+  category          String?
+  status            RefundStatus     @default(REQUESTED)
+  initiatedBy       RefundInitiator  @default(BUYER)
+  requestedByUserId String           @db.Uuid
   providerRefundId  String?
-  processedAt       DateTime?    @db.Timestamptz(6)
-  createdAt         DateTime     @default(now()) @db.Timestamptz(6)
-  orderItem         OrderItem?   @relation(fields: [orderItemId], references: [id])
-  payment           Payment      @relation(fields: [paymentId], references: [id])
-  requestedBy       User         @relation("RefundRequestedBy", fields: [requestedByUserId], references: [id])
+  processedAt       DateTime?        @db.Timestamptz(6)
+  createdAt         DateTime         @default(now()) @db.Timestamptz(6)
+  order             Order?           @relation(fields: [orderId], references: [id])
+  orderItem         OrderItem?       @relation(fields: [orderItemId], references: [id])
+  payment           Payment          @relation(fields: [paymentId], references: [id])
+  requestedBy       User             @relation("RefundRequestedBy", fields: [requestedByUserId], references: [id])
 
   @@index([paymentId])
+  @@index([orderId])
   @@index([orderItemId])
   @@map("refunds")
+}
+
+model VendorLedgerEntry {
+  id        String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId  String          @db.Uuid
+  orderId   String?         @unique @db.Uuid
+  payoutId  String?         @db.Uuid
+  type      LedgerEntryType
+  amount    Decimal         @db.Decimal(10, 2)
+  createdAt DateTime        @default(now()) @db.Timestamptz(6)
+  vendor    Vendor          @relation(fields: [vendorId], references: [id])
+  order     Order?          @relation(fields: [orderId], references: [id])
+  payout    Payout?         @relation(fields: [payoutId], references: [id])
+
+  @@index([vendorId])
+  @@index([vendorId, createdAt])
+  @@map("vendor_ledger_entries")
+}
+
+model Payout {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId       String       @db.Uuid
+  amount         Decimal      @db.Decimal(10, 2)
+  status         PayoutStatus @default(PAYOUT_COMPLETED)
+  idempotencyKey String?      @unique
+  createdAt      DateTime     @default(now()) @db.Timestamptz(6)
+  vendor         Vendor       @relation(fields: [vendorId], references: [id])
+  entries        VendorLedgerEntry[]
+
+  @@index([vendorId])
+  @@map("payouts")
 }
 
 model PasabuyRequest {
@@ -505,6 +593,11 @@ model PasabuyRequest {
   convenienceFee   Decimal                @db.Decimal(10, 2)
   totalAmount      Decimal                @db.Decimal(10, 2)
   acceptedAt       DateTime?              @db.Timestamptz(6)
+  pickupCode       String?
+  expiresAt        DateTime?             @db.Timestamptz(6)
+  paymentStatus    PasabuyPaymentStatus  @default(NOT_CHARGED)
+  paymentDeadline  DateTime?             @db.Timestamptz(6)
+  termsAcceptedAt  DateTime?             @db.Timestamptz(6)
   pickedUpAt       DateTime?              @db.Timestamptz(6)
   deliveredAt      DateTime?              @db.Timestamptz(6)
   cancelledAt      DateTime?              @db.Timestamptz(6)
@@ -670,6 +763,15 @@ enum VendorType {
   STUDENT
 }
 
+enum Weekday {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+}
+
 enum VendorStatus {
   ACTIVE
   SUSPENDED
@@ -695,6 +797,7 @@ enum CancellationReason {
   NOT_AVAILABLE
   CUSTOMER_REQUEST
   CLOSING_EARLY
+  AUTO_REFUND_TIMEOUT
   OTHER
 }
 
@@ -746,13 +849,43 @@ enum RefundStatus {
   DENIED
 }
 
+enum RefundInitiator {
+  BUYER
+  SYSTEM
+}
+
+enum LedgerEntryType {
+  ORDER_CREDIT
+  PAYOUT_DEBIT
+}
+
+enum PayoutStatus {
+  PAYOUT_COMPLETED
+}
+
 enum PasabuyStatus {
   PENDING
   ACCEPTED
+  AWAITING_PAYMENT
   PAID
+  PICKUP_READY
+  PICKED_UP
   IN_PROGRESS
   DELIVERED
+  COMPLETED
   CANCELLED
+  EXPIRED
+  PAYMENT_EXPIRED
+  DISPUTED
+}
+
+enum PasabuyPaymentStatus {
+  NOT_CHARGED
+  AWAITING_PAYMENT
+  PAID
+  PAYMENT_FAILED
+  PAYMENT_EXPIRED
+  REFUNDED
 }
 
 enum ReportStatus {

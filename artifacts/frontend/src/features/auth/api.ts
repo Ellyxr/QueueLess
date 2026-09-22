@@ -30,7 +30,50 @@ export interface VendorProduct {
   category: string | null;
   preparationTimeMinutes: number;
   isAvailable: boolean;
+  imageUrl?: string | null;
+  imageFileId?: string | null;
   eligibleExtras?: EligibleExtra[];
+}
+
+export interface ImagekitAuthResponse {
+  token: string;
+  expire: number;
+  signature: string;
+}
+
+export function getImagekitAuth(): Promise<ImagekitAuthResponse> {
+  return fetchWithAuth("/imagekit/auth");
+}
+
+export interface ImagekitUploadResult {
+  url: string;
+  fileId: string;
+}
+
+export async function uploadProductImage(file: File): Promise<ImagekitUploadResult> {
+  const auth = await getImagekitAuth();
+
+  const form = new FormData();
+  form.append("file", file);
+  form.append("fileName", file.name);
+  form.append("publicKey", import.meta.env.VITE_IMAGEKIT_PUBLIC_KEY);
+  form.append("signature", auth.signature);
+  form.append("expire", String(auth.expire));
+  form.append("token", auth.token);
+  form.append("folder", "/products");
+
+  const response = await fetch("https://upload.imagekit.io/api/v1/files/upload", {
+    method: "POST",
+    body: form,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || "Image upload failed.");
+  }
+
+  const result = await response.json();
+  return { url: result.url, fileId: result.fileId };
 }
 
 export interface ProductInput {
@@ -41,6 +84,24 @@ export interface ProductInput {
   preparationTimeMinutes: number;
   isAvailable?: boolean;
   eligibleExtraIds?: string[];
+  imageUrl?: string;
+  imageFileId?: string;
+}
+
+export type Weekday = "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY" | "SATURDAY";
+
+export interface VendorPreorderDay {
+  dayOfWeek: Weekday;
+  isEnabled: boolean;
+  openTime: string | null;
+  closeTime: string | null;
+}
+
+export interface VendorAvailabilityDay {
+  dayOfWeek: Weekday;
+  isOpen: boolean;
+  openTime: string | null;
+  closeTime: string | null;
 }
 
 export interface VendorStorefront {
@@ -54,6 +115,13 @@ export interface VendorStorefront {
   products?: VendorProduct[];
   favoritesCount?: number;
   isFavoritedByMe?: boolean;
+  preorderEnabled?: boolean;
+  preorderSameAsStoreHours?: boolean;
+  preorderAvailability?: VendorPreorderDay[];
+  availabilityDays?: VendorAvailabilityDay[];
+  /** Only present on the buyer-facing storefront response, not the vendor's own settings fetch. */
+  isOpenNow?: boolean;
+  nextAvailableLabel?: string | null;
 }
 
 export interface VendorSummary {
@@ -75,6 +143,8 @@ export interface VendorDashboard {
   todaySales: string;
   averageTicket: string;
   pendingOrders: number;
+  ledgerBalance: string;
+  weekSales: Array<{ day: string; amount: string }>;
   recentOrders: Array<{
     id: string;
     customer: string;
@@ -139,8 +209,11 @@ export interface CustomerOrder {
   status: string;
   total: string;
   createdAt: string;
+  paidAt: string | null;
+  buyerContactPingAt: string | null;
   vendor: { id: string; name: string };
   items: Array<{ productId: string; name: string; quantity: number }>;
+  refund: OrderRefundSummary | null;
 }
 
 export interface UpdateProfileInput {
@@ -308,11 +381,211 @@ export function getVendorDashboard(): Promise<VendorDashboard> {
   return fetchWithAuth("/orders/vendor/dashboard");
 }
 
+export interface PayoutResponse {
+  id: string;
+  amount: string;
+  status: string;
+}
+
+export function payoutVendorBalance(idempotencyKey: string): Promise<PayoutResponse> {
+  return fetchWithAuth("/vendors/mine/payout", {
+    method: "POST",
+    headers: {
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({}),
+  });
+}
+
+export type RefundCategory =
+  | "VENDOR_NOT_ACCEPTED"
+  | "VENDOR_UNRESPONSIVE"
+  | "WRONG_ITEM"
+  | "MISSING_ITEM"
+  | "QUALITY_ISSUE"
+  | "INCORRECTLY_COMPLETED"
+  | "DISAGREEMENT"
+  | "OUTSIDE_WINDOW"
+  | "OTHER";
+
+export interface OrderRefundSummary {
+  status: "REQUESTED" | "APPROVED" | "PROCESSED" | "DENIED";
+  category: string | null;
+}
+
+export interface RequestRefundInput {
+  category: RefundCategory;
+  description?: string;
+  orderItemId?: string;
+}
+
+export interface RequestRefundResponse {
+  outcome: "AUTO_REFUNDED" | "PENDING_REVIEW";
+  refund?: { id: string; amount: string; status: string; category: string | null };
+  refunds?: Array<{ id: string; amount: string; status: string; category: string | null }>;
+}
+
+export function contactVendor(orderId: string): Promise<{ message: string }> {
+  return fetchWithAuth(`/orders/${orderId}/contact-vendor`, {
+    method: "POST",
+  });
+}
+
+export function requestOrderRefund(
+  orderId: string,
+  data: RequestRefundInput,
+): Promise<RequestRefundResponse> {
+  return fetchWithAuth(`/orders/${orderId}/refund-request`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export interface AdminRefundRow {
+  id: string;
+  orderId: string | null;
+  requesterName: string;
+  requesterEmail: string | null;
+  vendorName: string | null;
+  orderedAt: string | null;
+  isGroupOrder: boolean;
+  amount: number;
+  currency: string;
+  reason: string;
+  category: string | null;
+  initiatedBy: "BUYER" | "SYSTEM";
+  status: "REQUESTED" | "APPROVED" | "PROCESSED" | "DENIED";
+  createdAt: string;
+  processedAt: string | null;
+  providerRefundId: string | null;
+}
+
+export function listAdminRefunds(status?: string): Promise<AdminRefundRow[]> {
+  const query = status && status !== "ALL" ? `?status=${status}` : "";
+  return fetchWithAuth(`/refunds${query}`);
+}
+
+export type AdminUserRole = "student" | "vendor" | "admin";
+
+export interface AdminUserRow {
+  id: string;
+  fullName: string;
+  email: string | null;
+  roles: AdminUserRole[];
+  isActive: boolean;
+  isArchived: boolean;
+  /** Whether this user has granted the admin permission to view/change their email & password. */
+  dataAccessGranted: boolean;
+  createdAt: string;
+}
+
+export function listAdminUsers(search?: string, role?: AdminUserRole): Promise<AdminUserRow[]> {
+  const params = new URLSearchParams();
+  if (search) params.set("search", search);
+  if (role) params.set("role", role);
+  const query = params.toString();
+  return fetchWithAuth(`/admin/users${query ? `?${query}` : ""}`);
+}
+
+export function createAdminUser(data: {
+  fullName: string;
+  email: string;
+  password: string;
+  role: AdminUserRole;
+}): Promise<AdminUserRow> {
+  return fetchWithAuth(`/admin/users`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateAdminUserRoles(
+  userId: string,
+  roles: AdminUserRole[],
+): Promise<AdminUserRow> {
+  return fetchWithAuth(`/admin/users/${userId}/roles`, {
+    method: "PATCH",
+    body: JSON.stringify({ roles }),
+  });
+}
+
+export function updateAdminUserStatus(
+  userId: string,
+  data: { isActive?: boolean; isArchived?: boolean },
+): Promise<AdminUserRow> {
+  return fetchWithAuth(`/admin/users/${userId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateAdminUserEmail(userId: string, email: string): Promise<AdminUserRow> {
+  return fetchWithAuth(`/admin/users/${userId}/email`, {
+    method: "PATCH",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function updateAdminUserPassword(
+  userId: string,
+  password: string,
+): Promise<{ message: string }> {
+  return fetchWithAuth(`/admin/users/${userId}/password`, {
+    method: "PATCH",
+    body: JSON.stringify({ password }),
+  });
+}
+
+export function updateAdminRefundStatus(
+  refundId: string,
+  status: "APPROVED" | "DENIED" | "PROCESSED",
+): Promise<AdminRefundRow> {
+  return fetchWithAuth(`/refunds/${refundId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
 export function updateVendorStorefront(
   vendorId: string,
   data: UpdateVendorInput,
 ): Promise<VendorStorefront> {
   return fetchWithAuth(`/vendors/${vendorId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export interface UpdateVendorPreorderAvailabilityInput {
+  preorderEnabled: boolean;
+  sameAsStoreHours: boolean;
+  days?: VendorPreorderDay[];
+}
+
+export function updateVendorPreorderAvailability(
+  vendorId: string,
+  data: UpdateVendorPreorderAvailabilityInput,
+): Promise<{
+  id: string;
+  preorderEnabled: boolean;
+  preorderSameAsStoreHours: boolean;
+  preorderAvailability: VendorPreorderDay[];
+}> {
+  return fetchWithAuth(`/vendors/${vendorId}/preorder-availability`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export interface UpdateVendorAvailabilityInput {
+  days: VendorAvailabilityDay[];
+}
+
+export function updateVendorAvailability(
+  vendorId: string,
+  data: UpdateVendorAvailabilityInput,
+): Promise<{ id: string; availability: VendorAvailabilityDay[] }> {
+  return fetchWithAuth(`/vendors/${vendorId}/availability`, {
     method: "PATCH",
     body: JSON.stringify(data),
   });
@@ -345,6 +618,10 @@ export interface OrderStatusResponse {
   estimatedReadyAt: string | null;
   estimatedWaitMinutes: number | null;
   updatedAt: string;
+  paidAt: string | null;
+  buyerContactPingAt: string | null;
+  refund: OrderRefundSummary | null;
+  myPaymentShare: { id: string; amountDue: string; status: "PENDING" | "PAID" } | null;
   vendor: { id: string; name: string; campusLocation: string | null };
   items: Array<{ id: string; name: string; quantity: number }>;
   history: Array<{ status: string; note: string | null; changedAt: string }>;
@@ -411,6 +688,9 @@ export interface CreatePaymentCheckoutResponse {
 export function createPaymentCheckout(paymentShareId: string): Promise<CreatePaymentCheckoutResponse> {
   return fetchWithAuth("/payments/checkout", {
     method: "POST",
+    headers: {
+      "Idempotency-Key": crypto.randomUUID(),
+    },
     body: JSON.stringify({ paymentShareId }),
   });
 }
@@ -563,6 +843,15 @@ export function addGroupOrderItem(
   });
 }
 
+export function removeGroupOrderItem(
+  groupOrderId: string,
+  itemId: string,
+): Promise<AddGroupOrderItemResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/items/${itemId}`, {
+    method: "DELETE",
+  });
+}
+
 export function finalizeGroupOrder(
   groupOrderId: string,
 ): Promise<FinalizeGroupOrderResponse> {
@@ -581,6 +870,10 @@ export function setGroupOrderPaymentSplit(
 
 export function pingGroupOrder(groupOrderId: string): Promise<{ message: string }> {
   return fetchWithAuth(`/group-orders/${groupOrderId}/ping`, { method: "POST" });
+}
+
+export function cancelGroupOrder(groupOrderId: string): Promise<GroupOrderResponse> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}`, { method: "DELETE" });
 }
 
 // Notifications

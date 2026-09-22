@@ -5,6 +5,7 @@ import {
   CreditCard,
   Eye,
   EyeOff,
+  LifeBuoy,
   LogOut,
   MoonStar,
   PencilLine,
@@ -37,6 +38,11 @@ import {
   type CustomerOrder,
   type VendorSummary,
 } from "@/features/auth/api";
+import { RefundRequestDialog } from "@/features/refunds/refund-request-dialog";
+import { PasabuyOrderEntry } from "@/features/pasabuy/pasabuy-order-entry";
+import { PasabuyStudentIdCard } from "@/features/pasabuy/pasabuy-student-id-card";
+
+const REFUND_HIDDEN_STATUSES = new Set(["PENDING", "CANCELLED"]);
 import { useRequireAuth } from "@/hooks/use-require-auth";
 import { PaymentMethodForm } from "@/features/payments/payment-method-form";
 import {
@@ -90,6 +96,7 @@ export default function ProfilePage() {
     phone: "",
   });
   const [orders, setOrders] = useState<CustomerOrder[]>([]);
+  const [refundDialogOrderId, setRefundDialogOrderId] = useState<string | null>(null);
   const [favoriteVendors, setFavoriteVendors] = useState<VendorSummary[]>([]);
   const [theme, setThemeState] = useState<Theme>(() =>
     localStorage.getItem("theme") === "dark" ? "dark" : "light",
@@ -550,6 +557,8 @@ export default function ProfilePage() {
             </CardContent>
           </Card>
 
+          <PasabuyStudentIdCard />
+
           <Card className="border-card-border/80 bg-card/90 shadow-sm">
             <CardHeader>
               <CardTitle className="text-2xl tracking-tighter">
@@ -662,16 +671,63 @@ export default function ProfilePage() {
                           {order.vendor.name}
                         </p>
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm font-medium">₱{order.total}</p>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {new Date(order.createdAt).toLocaleDateString()}
-                        </p>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <p className="text-sm font-medium">₱{order.total}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {new Date(order.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <PasabuyOrderEntry
+                          orderStatus={order.status}
+                          order={{
+                            orderId: order.id,
+                            reference: order.id.slice(0, 8).toUpperCase(),
+                            items: order.items.map((item) => `${item.name} x${item.quantity}`).join(", "),
+                            vendorName: order.vendor.name,
+                            pickupLocation: order.vendor.name,
+                          }}
+                        />
+                        {!REFUND_HIDDEN_STATUSES.has(order.status) && !order.refund && (
+                          <button
+                            type="button"
+                            onClick={() => setRefundDialogOrderId(order.id)}
+                            aria-label="Need help with this order?"
+                            className="rounded-full p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                          >
+                            <LifeBuoy className="h-4 w-4" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
               )}
+
+              {refundDialogOrderId &&
+                (() => {
+                  const activeOrder = orders.find((order) => order.id === refundDialogOrderId);
+                  if (!activeOrder) return null;
+                  return (
+                    <RefundRequestDialog
+                      open
+                      onOpenChange={(open) => {
+                        if (!open) setRefundDialogOrderId(null);
+                      }}
+                      orderId={activeOrder.id}
+                      order={{
+                        status: activeOrder.status,
+                        paidAt: activeOrder.paidAt,
+                        buyerContactPingAt: activeOrder.buyerContactPingAt,
+                      }}
+                      onSuccess={(text) => {
+                        setMessage({ text });
+                        setRefundDialogOrderId(null);
+                        getMyOrders().then(setOrders).catch(() => {});
+                      }}
+                    />
+                  );
+                })()}
             </CardContent>
           </Card>
         </section>
@@ -766,7 +822,7 @@ export default function ProfilePage() {
                 Payment method
               </CardTitle>
               <CardDescription>
-                Optional — save a payment method here for your own reference. You'll still
+                Optional — save a payment method here for your own reference only. You'll still
                 choose how to pay on PayMongo's checkout page when you order.
               </CardDescription>
             </CardHeader>

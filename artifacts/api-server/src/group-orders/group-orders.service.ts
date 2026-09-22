@@ -520,6 +520,151 @@ export class GroupOrdersService {
     });
   }
 
+  async removeGroupOrderItem(
+    userId: string,
+    groupOrderId: string,
+    itemId: string,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const groupOrder = await tx.groupOrder.findUnique({
+        where: {
+          id: groupOrderId,
+        },
+        include: {
+          participants: {
+            where: {
+              userId,
+            },
+          },
+        },
+      });
+
+      if (!groupOrder) {
+        throw new NotFoundException('Group order not found');
+      }
+
+      if (groupOrder.status !== 'OPEN') {
+        throw new BadRequestException(
+          'Items can only be removed while the group order is open',
+        );
+      }
+
+      const participant = groupOrder.participants.find(
+        (item) => item.status === 'JOINED',
+      );
+
+      if (!participant) {
+        throw new ForbiddenException(
+          'You must join the group order before removing items',
+        );
+      }
+
+      const deleted = await tx.cartItem.deleteMany({
+        where: {
+          id: itemId,
+          cart: {
+            groupOrderId,
+            userId,
+          },
+        },
+      });
+
+      if (deleted.count === 0) {
+        throw new NotFoundException('Item not found in your cart');
+      }
+
+      const cart = await tx.cart.findFirstOrThrow({
+        where: {
+          groupOrderId,
+          userId,
+        },
+        include: {
+          items: {
+            include: {
+              product: true,
+            },
+          },
+        },
+      });
+
+      return {
+        groupOrderId,
+        cartId: cart.id,
+        items: cart.items.map((item) => ({
+          id: item.id,
+          productId: item.productId,
+          name: item.product.name,
+          quantity: item.quantity,
+          unitPrice: item.product.price.toFixed(2),
+          subtotal: item.product.price.mul(item.quantity).toFixed(2),
+        })),
+        total: cart.items
+          .reduce(
+            (sum, item) => sum + item.product.price.toNumber() * item.quantity,
+            0,
+          )
+          .toFixed(2),
+      };
+    });
+  }
+
+  async cancelGroupOrder(userId: string, groupOrderId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const groupOrder = await tx.groupOrder.findUnique({
+        where: {
+          id: groupOrderId,
+        },
+        select: {
+          id: true,
+          initiatorUserId: true,
+          status: true,
+        },
+      });
+
+      if (!groupOrder) {
+        throw new NotFoundException('Group order not found');
+      }
+
+      if (groupOrder.initiatorUserId !== userId) {
+        throw new ForbiddenException(
+          'Only the group order initiator can delete this group order',
+        );
+      }
+
+      if (groupOrder.status !== 'OPEN' && groupOrder.status !== 'LOCKED') {
+        throw new BadRequestException(
+          'Only an open or locked group order can be deleted',
+        );
+      }
+
+      const result = await tx.groupOrder.updateMany({
+        where: {
+          id: groupOrderId,
+          initiatorUserId: userId,
+          status: groupOrder.status,
+        },
+        data: {
+          status: 'CANCELLED',
+        },
+      });
+
+      if (result.count !== 1) {
+        throw new ConflictException(
+          'Group order could not be deleted because its status changed',
+        );
+      }
+
+      const updatedGroupOrder = await tx.groupOrder.findUniqueOrThrow({
+        where: {
+          id: groupOrderId,
+        },
+        include: groupOrderInclude,
+      });
+
+      return this.buildGroupOrderResponse(updatedGroupOrder);
+    });
+  }
+
   async pingOwner(userId: string, groupOrderId: string) {
     const groupOrder = await this.prisma.groupOrder.findUnique({
       where: { id: groupOrderId },

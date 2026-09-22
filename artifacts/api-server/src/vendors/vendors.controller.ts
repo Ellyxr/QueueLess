@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
@@ -15,6 +16,8 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { UpdateVendorDto } from './dto/update-vendor.dto';
+import { UpdateVendorPreorderAvailabilityDto } from './dto/update-vendor-preorder-availability.dto';
+import { UpdateVendorAvailabilityDto } from './dto/update-vendor-availability.dto';
 import { VendorsService } from './vendors.service';
 
 @ApiBearerAuth()
@@ -31,6 +34,22 @@ export class VendorsController {
   @Get('mine')
   async getMyVendor(@Req() request: { user: JwtPayload }) {
     return this.vendorsService.getVendorForOwner(request.user.sub);
+  }
+
+  @Get('mine/ledger')
+  async getMyLedgerBalance(@Req() request: { user: JwtPayload }) {
+    return this.vendorsService.getVendorLedgerBalance(request.user.sub);
+  }
+
+  @Post('mine/payout')
+  async payoutMyBalance(
+    @Req() request: { user: JwtPayload },
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ) {
+    return this.vendorsService.payoutVendorBalance(
+      request.user.sub,
+      idempotencyKey,
+    );
   }
 
   @Get('favorites/mine')
@@ -74,6 +93,38 @@ export class VendorsController {
     @Req() request: { user: JwtPayload },
   ) {
     return this.vendorsService.updateVendorStorefront(
+      request.user.sub,
+      vendorId,
+      dto,
+      request.user.roles,
+    );
+  }
+
+  @Patch(':vendorId/preorder-availability')
+  @UseGuards(RolesGuard)
+  @Roles('VENDOR_OWNER', 'ADMIN')
+  async updatePreorderAvailability(
+    @Param('vendorId') vendorId: string,
+    @Body() dto: UpdateVendorPreorderAvailabilityDto,
+    @Req() request: { user: JwtPayload },
+  ) {
+    return this.vendorsService.updatePreorderAvailability(
+      request.user.sub,
+      vendorId,
+      dto,
+      request.user.roles,
+    );
+  }
+
+  @Patch(':vendorId/availability')
+  @UseGuards(RolesGuard)
+  @Roles('VENDOR_OWNER', 'ADMIN')
+  async updateAvailability(
+    @Param('vendorId') vendorId: string,
+    @Body() dto: UpdateVendorAvailabilityDto,
+    @Req() request: { user: JwtPayload },
+  ) {
+    return this.vendorsService.updateAvailability(
       request.user.sub,
       vendorId,
       dto,

@@ -5,8 +5,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  CancellationReason,
+  OrderStatus,
   PaymentStatus,
   Prisma,
+  RefundInitiator,
   RefundStatus,
 } from '@prisma/client';
 import { PaymongoService } from '../payments/paymongo.service';
@@ -16,6 +19,18 @@ import {
   RefundStatusQueryDto,
   UpdateRefundStatusDto,
 } from './dto/refund.dto';
+import {
+  AUTO_REFUND_CATEGORIES,
+  RequestOrderRefundDto,
+} from './dto/request-order-refund.dto';
+
+const FIVE_MINUTES_MS = 5 * 60 * 1000;
+const TWO_MINUTES_MS = 2 * 60 * 1000;
+const REFUNDABLE_STATUSES: RefundStatus[] = [
+  RefundStatus.REQUESTED,
+  RefundStatus.APPROVED,
+  RefundStatus.PROCESSED,
+];
 
 @Injectable()
 export class RefundsService {
@@ -105,104 +120,19 @@ export class RefundsService {
       }
     }
 
-    const countedRefundStatuses = [
-      RefundStatus.REQUESTED,
-      RefundStatus.APPROVED,
-      RefundStatus.PROCESSED,
-    ];
-
     const requestedAmount = new Prisma.Decimal(
       dto.amount,
     );
 
-    /*
-     * PAYMENT-LEVEL LIMIT
-     *
-     * Every REQUESTED, APPROVED, or PROCESSED refund
-     * associated with this payment counts against the
-     * payment's refundable balance.
-     *
-     * DENIED refunds do not count.
-     */
-    const paymentRefundAggregate =
-      await this.prisma.refund.aggregate({
-        where: {
-          paymentId: payment.id,
-          status: {
-            in: countedRefundStatuses,
-          },
-        },
-        _sum: {
-          amount: true,
-        },
-      });
-
-    const paymentAlreadyRefunded =
-      paymentRefundAggregate._sum.amount ??
-      new Prisma.Decimal(0);
-
-    const paymentRemaining = payment.amount.minus(
-      paymentAlreadyRefunded,
+    const remaining = await this.resolveRefundableAmount(
+      payment,
+      orderItem,
     );
 
-    if (paymentRemaining.lessThanOrEqualTo(0)) {
-      throw new ConflictException(
-        'Payment has no remaining refundable amount',
-      );
-    }
-
-    if (
-      requestedAmount.greaterThan(paymentRemaining)
-    ) {
+    if (requestedAmount.greaterThan(remaining)) {
       throw new BadRequestException(
-        `Refund amount exceeds the remaining refundable amount of ${paymentRemaining.toFixed(2)}`,
+        `Refund amount exceeds the remaining refundable amount of ${remaining.toFixed(2)}`,
       );
-    }
-
-    /*
-     * ITEM-LEVEL LIMIT
-     *
-     * When the refund targets a specific OrderItem,
-     * enforce its line subtotal in addition to the
-     * payment-level limit above.
-     */
-    if (orderItem) {
-      const itemRefundAggregate =
-        await this.prisma.refund.aggregate({
-          where: {
-            paymentId: payment.id,
-            orderItemId: orderItem.id,
-            status: {
-              in: countedRefundStatuses,
-            },
-          },
-          _sum: {
-            amount: true,
-          },
-        });
-
-      const itemAlreadyRefunded =
-        itemRefundAggregate._sum.amount ??
-        new Prisma.Decimal(0);
-
-      const itemRemaining =
-        orderItem.lineSubtotal.minus(
-          itemAlreadyRefunded,
-        );
-
-      if (itemRemaining.lessThanOrEqualTo(0)) {
-        throw new ConflictException(
-          'Order item has no remaining refundable amount',
-        );
-      }
-
-      if (
-        requestedAmount.greaterThan(itemRemaining)
-      ) {
-        throw new BadRequestException(
-          `Refund amount exceeds the remaining refundable amount for this order item of ${itemRemaining.toFixed(2)}`,
-        );
-      }
     }
 
     const reason = dto.reason?.trim() || null;
@@ -211,10 +141,12 @@ export class RefundsService {
       await this.prisma.refund.create({
         data: {
           paymentId: payment.id,
+          orderId,
           orderItemId: orderItem?.id ?? null,
           amount: requestedAmount,
           reason,
           status: RefundStatus.REQUESTED,
+          initiatedBy: RefundInitiator.BUYER,
           requestedByUserId: userId,
         },
         select: {
@@ -253,7 +185,9 @@ export class RefundsService {
           id: true,
           amount: true,
           reason: true,
+          category: true,
           status: true,
+          initiatedBy: true,
           createdAt: true,
           processedAt: true,
           providerRefundId: true,
@@ -272,6 +206,8 @@ export class RefundsService {
                   orderId: true,
                   order: {
                     select: {
+                      createdAt: true,
+                      groupOrderId: true,
                       vendor: {
                         select: {
                           businessName: true,
@@ -304,11 +240,17 @@ export class RefundsService {
         vendorName:
           paymentShare?.order.vendor
             .businessName ?? null,
+        orderedAt:
+          paymentShare?.order.createdAt ?? null,
+        isGroupOrder:
+          paymentShare?.order.groupOrderId != null,
         amount: Number(
           refund.amount.toFixed(2),
         ),
         currency: refund.payment.currency,
         reason: refund.reason ?? '',
+        category: refund.category,
+        initiatedBy: refund.initiatedBy,
         status: refund.status,
         createdAt: refund.createdAt,
         processedAt: refund.processedAt,
@@ -323,21 +265,18 @@ export class RefundsService {
     dto: UpdateRefundStatusDto,
     actorUserId: string,
   ) {
-    const refund =
-      await this.prisma.refund.findUnique({
-        where: {
-          id: refundId,
-        },
-        select: {
-          id: true,
-          status: true,
-        },
-      });
+    const refund = await this.prisma.refund.findUnique({
+      where: { id: refundId },
+      select: {
+        id: true,
+        paymentId: true,
+        amount: true,
+        status: true,
+      },
+    });
 
     if (!refund) {
-      throw new NotFoundException(
-        'Refund request not found',
-      );
+      throw new NotFoundException('Refund request not found');
     }
 
     if (dto.status === RefundStatus.PROCESSED) {
@@ -359,85 +298,67 @@ export class RefundsService {
       DENIED: [],
     };
 
-    /*
-    * Manual status transitions:
-    *
-    * REQUESTED -> APPROVED or DENIED
-    *
-    * APPROVED -> PROCESSED is handled exclusively
-    * by processRefund() after PayMongo confirms the refund.
-    */
     if (
-      !allowedTransitions[refund.status].includes(
-        dto.status,
-      )
+      !allowedTransitions[refund.status].includes(dto.status)
     ) {
       throw new ConflictException(
         `Refund cannot transition from ${refund.status} to ${dto.status}`,
       );
     }
 
+    const updatedRefund = await this.prisma.$transaction(
+      async (tx) => {
+        const updated = await tx.refund.update({
+          where: { id: refund.id },
+          data: { status: dto.status },
+          select: {
+            id: true,
+            paymentId: true,
+            orderItemId: true,
+            amount: true,
+            reason: true,
+            status: true,
+            providerRefundId: true,
+            processedAt: true,
+            createdAt: true,
+          },
+        });
 
-    const updatedRefund =
-      await this.prisma.$transaction(
-        async (tx) => {
-          const updated =
-            await tx.refund.update({
-              where: {
-                id: refund.id,
-              },
-              data: {
-                status: dto.status,
-              },
-              select: {
-                id: true,
-                paymentId: true,
-                orderItemId: true,
-                amount: true,
-                reason: true,
-                status: true,
-                providerRefundId: true,
-                processedAt: true,
-                createdAt: true,
-              },
-            });
-
-          await tx.auditRecord.create({
-            data: {
-              actorUserId,
-              actionType:
-                'REFUND_STATUS_UPDATED',
-              entityType: 'Refund',
-              entityId: refund.id,
-              beforeState: {
-                status: refund.status,
-              },
-              afterState: {
-                status: updated.status,
-              },
+        await tx.auditRecord.create({
+          data: {
+            actorUserId,
+            actionType: 'REFUND_STATUS_UPDATED',
+            entityType: 'Refund',
+            entityId: refund.id,
+            beforeState: {
+              status: refund.status,
             },
-          });
+            afterState: {
+              status: updated.status,
+            },
+          },
+        });
 
-          return updated;
-        },
-      );
+        return updated;
+      },
+    );
 
     return {
       ...updatedRefund,
-      amount:
-        updatedRefund.amount.toFixed(2),
+      amount: updatedRefund.amount.toFixed(2),
     };
   }
 
   async processRefund(
     refundId: string,
-    actorUserId: string,
+    actorUserId: string | null,
   ) {
     const refund = await this.prisma.refund.findUnique({
       where: { id: refundId },
       select: {
         id: true,
         paymentId: true,
+        orderItemId: true,
         amount: true,
         reason: true,
         status: true,
@@ -504,9 +425,10 @@ export class RefundsService {
     );
 
     const providerRefund = await this.paymongoService.createRefund({
-      paymentId: refund.payment.providerPaymentResourceId,
+      paymentResourceId: refund.payment.providerPaymentResourceId,
       amount: amountInCentavos,
-      reason: refund.reason ?? undefined,
+      reason: 'others',
+      notes: refund.reason ?? undefined,
     });
 
     const providerStatus = providerRefund.status.toLowerCase();
@@ -605,4 +527,358 @@ export class RefundsService {
     };
   }
 
+  /**
+   * Buyer-facing entry point from an order. Auto-eligible categories
+   * (vendor timeout rules) are validated and, if valid, refunded and the
+   * order cancelled immediately with no admin involved. Anything else
+   * becomes a REQUESTED refund for admin review.
+   */
+  async requestOrderRefund(
+    userId: string,
+    orderId: string,
+    dto: RequestOrderRefundDto,
+  ) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        customerId: true,
+        status: true,
+        paidAt: true,
+        buyerContactPingAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!order || order.customerId !== userId) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const isAutoCategory = (
+      AUTO_REFUND_CATEGORIES as readonly string[]
+    ).includes(dto.category);
+
+    if (!isAutoCategory) {
+      const refund = await this.createDisputeRefund(userId, orderId, dto);
+      return { outcome: 'PENDING_REVIEW' as const, refund };
+    }
+
+    this.assertAutoEligibility(order, dto.category);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: OrderStatus.CANCELLED,
+          cancellationReason: CancellationReason.AUTO_REFUND_TIMEOUT,
+        },
+      });
+
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId,
+          status: OrderStatus.CANCELLED,
+          changedByUserId: null,
+          note: `Auto-cancelled: ${dto.category}`,
+        },
+      });
+    });
+
+    const refunds = await this.autoRefundOrderPayments(
+      orderId,
+      dto.category,
+      dto.description?.trim() || null,
+    );
+
+    return { outcome: 'AUTO_REFUNDED' as const, refunds };
+  }
+
+  private assertAutoEligibility(
+    order: {
+      status: string;
+      paidAt: Date | null;
+      buyerContactPingAt: Date | null;
+      updatedAt: Date;
+    },
+    category: string,
+  ): void {
+    const now = Date.now();
+
+    if (category === 'VENDOR_NOT_ACCEPTED') {
+      if (order.status !== OrderStatus.PAID) {
+        throw new BadRequestException(
+          'This order is not currently waiting on the vendor to accept it.',
+        );
+      }
+
+      if (!order.paidAt) {
+        throw new BadRequestException(
+          'This order has no payment confirmation yet.',
+        );
+      }
+
+      const remainingMs =
+        FIVE_MINUTES_MS - (now - order.paidAt.getTime());
+
+      if (remainingMs > 0) {
+        throw new BadRequestException(
+          `You can request this refund once the vendor has had 5 minutes to accept your order (about ${Math.ceil(remainingMs / 1000)}s left).`,
+        );
+      }
+
+      return;
+    }
+
+    // VENDOR_UNRESPONSIVE
+    if (
+      order.status === OrderStatus.COMPLETED ||
+      order.status === OrderStatus.CANCELLED
+    ) {
+      throw new BadRequestException(
+        'This order has already been resolved.',
+      );
+    }
+
+    if (!order.buyerContactPingAt) {
+      throw new BadRequestException(
+        'Please contact the vendor first before requesting this refund.',
+      );
+    }
+
+    if (order.updatedAt > order.buyerContactPingAt) {
+      throw new BadRequestException(
+        'The order has progressed since you contacted the vendor — this refund is no longer applicable.',
+      );
+    }
+
+    const remainingMs =
+      TWO_MINUTES_MS - (now - order.buyerContactPingAt.getTime());
+
+    if (remainingMs > 0) {
+      throw new BadRequestException(
+        `Please give the vendor a bit more time to respond (about ${Math.ceil(remainingMs / 1000)}s left).`,
+      );
+    }
+  }
+
+  private async createDisputeRefund(
+    userId: string,
+    orderId: string,
+    dto: RequestOrderRefundDto,
+  ) {
+    const paymentShare = await this.prisma.paymentShare.findFirst({
+      where: { orderId, payerUserId: userId },
+      include: { payment: true },
+    });
+
+    if (
+      !paymentShare?.payment ||
+      paymentShare.payment.status !== PaymentStatus.SUCCEEDED
+    ) {
+      throw new BadRequestException(
+        'No successful payment was found for this order.',
+      );
+    }
+
+    const payment = paymentShare.payment;
+
+    let orderItem: { id: string; lineSubtotal: Prisma.Decimal } | null = null;
+
+    if (dto.orderItemId) {
+      orderItem = await this.prisma.orderItem.findFirst({
+        where: { id: dto.orderItemId, orderId, removedAt: null },
+        select: { id: true, lineSubtotal: true },
+      });
+
+      if (!orderItem) {
+        throw new BadRequestException(
+          'Order item not found on this order.',
+        );
+      }
+    }
+
+    const remaining = await this.resolveRefundableAmount(
+      payment,
+      orderItem,
+    );
+
+    const refund = await this.prisma.refund.create({
+      data: {
+        paymentId: payment.id,
+        orderId,
+        orderItemId: orderItem?.id ?? null,
+        amount: remaining,
+        reason: dto.description?.trim() || null,
+        category: dto.category,
+        status: RefundStatus.REQUESTED,
+        initiatedBy: RefundInitiator.BUYER,
+        requestedByUserId: userId,
+      },
+      select: {
+        id: true,
+        paymentId: true,
+        orderId: true,
+        orderItemId: true,
+        amount: true,
+        reason: true,
+        category: true,
+        status: true,
+        createdAt: true,
+      },
+    });
+
+    return {
+      ...refund,
+      amount: refund.amount.toFixed(2),
+      currency: payment.currency,
+    };
+  }
+
+  /**
+   * Refunds every SUCCEEDED payment linked to an order's payment shares.
+   * Used by vendor-cancel, the 5-min/2-min timeout rules, and their cron
+   * sweep. No-op per payment if nothing is left to refund.
+   */
+  async autoRefundOrderPayments(
+    orderId: string,
+    category: string,
+    note: string | null,
+  ) {
+    const shares = await this.prisma.paymentShare.findMany({
+      where: { orderId },
+      include: { payment: true },
+    });
+
+    const paymentIds = [
+      ...new Set(
+        shares
+          .filter(
+            (share) =>
+              share.payment &&
+              share.payment.status === PaymentStatus.SUCCEEDED,
+          )
+          .map((share) => share.payment!.id),
+      ),
+    ];
+
+    const refunds = [];
+
+    for (const paymentId of paymentIds) {
+      const refund = await this.autoRefundPayment(
+        paymentId,
+        category,
+        note,
+        orderId,
+      );
+
+      if (refund) {
+        refunds.push(refund);
+      }
+    }
+
+    return refunds;
+  }
+
+  /**
+   * Single-payment automatic refund, used by the order-level sweep above
+   * and directly by the payment webhook for anomalies with no valid order
+   * (orphaned/duplicate payments).
+   */
+  async autoRefundPayment(
+    paymentId: string,
+    category: string,
+    note: string | null,
+    orderId: string | null = null,
+  ) {
+    const payment = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      select: {
+        id: true,
+        amount: true,
+        payerUserId: true,
+        status: true,
+      },
+    });
+
+    if (!payment || payment.status !== PaymentStatus.SUCCEEDED) {
+      return null;
+    }
+
+    let remaining: Prisma.Decimal;
+
+    try {
+      remaining = await this.resolveRefundableAmount(payment, null);
+    } catch {
+      return null;
+    }
+
+    const refund = await this.prisma.refund.create({
+      data: {
+        paymentId: payment.id,
+        orderId,
+        amount: remaining,
+        reason: note,
+        category,
+        status: RefundStatus.APPROVED,
+        initiatedBy: RefundInitiator.SYSTEM,
+        requestedByUserId: payment.payerUserId,
+      },
+      select: {
+        id: true,
+        paymentId: true,
+        amount: true,
+        status: true,
+      },
+    });
+
+    return this.processRefund(refund.id, null);
+  }
+
+  private async resolveRefundableAmount(
+    payment: { id: string; amount: Prisma.Decimal },
+    orderItem: { id: string; lineSubtotal: Prisma.Decimal } | null,
+  ): Promise<Prisma.Decimal> {
+    const paymentAgg = await this.prisma.refund.aggregate({
+      where: {
+        paymentId: payment.id,
+        status: { in: REFUNDABLE_STATUSES },
+      },
+      _sum: { amount: true },
+    });
+
+    const paymentRemaining = payment.amount.minus(
+      paymentAgg._sum.amount ?? new Prisma.Decimal(0),
+    );
+
+    if (paymentRemaining.lessThanOrEqualTo(0)) {
+      throw new ConflictException(
+        'Payment has no remaining refundable amount',
+      );
+    }
+
+    if (!orderItem) {
+      return paymentRemaining;
+    }
+
+    const itemAgg = await this.prisma.refund.aggregate({
+      where: {
+        paymentId: payment.id,
+        orderItemId: orderItem.id,
+        status: { in: REFUNDABLE_STATUSES },
+      },
+      _sum: { amount: true },
+    });
+
+    const itemRemaining = orderItem.lineSubtotal.minus(
+      itemAgg._sum.amount ?? new Prisma.Decimal(0),
+    );
+
+    if (itemRemaining.lessThanOrEqualTo(0)) {
+      throw new ConflictException(
+        'Order item has no remaining refundable amount',
+      );
+    }
+
+    return Prisma.Decimal.min(paymentRemaining, itemRemaining);
+  }
 }

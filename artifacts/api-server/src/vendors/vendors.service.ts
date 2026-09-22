@@ -1,12 +1,31 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { VendorStatus } from '@prisma/client';
+import { LedgerEntryType, Prisma, VendorStatus } from '@prisma/client';
 import type { UserRole } from '../auth/roles';
 import { UpdateVendorDto } from './dto/update-vendor.dto';
+import { UpdateVendorPreorderAvailabilityDto } from './dto/update-vendor-preorder-availability.dto';
+import { UpdateVendorAvailabilityDto } from './dto/update-vendor-availability.dto';
+import { computeAvailabilityStatus, validateDaySchedule } from './availability.util';
+
+const PREORDER_AVAILABILITY_SELECT = {
+  dayOfWeek: true,
+  isEnabled: true,
+  openTime: true,
+  closeTime: true,
+} satisfies Prisma.VendorPreorderAvailabilitySelect;
+
+const AVAILABILITY_SELECT = {
+  dayOfWeek: true,
+  isOpen: true,
+  openTime: true,
+  closeTime: true,
+} satisfies Prisma.VendorAvailabilitySelect;
 
 @Injectable()
 export class VendorsService {
@@ -37,6 +56,8 @@ export class VendorsService {
             category: true,
             preparationTimeMinutes: true,
             isAvailable: true,
+            imageUrl: true,
+            imageFileId: true,
             eligibleExtras: {
               select: {
                 id: true,
@@ -71,6 +92,14 @@ export class VendorsService {
         categoryOrder: true,
         vendorType: true,
         status: true,
+        preorderEnabled: true,
+        preorderSameAsStoreHours: true,
+        availability: {
+          select: AVAILABILITY_SELECT,
+        },
+        preorderAvailability: {
+          select: PREORDER_AVAILABILITY_SELECT,
+        },
         products: {
           where: {},
           select: {
@@ -81,6 +110,8 @@ export class VendorsService {
             category: true,
             preparationTimeMinutes: true,
             isAvailable: true,
+            imageUrl: true,
+            imageFileId: true,
             eligibleExtras: {
               select: {
                 id: true,
@@ -108,12 +139,29 @@ export class VendorsService {
       throw new NotFoundException('Vendor not found');
     }
 
-    const { _count, favoritedBy, ...rest } = vendor;
+    const { _count, favoritedBy, availability, preorderAvailability, preorderSameAsStoreHours, ...rest } =
+      vendor;
+
+    const { isOpenNow, nextAvailableLabel } = computeAvailabilityStatus(availability);
+
+    const effectivePreorderDays = preorderSameAsStoreHours
+      ? availability.map((day) => ({
+          dayOfWeek: day.dayOfWeek,
+          isEnabled: day.isOpen,
+          openTime: day.openTime,
+          closeTime: day.closeTime,
+        }))
+      : preorderAvailability;
 
     return {
       ...rest,
       favoritesCount: _count.favoritedBy,
       isFavoritedByMe: favoritedBy.length > 0,
+      availabilityDays: availability,
+      isOpenNow,
+      nextAvailableLabel,
+      preorderSameAsStoreHours,
+      preorderAvailability: effectivePreorderDays,
     };
   }
 
@@ -189,6 +237,14 @@ export class VendorsService {
         categoryOrder: true,
         vendorType: true,
         status: true,
+        preorderEnabled: true,
+        preorderSameAsStoreHours: true,
+        preorderAvailability: {
+          select: PREORDER_AVAILABILITY_SELECT,
+        },
+        availability: {
+          select: AVAILABILITY_SELECT,
+        },
       },
     });
 
@@ -196,7 +252,12 @@ export class VendorsService {
       throw new NotFoundException('Vendor not found for this user');
     }
 
-    return vendor;
+    const { availability, ...rest } = vendor;
+
+    return {
+      ...rest,
+      availabilityDays: availability,
+    };
   }
 
   async updateVendorStorefront(
@@ -269,5 +330,264 @@ export class VendorsService {
         updatedAt: true,
       },
     });
+  }
+
+  async updatePreorderAvailability(
+    userId: string,
+    vendorId: string,
+    dto: UpdateVendorPreorderAvailabilityDto,
+    roles: UserRole[],
+  ) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: {
+        id: vendorId,
+      },
+      select: {
+        id: true,
+        ownerUserId: true,
+      },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found');
+    }
+
+    const isAdmin = roles.includes('ADMIN');
+    const isOwner = vendor.ownerUserId === userId;
+
+    if (!isAdmin && !isOwner) {
+      throw new ForbiddenException(
+        'You do not have permission to modify this vendor',
+      );
+    }
+
+    const days = dto.sameAsStoreHours ? [] : (dto.days ?? []);
+
+    if (!dto.sameAsStoreHours && (!dto.days || dto.days.length === 0)) {
+      throw new BadRequestException(
+        'days is required when sameAsStoreHours is false',
+      );
+    }
+
+    validateDaySchedule(days);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.vendor.update({
+        where: { id: vendorId },
+        data: {
+          preorderEnabled: dto.preorderEnabled,
+          preorderSameAsStoreHours: dto.sameAsStoreHours,
+        },
+      });
+
+      await tx.vendorPreorderAvailability.deleteMany({
+        where: { vendorId },
+      });
+
+      if (days.length > 0) {
+        await tx.vendorPreorderAvailability.createMany({
+          data: days.map((day) => ({
+            vendorId,
+            dayOfWeek: day.dayOfWeek,
+            isEnabled: day.isEnabled,
+            openTime: day.isEnabled ? day.openTime! : null,
+            closeTime: day.isEnabled ? day.closeTime! : null,
+          })),
+        });
+      }
+    });
+
+    return this.prisma.vendor.findUniqueOrThrow({
+      where: { id: vendorId },
+      select: {
+        id: true,
+        preorderEnabled: true,
+        preorderSameAsStoreHours: true,
+        preorderAvailability: {
+          select: PREORDER_AVAILABILITY_SELECT,
+        },
+      },
+    });
+  }
+
+  async updateAvailability(
+    userId: string,
+    vendorId: string,
+    dto: UpdateVendorAvailabilityDto,
+    roles: UserRole[],
+  ) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: {
+        id: vendorId,
+      },
+      select: {
+        id: true,
+        ownerUserId: true,
+      },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found');
+    }
+
+    const isAdmin = roles.includes('ADMIN');
+    const isOwner = vendor.ownerUserId === userId;
+
+    if (!isAdmin && !isOwner) {
+      throw new ForbiddenException(
+        'You do not have permission to modify this vendor',
+      );
+    }
+
+    validateDaySchedule(
+      dto.days.map((day) => ({
+        dayOfWeek: day.dayOfWeek,
+        isEnabled: day.isOpen,
+        openTime: day.openTime,
+        closeTime: day.closeTime,
+      })),
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.vendorAvailability.deleteMany({
+        where: { vendorId },
+      });
+
+      if (dto.days.length > 0) {
+        await tx.vendorAvailability.createMany({
+          data: dto.days.map((day) => ({
+            vendorId,
+            dayOfWeek: day.dayOfWeek,
+            isOpen: day.isOpen,
+            openTime: day.isOpen ? day.openTime! : null,
+            closeTime: day.isOpen ? day.closeTime! : null,
+          })),
+        });
+      }
+    });
+
+    return this.prisma.vendor.findUniqueOrThrow({
+      where: { id: vendorId },
+      select: {
+        id: true,
+        availability: {
+          select: AVAILABILITY_SELECT,
+        },
+      },
+    });
+  }
+
+  async getVendorLedgerBalance(ownerUserId: string) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { ownerUserId },
+      select: { id: true },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found for this user');
+    }
+
+    const balance = await this.sumLedgerBalance(vendor.id);
+
+    return { balance: balance.toFixed(2) };
+  }
+
+  async payoutVendorBalance(ownerUserId: string, idempotencyKey: string | undefined) {
+    const normalizedKey = idempotencyKey?.trim();
+
+    if (!normalizedKey) {
+      throw new BadRequestException('Idempotency-Key header is required');
+    }
+
+    if (normalizedKey.length > 255) {
+      throw new BadRequestException(
+        'Idempotency-Key must not exceed 255 characters',
+      );
+    }
+
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { ownerUserId },
+      select: { id: true },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found for this user');
+    }
+
+    const existing = await this.prisma.payout.findUnique({
+      where: { idempotencyKey: normalizedKey },
+    });
+
+    if (existing) {
+      if (existing.vendorId !== vendor.id) {
+        throw new ConflictException(
+          'Idempotency-Key has already been used for another vendor',
+        );
+      }
+
+      return { id: existing.id, amount: existing.amount.toFixed(2), status: existing.status };
+    }
+
+    try {
+      const payout = await this.prisma.$transaction(async (tx) => {
+        const balance = await this.sumLedgerBalance(vendor.id, tx);
+
+        if (balance.lessThanOrEqualTo(0)) {
+          throw new BadRequestException('No balance available to transfer out');
+        }
+
+        const created = await tx.payout.create({
+          data: {
+            vendorId: vendor.id,
+            amount: balance,
+            idempotencyKey: normalizedKey,
+          },
+        });
+
+        await tx.vendorLedgerEntry.create({
+          data: {
+            vendorId: vendor.id,
+            payoutId: created.id,
+            type: LedgerEntryType.PAYOUT_DEBIT,
+            amount: balance.negated(),
+          },
+        });
+
+        return created;
+      });
+
+      return { id: payout.id, amount: payout.amount.toFixed(2), status: payout.status };
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const replay = await this.prisma.payout.findUnique({
+          where: { idempotencyKey: normalizedKey },
+        });
+
+        if (replay) {
+          return { id: replay.id, amount: replay.amount.toFixed(2), status: replay.status };
+        }
+
+        throw new ConflictException(
+          'A payout request with this Idempotency-Key is already being processed',
+        );
+      }
+
+      throw error;
+    }
+  }
+
+  private async sumLedgerBalance(
+    vendorId: string,
+    client: PrismaService | Prisma.TransactionClient = this.prisma,
+  ) {
+    const result = await client.vendorLedgerEntry.aggregate({
+      where: { vendorId },
+      _sum: { amount: true },
+    });
+
+    return result._sum.amount ?? new Prisma.Decimal(0);
   }
 }

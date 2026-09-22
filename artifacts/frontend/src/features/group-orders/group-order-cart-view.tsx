@@ -1,11 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, Crown, Loader2, Users } from "lucide-react";
+import { Check, Copy, Crown, Loader2, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  cancelGroupOrder,
   finalizeGroupOrder,
   getGroupOrder,
   lockGroupOrder,
   pingGroupOrder,
+  removeGroupOrderItem,
   setGroupOrderPaymentSplit,
   type GroupOrderResponse,
 } from "@/features/auth/api";
@@ -13,10 +25,11 @@ import { startOrderTracking } from "@/features/orders/order-tracking";
 import {
   clearGroupOrderSession,
   setGroupOrderSession,
+  GROUP_ORDER_SESSION_CHANGED_EVENT,
   type GroupOrderSession,
 } from "@/features/group-orders/group-order-session";
 
-const POLL_INTERVAL_MS = 8000;
+const POLL_INTERVAL_MS = 3000;
 const currency = (amount: string | number) =>
   `₱${Number(amount).toLocaleString("en-PH", { minimumFractionDigits: 2 })}`;
 
@@ -34,7 +47,18 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
   const [splitMode, setSplitMode] = useState<SplitMode>("EQUAL");
   const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
   const [stage, setStage] = useState<Stage>("building");
+  const [removingItemId, setRemovingItemId] = useState<string | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false);
   const hasTrackedFinalOrder = useRef(false);
+
+  const currentUserId = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("user") ?? "{}").id ?? null;
+    } catch {
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,9 +92,11 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
 
     poll();
     const timer = window.setInterval(poll, POLL_INTERVAL_MS);
+    window.addEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, poll);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      window.removeEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, poll);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.groupOrderId]);
@@ -94,6 +120,36 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
       window.setTimeout(() => setCodeCopied(false), 1500);
     } catch {
       // clipboard unavailable — ignore
+    }
+  };
+
+  const handleRemoveItem = async (itemId: string) => {
+    if (removingItemId) return;
+    setRemovingItemId(itemId);
+    setActionError(null);
+    try {
+      await removeGroupOrderItem(session.groupOrderId, itemId);
+      const refreshed = await getGroupOrder(session.groupOrderId);
+      setGroupOrder(refreshed);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not remove that item.");
+    } finally {
+      setRemovingItemId(null);
+    }
+  };
+
+  const handleCancelGroupOrder = async () => {
+    if (isCancelling) return;
+    setIsCancelling(true);
+    setActionError(null);
+    try {
+      await cancelGroupOrder(session.groupOrderId);
+      clearGroupOrderSession();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not delete the group order.");
+    } finally {
+      setIsCancelling(false);
+      setIsCancelDialogOpen(false);
     }
   };
 
@@ -221,7 +277,23 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
         </div>
       )}
 
-      {stage === "placed" ? (
+      {groupOrder.status === "CANCELLED" ? (
+        <section className="rounded-3xl border border-destructive/30 bg-card p-8 text-center shadow-sm">
+          <h2 className="text-xl font-semibold">Group order deleted</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {session.isOwner
+              ? "You deleted this group order."
+              : `${groupOrder.initiator.fullName} deleted the group order.`}
+          </p>
+          <Button
+            variant="outline"
+            className="mt-4 rounded-full"
+            onClick={() => clearGroupOrderSession()}
+          >
+            Back to cart
+          </Button>
+        </section>
+      ) : stage === "placed" ? (
         <section className="rounded-3xl border border-emerald-500/30 bg-card p-8 text-center shadow-sm">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-white">
             <Check className="h-7 w-7" />
@@ -278,12 +350,17 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
       ) : (
         <>
           <section className="rounded-3xl border border-border/80 bg-card p-4 shadow-sm sm:p-5">
-            <div className="mb-4 flex items-center justify-between">
+            <div className="mb-1 flex items-center justify-between">
               <h2 className="flex items-center gap-2 font-semibold">
                 <Users className="h-4 w-4" /> Members ({groupOrder.participantCount})
               </h2>
               <span className="text-sm font-semibold">{currency(groupTotal)}</span>
             </div>
+            {splitMode === "EQUAL" && joinedParticipants.length > 1 && (
+              <p className="mb-3 text-xs text-muted-foreground">
+                Equal split: {currency(groupTotal / joinedParticipants.length)} each
+              </p>
+            )}
             <div className="divide-y divide-border/70">
               {joinedParticipants.map((participant) => (
                 <div key={participant.participantId} className="py-3 first:pt-0 last:pb-0">
@@ -297,11 +374,24 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
                   {participant.items.length > 0 ? (
                     <ul className="mt-1 space-y-0.5">
                       {participant.items.map((item) => (
-                        <li key={item.id} className="flex justify-between text-xs text-muted-foreground">
+                        <li key={item.id} className="flex items-center justify-between text-xs text-muted-foreground">
                           <span>
                             {item.name} x{item.quantity}
                           </span>
-                          <span>{currency(item.subtotal)}</span>
+                          <span className="flex items-center gap-2">
+                            {currency(item.subtotal)}
+                            {participant.user.id === currentUserId && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveItem(item.id)}
+                                disabled={removingItemId === item.id}
+                                aria-label={`Remove ${item.name}`}
+                                className="text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            )}
+                          </span>
                         </li>
                       ))}
                     </ul>
@@ -348,6 +438,14 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
               >
                 {isPlacing ? "Placing..." : "Place Group Order"}
               </Button>
+              <Button
+                variant="outline"
+                className="mt-2 w-full rounded-full text-destructive hover:text-destructive"
+                disabled={isPlacing || isCancelling}
+                onClick={() => setIsCancelDialogOpen(true)}
+              >
+                Delete group order
+              </Button>
             </section>
           ) : (
             <section className="mt-4 rounded-3xl border border-border/80 bg-card p-5 text-center shadow-sm">
@@ -367,6 +465,30 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
           )}
         </>
       )}
+
+      <AlertDialog open={isCancelDialogOpen} onOpenChange={setIsCancelDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this group order?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will end the group order for everyone. Members will no longer be able to add
+              items or check out with this group.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isCancelling}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isCancelling}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleCancelGroupOrder();
+              }}
+            >
+              {isCancelling ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </main>
   );
 }
