@@ -8,7 +8,12 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
@@ -62,6 +67,46 @@ export class RefundsController {
     return this.refundsService.updateRefundStatus(
       refundId,
       dto,
+      user.sub,
+    );
+  }
+
+  @Post(':id/process')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Process an approved refund through PayMongo',
+  })
+  @ApiResponse({
+    status: 201,
+    description:
+      'Approved refund submitted to PayMongo or completed successfully',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Administrator access required',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Refund request not found',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Refund is not eligible for processing or has already been submitted',
+  })
+  async processRefund(
+    @CurrentUser() user: { sub: string },
+    @Param('id') refundId: string,
+  ) {
+    return this.refundsService.processRefund(
+      refundId,
       user.sub,
     );
   }

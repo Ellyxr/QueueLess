@@ -25,12 +25,132 @@ interface PaymongoCheckoutSessionResponse {
   };
 }
 
+interface CreateRefundParams {
+  paymentId: string;
+  amount: number;
+  reason?: string;
+}
+
+interface PaymongoRefundResponse {
+  data: {
+    id: string;
+    type: string;
+    attributes: {
+      amount: number;
+      currency: string;
+      payment_id: string;
+      reason: string;
+      status: string;
+      created_at: number;
+      updated_at: number;
+    };
+  };
+}
 @Injectable()
 export class PaymongoService {
   private readonly baseUrl = 'https://api.paymongo.com/v2';
 
   constructor(private readonly configService: ConfigService) {}
+  async createRefund(
+    params: CreateRefundParams,
+  ): Promise<{
+    refundId: string;
+    status: string;
+  }> {
+    const secretKey =
+      this.configService.get<string>('PAYMONGO_SECRET_KEY');
 
+    if (!secretKey || !secretKey.startsWith('sk_test_')) {
+      throw new InternalServerErrorException(
+        'PayMongo Sandbox secret key is not configured',
+      );
+    }
+
+    if (
+      !params.paymentId ||
+      !params.paymentId.startsWith('pay_')
+    ) {
+      throw new BadGatewayException(
+        'A valid PayMongo payment resource ID is required',
+      );
+    }
+
+    if (
+      !Number.isInteger(params.amount) ||
+      params.amount < 100
+    ) {
+      throw new BadGatewayException(
+        'PayMongo refund amount must be at least PHP 1.00',
+      );
+    }
+
+    const authorization = Buffer.from(
+      `${secretKey}:`,
+    ).toString('base64');
+
+    try {
+      const response = await fetch(
+        'https://api.paymongo.com/v1/refunds',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${authorization}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            data: {
+              attributes: {
+                amount: params.amount,
+                payment_id: params.paymentId,
+                reason: 'others',
+                notes:
+                  params.reason?.trim().slice(0, 255) ||
+                  'QueueLess administrator refund',
+              },
+            },
+          }),
+        },
+      );
+
+      const responseBody = (await response.json()) as
+        | PaymongoRefundResponse
+        | {
+            errors?: Array<{
+              code?: string;
+              detail?: string;
+            }>;
+          };
+
+      if (!response.ok) {
+        const errorDetail =
+          'errors' in responseBody
+            ? responseBody.errors?.[0]?.detail
+            : undefined;
+
+        throw new BadGatewayException(
+          errorDetail
+            ? `PayMongo refund failed: ${errorDetail}`
+            : 'Unable to create PayMongo refund',
+        );
+      }
+
+      const refund =
+        responseBody as PaymongoRefundResponse;
+
+      return {
+        refundId: refund.data.id,
+        status: refund.data.attributes.status,
+      };
+    } catch (error) {
+      if (error instanceof BadGatewayException) {
+        throw error;
+      }
+
+      throw new BadGatewayException(
+        'Unable to connect to PayMongo refund service',
+      );
+    }
+  }
   async createCheckoutSession(
     params: CreateCheckoutSessionParams,
   ): Promise<{
