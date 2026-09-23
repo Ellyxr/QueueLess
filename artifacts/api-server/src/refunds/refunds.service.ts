@@ -23,6 +23,7 @@ import {
   AUTO_REFUND_CATEGORIES,
   RequestOrderRefundDto,
 } from './dto/request-order-refund.dto';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 const TWO_MINUTES_MS = 2 * 60 * 1000;
@@ -37,6 +38,7 @@ export class RefundsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly paymongoService: PaymongoService,
+    private readonly realtimeGateway: RealtimeGateway,
   ) {}
   async createRefund(
     userId: string,
@@ -565,12 +567,20 @@ export class RefundsService {
 
     this.assertAutoEligibility(order, dto.category);
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.order.update({
+   const cancelledOrder = await this.prisma.$transaction(
+    async (tx) => {
+      const updatedOrder = await tx.order.update({
         where: { id: orderId },
         data: {
           status: OrderStatus.CANCELLED,
-          cancellationReason: CancellationReason.AUTO_REFUND_TIMEOUT,
+          cancellationReason:
+            CancellationReason.AUTO_REFUND_TIMEOUT,
+        },
+        select: {
+          id: true,
+          customerId: true,
+          status: true,
+          updatedAt: true,
         },
       });
 
@@ -582,7 +592,19 @@ export class RefundsService {
           note: `Auto-cancelled: ${dto.category}`,
         },
       });
-    });
+
+      return updatedOrder;
+    },
+  );
+
+  await this.realtimeGateway.emitOrderStatusUpdated(
+    cancelledOrder.customerId,
+    {
+      orderId: cancelledOrder.id,
+      status: cancelledOrder.status,
+      updatedAt: cancelledOrder.updatedAt,
+    },
+  );
 
     const refunds = await this.autoRefundOrderPayments(
       orderId,
@@ -647,7 +669,7 @@ export class RefundsService {
 
     if (order.updatedAt > order.buyerContactPingAt) {
       throw new BadRequestException(
-        'The order has progressed since you contacted the vendor — this refund is no longer applicable.',
+        'The order has progressed since you contacted the vendor â€” this refund is no longer applicable.',
       );
     }
 

@@ -13,6 +13,7 @@ import { PricingService } from '../common/pricing/pricing.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { RefundsService } from '../refunds/refunds.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 const VENDOR_CONTACT_PING_COOLDOWN_MS = 2 * 60 * 1000;
 const VENDOR_ACCEPT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -25,6 +26,7 @@ export class OrdersService {
     private readonly refundsService: RefundsService,
     private readonly notificationsService: NotificationsService,
     private readonly pricingService: PricingService,
+    private readonly realtimeGateway: RealtimeGateway,
   ) {}
 
   async createOrder(
@@ -734,6 +736,7 @@ export class OrdersService {
     const note = dto.note?.trim() || null;
     const isCancelling = dto.status === OrderStatus.CANCELLED;
     let justCancelled = false;
+    let statusChanged = false;
 
     const updatedOrder = await this.prisma.$transaction(
       async (tx) => {
@@ -743,6 +746,7 @@ export class OrdersService {
           },
           select: {
             id: true,
+            customerId: true,
             vendorId: true,
             status: true,
             isPasabuyRequest: true,
@@ -790,6 +794,8 @@ export class OrdersService {
           order.status,
           dto.status,
         );
+
+        statusChanged = true;
 
         const updated = await tx.order.update({
           where: {
@@ -845,6 +851,17 @@ export class OrdersService {
         return updated;
       },
     );
+
+    if (statusChanged) {
+      await this.realtimeGateway.emitOrderStatusUpdated(
+        updatedOrder.customerId,
+        {
+          orderId: updatedOrder.id,
+          status: updatedOrder.status,
+          updatedAt: updatedOrder.updatedAt,
+        },
+      );
+    }
 
     if (justCancelled) {
       await this.refundsService.autoRefundOrderPayments(
@@ -975,6 +992,15 @@ export class OrdersService {
             },
           },
         });
+      },
+    );
+
+    await this.realtimeGateway.emitOrderStatusUpdated(
+      updatedOrder.customerId,
+      {
+        orderId: updatedOrder.id,
+        status: updatedOrder.status,
+        updatedAt: updatedOrder.updatedAt,
       },
     );
 
@@ -1263,8 +1289,8 @@ export class OrdersService {
   }
 
   private async autoCancelAndRefund(orderId: string, category: string) {
-    await this.prisma.$transaction(async (tx) => {
-      await tx.order.update({
+    const updatedOrder = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.order.update({
         where: { id: orderId },
         data: {
           status: OrderStatus.CANCELLED,
@@ -1280,7 +1306,18 @@ export class OrdersService {
           note: `Auto-cancelled: ${category}`,
         },
       });
+
+      return updated;
     });
+
+    await this.realtimeGateway.emitOrderStatusUpdated(
+      updatedOrder.customerId,
+      {
+        orderId: updatedOrder.id,
+        status: updatedOrder.status,
+        updatedAt: updatedOrder.updatedAt,
+      },
+    );
 
     await this.refundsService.autoRefundOrderPayments(orderId, category, null);
   }
