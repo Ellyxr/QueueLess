@@ -323,6 +323,18 @@ export class OrdersService {
         },
       );
 
+      this.realtimeGateway.emitNewOrder(
+        order.vendor.ownerUserId,
+        {
+          orderId: order.id,
+          vendorId: order.vendorId,
+          customerId: order.customerId,
+          status: order.status,
+          totalAmount: order.totalAmount.toFixed(2),
+          createdAt: order.createdAt,
+        },
+      );
+
       return this.buildOrderResponse(order);
     } catch (error) {
       if (
