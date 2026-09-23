@@ -13,6 +13,7 @@ import { Prisma } from '@prisma/client';
 import { SetPaymentSplitDto } from './dto/set-payment-split.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PricingService } from '../common/pricing/pricing.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const CODE_LENGTH = 6;
@@ -74,6 +75,7 @@ export class GroupOrdersService {
     private readonly prisma: PrismaService,
     private readonly notificationsService: NotificationsService,
     private readonly pricingService: PricingService,
+    private readonly realtimeGateway: RealtimeGateway,
   ) {}
 
   private generateCode(): string {
@@ -787,7 +789,7 @@ export class GroupOrdersService {
   }
 
   async finalizeGroupOrder(userId: string, groupOrderId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const groupOrder = await tx.groupOrder.findUnique({
         where: {
           id: groupOrderId,
@@ -993,39 +995,63 @@ export class GroupOrdersService {
       });
 
       return {
-        groupOrderId: groupOrder.id,
-        groupOrderStatus: 'FINALIZED',
-        authoritativeOrder: {
-          id: order.id,
-          orderType: order.orderType,
-          status: order.status,
-          vendor: {
-            id: order.vendor.id,
-            name: order.vendor.name,
+        response: {
+          groupOrderId: groupOrder.id,
+          groupOrderStatus: 'FINALIZED',
+          authoritativeOrder: {
+            id: order.id,
+            orderType: order.orderType,
+            status: order.status,
+            vendor: {
+              id: order.vendor.id,
+              name: order.vendor.name,
+            },
+            subtotal: order.subtotal.toFixed(2),
+            marketplaceFee: order.marketplaceFee.toFixed(2),
+            totalAmount: order.totalAmount.toFixed(2),
+            estimatedReadyAt: order.estimatedReadyAt,
+            items: order.items.map((item) => ({
+              id: item.id,
+              productId: item.productId,
+              name: item.product.name,
+              quantity: item.quantity,
+              unitPrice: item.unitPriceSnapshot.toFixed(2),
+              subtotal: item.lineSubtotal.toFixed(2),
+              participant: item.participant
+                ? {
+                    participantId: item.participant.id,
+                    user: item.participant.user,
+                  }
+                : null,
+            })),
           },
-          subtotal: order.subtotal.toFixed(2),
-          marketplaceFee: order.marketplaceFee.toFixed(2),
+        },
+        realtimeOrder: {
+          vendorOwnerUserId: order.vendor.ownerUserId,
+          orderId: order.id,
+          vendorId: order.vendorId,
+          customerId: order.customerId,
+          status: order.status,
           totalAmount: order.totalAmount.toFixed(2),
-          estimatedReadyAt: order.estimatedReadyAt,
-          items: order.items.map((item) => ({
-            id: item.id,
-            productId: item.productId,
-            name: item.product.name,
-            quantity: item.quantity,
-            unitPrice: item.unitPriceSnapshot.toFixed(2),
-            subtotal: item.lineSubtotal.toFixed(2),
-            participant: item.participant
-              ? {
-                  participantId: item.participant.id,
-                  user: item.participant.user,
-                }
-              : null,
-          })),
+          createdAt: order.createdAt,
         },
       };
     });
-  }
 
+    this.realtimeGateway.emitNewOrder(
+      result.realtimeOrder.vendorOwnerUserId,
+      {
+        orderId: result.realtimeOrder.orderId,
+        vendorId: result.realtimeOrder.vendorId,
+        customerId: result.realtimeOrder.customerId,
+        status: result.realtimeOrder.status,
+        totalAmount: result.realtimeOrder.totalAmount,
+        createdAt: result.realtimeOrder.createdAt,
+      },
+    );
+
+    return result.response;
+  }
   async setPaymentSplit(
     userId: string,
     groupOrderId: string,
