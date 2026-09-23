@@ -15,6 +15,7 @@ import {
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PaymongoService } from './paymongo.service';
 import { RefundsService } from '../refunds/refunds.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 @Injectable()
 export class PaymentsService {
@@ -22,6 +23,7 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     private readonly paymongoService: PaymongoService,
     private readonly refundsService: RefundsService,
+    private readonly realtimeGateway: RealtimeGateway,
   ) {}
 
   async createCheckout(
@@ -877,6 +879,7 @@ export class PaymentsService {
           orderId,
           orderMarkedPaid: false,
           unpaidShares: 0,
+          paidOrder: null,
         };
       }
 
@@ -898,6 +901,15 @@ export class PaymentsService {
       });
 
       let orderMarkedPaid = false;
+
+      let paidOrder:
+      | {
+          id: string;
+          customerId: string;
+          status: OrderStatus;
+          updatedAt: Date;
+        }
+      | null = null;
 
       if (unpaidShares === 0) {
         const orderUpdate = await tx.order.updateMany({
@@ -924,6 +936,10 @@ export class PaymentsService {
           const order = await tx.order.findUnique({
             where: { id: orderId },
             select: {
+              id: true,
+              customerId: true,
+              status: true,
+              updatedAt: true,
               vendorId: true,
               totalAmount: true,
               marketplaceFee: true,
@@ -939,6 +955,12 @@ export class PaymentsService {
                 amount: order.totalAmount.sub(order.marketplaceFee),
               },
             });
+            paidOrder = {
+              id: order.id,
+              customerId: order.customerId,
+              status: order.status,
+              updatedAt: order.updatedAt,
+            };
           }
 
           orderMarkedPaid = true;
@@ -951,8 +973,20 @@ export class PaymentsService {
         orderId,
         orderMarkedPaid,
         unpaidShares,
+        paidOrder,
       };
     });
+
+    if (result.orderMarkedPaid && result.paidOrder) {
+      await this.realtimeGateway.emitOrderStatusUpdated(
+        result.paidOrder.customerId,
+        {
+          orderId: result.paidOrder.id,
+          status: result.paidOrder.status,
+          updatedAt: result.paidOrder.updatedAt,
+        },
+      );
+    }
 
     if (result.duplicatePayment) {
       await this.refundsService.autoRefundPayment(
