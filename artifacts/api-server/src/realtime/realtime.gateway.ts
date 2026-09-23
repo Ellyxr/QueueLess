@@ -112,6 +112,22 @@ export class RealtimeGateway implements OnGatewayConnection {
     }
   }
 
+  emitNewOrder(
+    vendorOwnerUserId: string,
+    payload: {
+      orderId: string;
+      vendorId: string;
+      customerId: string;
+      status: string;
+      totalAmount: string;
+      createdAt: Date;
+    },
+  ) {
+    this.server
+      .to(this.userRoom(vendorOwnerUserId))
+      .emit('order.created', payload);
+  }
+
   private extractToken(client: Socket): string | null {
     const authToken = client.handshake.auth?.token;
 
