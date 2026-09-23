@@ -61,6 +61,8 @@ export class RealtimeGateway implements OnGatewayConnection {
       }
 
       await client.join(this.userRoom(user.id));
+      // The client can now reconcile any events missed while disconnected.
+      client.emit('realtime.ready');
     } catch {
       client.disconnect(true);
     }
