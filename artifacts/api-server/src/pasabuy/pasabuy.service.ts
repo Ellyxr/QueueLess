@@ -113,6 +113,7 @@ export class PasabuyService {
           fulfillerUserId: true,
           status: true,
           expiresAt: true,
+          relatedOrder: { select: { status: true } },
         },
       });
 
@@ -155,8 +156,14 @@ export class PasabuyService {
       }
 
       const acceptedAt = new Date();
-      if (request.expiresAt && request.expiresAt <= acceptedAt) {
+      if (!request.expiresAt || request.expiresAt <= acceptedAt) {
         throw new ConflictException('Pasabuy request has expired');
+      }
+      if (!request.relatedOrder ||
+        (request.relatedOrder.status !== 'PAID' &&
+          request.relatedOrder.status !== 'COOKING' &&
+          request.relatedOrder.status !== 'READY_FOR_PICKUP')) {
+        throw new ConflictException('The related order is no longer eligible');
       }
 
       const claimed =
@@ -164,8 +171,11 @@ export class PasabuyService {
           where: {
             id: requestId,
             status: 'PENDING',
-            OR: [{ expiresAt: null }, { expiresAt: { gt: acceptedAt } }],
+            expiresAt: { gt: acceptedAt },
             fulfillerUserId: null,
+            relatedOrder: {
+              status: { in: ['PAID', 'COOKING', 'READY_FOR_PICKUP'] },
+            },
           },
           data: {
             fulfillerUserId: userId,
