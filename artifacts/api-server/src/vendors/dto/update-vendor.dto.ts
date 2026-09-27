@@ -3,8 +3,11 @@ import {
   ArrayMaxSize,
   IsArray,
   IsOptional,
+  IsNumber,
   IsString,
   MaxLength,
+  Max,
+  Min,
   MinLength,
 } from 'class-validator';
 
@@ -37,6 +40,25 @@ export class UpdateVendorDto {
   @IsString()
   @MaxLength(255)
   campusLocation?: string;
+
+  @ApiPropertyOptional({ description: 'Address where a Pasabuy deliverer collects orders.' })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  pickupLocation?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  pickupLatitude?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  pickupLongitude?: number;
 
   @ApiPropertyOptional({
     example: ['Rice Bowls', 'Drinks', 'Snacks'],
