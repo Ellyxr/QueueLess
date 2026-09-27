@@ -40,3 +40,20 @@ linked food order that is still paid, cooking, or ready for pickup. A
 conditional database update claims the request once; status history and
 the requester notification are written in the same transaction. A second
 claim receives `409` and creates no second acceptance history entry.
+
+## US-037 payment and delivery
+
+Acceptance starts a five-minute fee payment window (`AWAITING_PAYMENT`);
+the requester calls `POST /api/v1/pasabuy/requests/:id/checkout` for a
+PayMongo checkout charging only the previously calculated PHP 30 or PHP 50
+convenience fee. Repeated calls reuse the same checkout. The fee remains
+unpaid until a verified `checkout_session.payment.paid` webhook confirms the
+matching payment and amount. `GET /api/v1/pasabuy/requests/:id` lets the
+requester or assigned deliverer read its authoritative status, fee, payment,
+deadline and history. A sweep expires the unpaid assignment after the
+deadline, first closing any open provider checkout. Pickup requires `PAID`,
+then follows `PICKED_UP` → `DELIVERED`; the requester confirms receipt with
+`POST /api/v1/pasabuy/requests/:id/complete` to reach `COMPLETED`.
+
+PayMongo's webhook must be configured to send
+`checkout_session.payment.paid` to `/api/v1/payments/webhook` over HTTPS.

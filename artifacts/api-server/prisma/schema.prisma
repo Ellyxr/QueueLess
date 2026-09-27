@@ -502,13 +502,14 @@ model Payment {
   id                   String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   payerUserId          String              @db.Uuid
   purpose              PaymentPurpose
-  pasabuyRequestId     String?             @db.Uuid
+  pasabuyRequestId     String?             @unique @db.Uuid
   vendorSubscriptionId String?             @db.Uuid
   featuredListingId    String?             @db.Uuid
   amount               Decimal             @db.Decimal(10, 2)
   currency             String              @default("PHP")
   provider             PaymentProvider     @default(PAYMONGO)
   providerPaymentId    String?
+  checkoutUrl          String?
   providerPaymentResourceId String?
   status               PaymentStatus       @default(PENDING)
   createdAt            DateTime            @default(now()) @db.Timestamptz(6)
@@ -614,7 +615,7 @@ model PasabuyRequest {
   relatedOrder     Order?                 @relation(fields: [relatedOrderId], references: [id])
   requester        User                   @relation("PasabuyRequester", fields: [requesterUserId], references: [id])
   statusHistory    PasabuyStatusHistory[]
-  payments         Payment[]
+  payment          Payment?
   reportsTargeting Report[]               @relation("ReportTargetPasabuy")
 
   @@index([requesterUserId])

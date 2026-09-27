@@ -23,6 +23,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UpsertPasabuyProfileDto } from './dto/upsert-pasabuy-profile.dto';
 import { PasabuyService } from './pasabuy.service';
 import { PasabuyCreationService } from './pasabuy-creation.service';
+import { PasabuyPaymentsService } from './pasabuy-payments.service';
 import { CreatePasabuyRequestDto } from './dto/create-pasabuy-request.dto';
 
 @ApiTags('Pasabuy')
@@ -34,6 +35,7 @@ export class PasabuyController {
   constructor(
     private readonly pasabuyService: PasabuyService,
     private readonly creation: PasabuyCreationService,
+    private readonly payments: PasabuyPaymentsService,
   ) {}
 
   @Post('requests')
@@ -103,6 +105,24 @@ export class PasabuyController {
     @CurrentUser() user: JwtPayload,
   ) {
     return this.pasabuyService.getAvailableRequests(user.sub);
+  }
+
+  @Get('requests/:id')
+  @ApiOperation({ summary: 'Get authoritative Pasabuy status, fee, payment and history for a participant' })
+  getRequest(@CurrentUser() user: JwtPayload, @Param('id') requestId: string) {
+    return this.pasabuyService.getRequest(user.sub, requestId);
+  }
+
+  @Post('requests/:id/checkout')
+  @ApiOperation({ summary: 'Create or reuse a fee-only PayMongo checkout after acceptance' })
+  createFeeCheckout(@CurrentUser() user: JwtPayload, @Param('id') requestId: string) {
+    return this.payments.createCheckout(user.sub, requestId);
+  }
+
+  @Post('requests/:id/complete')
+  @ApiOperation({ summary: 'Confirm receipt as requester after delivery' })
+  confirmReceipt(@CurrentUser() user: JwtPayload, @Param('id') requestId: string) {
+    return this.pasabuyService.confirmReceipt(user.sub, requestId);
   }
 
   @Post('requests/:id/accept')

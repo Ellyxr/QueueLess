@@ -7,6 +7,7 @@ import {
 import {
   CancellationReason,
   OrderStatus,
+  PaymentPurpose,
   PaymentStatus,
   Prisma,
   RefundInitiator,
@@ -56,6 +57,9 @@ export class RefundsService {
         amount: true,
         currency: true,
         status: true,
+        purpose: true,
+        pasabuyRequestId: true,
+        pasabuyRequest: { select: { status: true } },
         paymentShares: {
           select: {
             orderId: true,
@@ -87,6 +91,28 @@ export class RefundsService {
       throw new ConflictException(
         'Only successful payments can be refunded',
       );
+    }
+
+    if (payment.purpose === PaymentPurpose.PASABUY && payment.pasabuyRequestId) {
+      if (!isPayer) throw new NotFoundException('Payment not found');
+      if (payment.pasabuyRequest?.status !== 'CANCELLED' &&
+        payment.pasabuyRequest?.status !== 'DISPUTED') {
+        throw new ConflictException('Pasabuy fee refund requires cancellation or dispute');
+      }
+      if (dto.orderItemId) {
+        throw new BadRequestException('Pasabuy fee refunds cannot target a food item');
+      }
+      const amount = new Prisma.Decimal(dto.amount);
+      const remaining = await this.resolveRefundableAmount(payment, null);
+      if (amount.greaterThan(remaining)) {
+        throw new BadRequestException('Refund amount exceeds the remaining Pasabuy fee');
+      }
+      const refund = await this.prisma.refund.create({
+        data: { paymentId: payment.id, amount,
+          reason: dto.reason?.trim() || null, status: RefundStatus.REQUESTED,
+          initiatedBy: RefundInitiator.BUYER, requestedByUserId: userId },
+      });
+      return { ...refund, amount: refund.amount.toFixed(2), currency: payment.currency };
     }
 
     if (payment.paymentShares.length === 0) {
@@ -380,6 +406,23 @@ export class RefundsService {
     };
   }
 
+  async markPasabuyRefunded(paymentId: string) {
+    const payment = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      select: { purpose: true, pasabuyRequestId: true, amount: true,
+        refunds: { where: { status: RefundStatus.PROCESSED },
+          select: { amount: true } } },
+    });
+    if (payment?.purpose !== PaymentPurpose.PASABUY || !payment.pasabuyRequestId) return;
+    const refunded = payment.refunds.reduce((total, refund) => total.add(refund.amount),
+      new Prisma.Decimal(0));
+    if (refunded.lessThan(payment.amount)) return;
+    await this.prisma.pasabuyRequest.updateMany({
+      where: { id: payment.pasabuyRequestId, paymentStatus: 'PAID' },
+      data: { paymentStatus: 'REFUNDED' },
+    });
+  }
+
   async processRefund(
     refundId: string,
     actorUserId: string | null,
@@ -551,6 +594,8 @@ export class RefundsService {
         return updated;
       },
     );
+
+    await this.markPasabuyRefunded(refund.paymentId);
 
     return {
       ...updatedRefund,
