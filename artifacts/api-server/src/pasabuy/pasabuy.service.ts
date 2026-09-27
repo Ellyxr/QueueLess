@@ -3,19 +3,52 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { Interval } from '@nestjs/schedule';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { UpsertPasabuyProfileDto } from './dto/upsert-pasabuy-profile.dto';
 
 @Injectable()
 export class PasabuyService {
+  private readonly logger = new Logger(PasabuyService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtimeGateway: RealtimeGateway,
   ) {}
+
+  @Interval(30_000)
+  async expireOpenRequests() {
+    const expired = await this.prisma.pasabuyRequest.findMany({
+      where: { status: 'PENDING', expiresAt: { lte: new Date() } },
+      select: { id: true },
+      take: 50,
+    });
+    for (const request of expired) {
+      try {
+        const changed = await this.prisma.$transaction(async (tx) => {
+          const updated = await tx.pasabuyRequest.updateMany({
+            where: { id: request.id, status: 'PENDING', expiresAt: { lte: new Date() } },
+            data: { status: 'EXPIRED' },
+          });
+          if (updated.count) {
+            await tx.pasabuyStatusHistory.create({
+              data: { pasabuyRequestId: request.id, status: 'EXPIRED',
+                note: 'Request window expired' },
+            });
+          }
+          return updated.count;
+        });
+        if (changed) await this.realtimeGateway.emitPasabuyStatusUpdated(request.id);
+      } catch (error) {
+        this.logger.warn(`Could not expire Pasabuy request ${request.id}: ${String(error)}`);
+      }
+    }
+  }
 
   async getProfile(userId: string) {
     const profile = await this.prisma.pasabuyProfile.findUnique({
@@ -121,7 +154,7 @@ export class PasabuyService {
   }
 
   async confirmReceipt(userId: string, requestId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    const completed = await this.prisma.$transaction(async (tx) => {
       const request = await tx.pasabuyRequest.findUnique({
         where: { id: requestId },
         select: { requesterUserId: true },
@@ -142,13 +175,15 @@ export class PasabuyService {
       return tx.pasabuyRequest.findUniqueOrThrow({ where: { id: requestId },
         select: { id: true, status: true, paymentStatus: true, updatedAt: true } });
     });
+    await this.realtimeGateway.emitPasabuyStatusUpdated(requestId);
+    return completed;
   }
 
   async acceptRequest(
     userId: string,
     requestId: string,
   ) {
-    return this.prisma.$transaction(async (tx) => {
+    const accepted = await this.prisma.$transaction(async (tx) => {
       const request = await tx.pasabuyRequest.findUnique({
         where: {
           id: requestId,
@@ -286,6 +321,8 @@ export class PasabuyService {
         },
       });
     });
+    await this.realtimeGateway.emitPasabuyStatusUpdated(requestId);
+    return accepted;
   }
 
   async markPickedUp(
@@ -438,6 +475,8 @@ export class PasabuyService {
       },
     );
 
+    await this.realtimeGateway.emitPasabuyStatusUpdated(requestId);
+
     return result.updatedRequest;
   }
 
@@ -445,7 +484,7 @@ export class PasabuyService {
     userId: string,
     requestId: string,
   ) {
-    return this.prisma.$transaction(async (tx) => {
+    const delivered = await this.prisma.$transaction(async (tx) => {
       const request = await tx.pasabuyRequest.findUnique({
         where: { id: requestId },
         select: {
@@ -525,6 +564,8 @@ export class PasabuyService {
         },
       });
     });
+    await this.realtimeGateway.emitPasabuyStatusUpdated(requestId);
+    return delivered;
   }
 
   async upsertProfile(

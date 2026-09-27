@@ -57,3 +57,19 @@ then follows `PICKED_UP` → `DELIVERED`; the requester confirms receipt with
 
 PayMongo's webhook must be configured to send
 `checkout_session.payment.paid` to `/api/v1/payments/webhook` over HTTPS.
+
+## US-038 realtime status notifications
+
+After a successful database transaction, the `/realtime` Socket.IO gateway
+emits `pasabuy.status.updated` to the requester and assigned deliverer's
+authenticated user rooms. Its payload contains `requestId`, `status`,
+`paymentStatus`, and `updatedAt`. It contains no requester identity, address,
+pickup code, or payment details. The event is sent for creation, acceptance,
+payment confirmation or failure, pickup, delivery, receipt confirmation, and
+request or payment expiry. On payment expiry, the former deliverer also
+receives the event after being unassigned.
+
+Events are notifications. Clients should call
+`GET /api/v1/pasabuy/requests/:id` for authoritative state after receiving
+an event or `realtime.ready` on reconnect. An open request expiring without a
+deliverer is persisted by a 30-second sweep before its event is sent.
