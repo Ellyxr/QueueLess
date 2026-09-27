@@ -98,6 +98,52 @@ export class PasabuyService {
     });
   }
 
+  async getRequest(userId: string, requestId: string) {
+    const request = await this.prisma.pasabuyRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        id: true, requesterUserId: true, fulfillerUserId: true,
+        status: true, paymentStatus: true, paymentDeadline: true,
+        feeTier: true, convenienceFee: true, deliveryDistanceMeters: true,
+        pickupLocation: true, dropoffLocation: true, itemDescription: true,
+        expiresAt: true, acceptedAt: true, pickedUpAt: true,
+        deliveredAt: true, createdAt: true, updatedAt: true,
+        payment: { select: { id: true, status: true, amount: true } },
+        statusHistory: { orderBy: { changedAt: 'asc' },
+          select: { status: true, note: true, changedAt: true } },
+      },
+    });
+    if (!request ||
+      (request.requesterUserId !== userId && request.fulfillerUserId !== userId)) {
+      throw new NotFoundException('Pasabuy request not found');
+    }
+    return request;
+  }
+
+  async confirmReceipt(userId: string, requestId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const request = await tx.pasabuyRequest.findUnique({
+        where: { id: requestId },
+        select: { requesterUserId: true },
+      });
+      if (!request || request.requesterUserId !== userId) {
+        throw new NotFoundException('Pasabuy request not found');
+      }
+      const updated = await tx.pasabuyRequest.updateMany({
+        where: { id: requestId, requesterUserId: userId, status: 'DELIVERED',
+          paymentStatus: 'PAID' },
+        data: { status: 'COMPLETED' },
+      });
+      if (updated.count !== 1) throw new ConflictException('Request is not ready to complete');
+      await tx.pasabuyStatusHistory.create({
+        data: { pasabuyRequestId: requestId, status: 'COMPLETED',
+          changedByUserId: userId, note: 'Requester confirmed receipt' },
+      });
+      return tx.pasabuyRequest.findUniqueOrThrow({ where: { id: requestId },
+        select: { id: true, status: true, paymentStatus: true, updatedAt: true } });
+    });
+  }
+
   async acceptRequest(
     userId: string,
     requestId: string,
@@ -179,7 +225,9 @@ export class PasabuyService {
           },
           data: {
             fulfillerUserId: userId,
-            status: 'ACCEPTED',
+            status: 'AWAITING_PAYMENT',
+            paymentStatus: 'AWAITING_PAYMENT',
+            paymentDeadline: new Date(acceptedAt.getTime() + 5 * 60_000),
             acceptedAt,
           },
         });
@@ -196,6 +244,15 @@ export class PasabuyService {
           status: 'ACCEPTED',
           changedByUserId: userId,
           note: 'Pasabuy request accepted',
+        },
+      });
+
+      await tx.pasabuyStatusHistory.create({
+        data: {
+          pasabuyRequestId: requestId,
+          status: 'AWAITING_PAYMENT',
+          changedByUserId: userId,
+          note: 'Waiting for requester to pay the Pasabuy fee',
         },
       });
 
@@ -221,6 +278,8 @@ export class PasabuyService {
           fulfillerUserId: true,
           itemDescription: true,
           convenienceFee: true,
+          paymentStatus: true,
+          paymentDeadline: true,
           totalAmount: true,
           acceptedAt: true,
           createdAt: true,
@@ -241,6 +300,7 @@ export class PasabuyService {
           requesterUserId: true,
           fulfillerUserId: true,
           status: true,
+          paymentStatus: true,
           relatedOrderId: true,
           relatedOrder: { select: { status: true } },
         },
@@ -254,9 +314,9 @@ export class PasabuyService {
           'Only the assigned fulfiller can mark this Pasabuy request as picked up',
         );
       }
-      if (request.status !== 'ACCEPTED') {
+      if (request.status !== 'PAID' || request.paymentStatus !== 'PAID') {
         throw new ConflictException(
-          'Only an accepted Pasabuy request can be marked as picked up',
+          'The Pasabuy fee must be confirmed paid before pickup',
         );
       }
       if (!request.relatedOrderId || !request.relatedOrder) {
@@ -302,10 +362,11 @@ export class PasabuyService {
         where: {
           id: requestId,
           fulfillerUserId: userId,
-          status: 'ACCEPTED',
+          status: 'PAID',
+          paymentStatus: 'PAID',
         },
         data: {
-          status: 'IN_PROGRESS',
+          status: 'PICKED_UP',
           pickedUpAt,
         },
       });
@@ -319,7 +380,7 @@ export class PasabuyService {
       await tx.pasabuyStatusHistory.create({
         data: {
           pasabuyRequestId: requestId,
-          status: 'IN_PROGRESS',
+          status: 'PICKED_UP',
           changedByUserId: userId,
           note: 'Pasabuy order picked up',
         },
@@ -403,7 +464,7 @@ export class PasabuyService {
           'Only the assigned fulfiller can mark this Pasabuy request as delivered',
         );
       }
-      if (request.status !== 'IN_PROGRESS') {
+      if (request.status !== 'PICKED_UP') {
         throw new ConflictException(
           'Only an in-progress Pasabuy request can be marked as delivered',
         );
@@ -414,7 +475,7 @@ export class PasabuyService {
         where: {
           id: requestId,
           fulfillerUserId: userId,
-          status: 'IN_PROGRESS',
+          status: 'PICKED_UP',
         },
         data: { status: 'DELIVERED', deliveredAt },
       });
