@@ -289,10 +289,17 @@ export class VendorsService {
       );
     }
 
+    if ((dto.pickupLatitude === undefined) !== (dto.pickupLongitude === undefined)) {
+      throw new BadRequestException('Pickup latitude and longitude must be provided together');
+    }
+
     const data: {
       name?: string;
       description?: string | null;
       campusLocation?: string | null;
+      pickupLocation?: string;
+      pickupLatitude?: number;
+      pickupLongitude?: number;
       categoryOrder?: string[];
     } = {};
 
@@ -307,6 +314,10 @@ export class VendorsService {
     if (dto.campusLocation !== undefined) {
       data.campusLocation = dto.campusLocation.trim() || null;
     }
+
+    if (dto.pickupLocation !== undefined) data.pickupLocation = dto.pickupLocation.trim();
+    if (dto.pickupLatitude !== undefined) data.pickupLatitude = dto.pickupLatitude;
+    if (dto.pickupLongitude !== undefined) data.pickupLongitude = dto.pickupLongitude;
 
     if (dto.categoryOrder !== undefined) {
       data.categoryOrder = dto.categoryOrder.map((category) => category.trim());
@@ -323,6 +334,9 @@ export class VendorsService {
         name: true,
         description: true,
         campusLocation: true,
+        pickupLocation: true,
+        pickupLatitude: true,
+        pickupLongitude: true,
         categoryOrder: true,
         vendorType: true,
         status: true,

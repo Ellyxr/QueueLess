@@ -108,6 +108,9 @@ model Vendor {
   name                String
   description         String?
   campusLocation      String?
+  pickupLocation      String?
+  pickupLatitude      Float?
+  pickupLongitude     Float?
   categoryOrder       String[]                   @default([])
   vendorType          VendorType
   status              VendorStatus               @default(ACTIVE)
@@ -591,6 +594,10 @@ model PasabuyRequest {
   dropoffLocation  String?
   itemDescription  String
   convenienceFee   Decimal                @db.Decimal(10, 2)
+  feeTier          PasabuyFeeTier?
+  deliveryDistanceMeters Int?
+  dropoffLatitude  Float?
+  dropoffLongitude Float?
   totalAmount      Decimal                @db.Decimal(10, 2)
   acceptedAt       DateTime?              @db.Timestamptz(6)
   pickupCode       String?
@@ -887,6 +894,11 @@ enum PasabuyPaymentStatus {
   PAYMENT_FAILED
   PAYMENT_EXPIRED
   REFUNDED
+}
+
+enum PasabuyFeeTier {
+  IN_CAMPUS
+  OUTSIDE_CAMPUS
 }
 
 enum ReportStatus {
