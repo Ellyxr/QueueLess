@@ -15,6 +15,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import type { JwtPayload } from '../auth/jwt.strategy';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -33,15 +34,17 @@ export class RefundsController {
   ) {}
 
   @Post()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('BUYER', 'VENDOR_OWNER')
   @ApiBearerAuth()
   createRefund(
-    @CurrentUser() user: { sub: string },
+    @CurrentUser() user: JwtPayload,
     @Body() dto: CreateRefundDto,
   ) {
     return this.refundsService.createRefund(
       user.sub,
       dto,
+      user.roles,
     );
   }
 

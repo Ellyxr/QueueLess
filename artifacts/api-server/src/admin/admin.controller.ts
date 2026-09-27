@@ -31,6 +31,7 @@ import {
   UpdateAdminUserRolesDto,
   UpdateAdminUserStatusDto,
 } from './dto/admin-user.dto';
+import { UpdateAdminVendorStatusDto } from './dto/admin-vendor.dto';
 
 type AuthenticatedRequest = Request & {
   user: {
@@ -75,6 +76,24 @@ export class AdminController {
   })
   getDashboard() {
     return this.adminService.getDashboard();
+  }
+
+  @Get('vendors')
+  listVendors() {
+    return this.adminService.listVendors();
+  }
+
+  @Patch('vendors/:id/status')
+  updateVendorStatus(
+    @Req() request: AuthenticatedRequest,
+    @Param('id') vendorId: string,
+    @Body() dto: UpdateAdminVendorStatusDto,
+  ) {
+    return this.adminService.updateVendorStatus(
+      vendorId,
+      dto.status,
+      request.user.sub,
+    );
   }
 
   @Get('users')
