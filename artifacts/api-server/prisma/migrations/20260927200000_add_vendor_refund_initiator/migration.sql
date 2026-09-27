@@ -1,0 +1,1 @@
+ALTER TYPE "RefundInitiator" ADD VALUE 'VENDOR';
