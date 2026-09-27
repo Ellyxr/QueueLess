@@ -37,12 +37,26 @@ export class PasabuyService {
   }
 
   async getAvailableRequests(userId: string) {
+    const profile = await this.prisma.pasabuyProfile.findUnique({
+      where: { userId },
+      select: { studentId: true },
+    });
+    if (!profile?.studentId?.trim()) {
+      throw new ForbiddenException(
+        'Complete your Pasabuy profile before browsing requests',
+      );
+    }
+
     return this.prisma.pasabuyRequest.findMany({
       where: {
         status: 'PENDING',
+        expiresAt: { gt: new Date() },
         fulfillerUserId: null,
         requesterUserId: {
           not: userId,
+        },
+        relatedOrder: {
+          status: { in: ['PAID', 'COOKING', 'READY_FOR_PICKUP'] },
         },
       },
       select: {
@@ -51,11 +65,12 @@ export class PasabuyService {
         itemDescription: true,
         pickupLocation: true,
         convenienceFee: true,
-        totalAmount: true,
+        feeTier: true,
+        deliveryDistanceMeters: true,
+        expiresAt: true,
         createdAt: true,
         relatedOrder: {
           select: {
-            id: true,
             estimatedReadyAt: true,
             vendor: {
               select: {
