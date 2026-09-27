@@ -22,6 +22,8 @@ import { RolesGuard } from '../auth/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UpsertPasabuyProfileDto } from './dto/upsert-pasabuy-profile.dto';
 import { PasabuyService } from './pasabuy.service';
+import { PasabuyCreationService } from './pasabuy-creation.service';
+import { CreatePasabuyRequestDto } from './dto/create-pasabuy-request.dto';
 
 @ApiTags('Pasabuy')
 @ApiBearerAuth()
@@ -29,7 +31,16 @@ import { PasabuyService } from './pasabuy.service';
 @Roles('BUYER')
 @Controller('pasabuy')
 export class PasabuyController {
-  constructor(private readonly pasabuyService: PasabuyService) {}
+  constructor(
+    private readonly pasabuyService: PasabuyService,
+    private readonly creation: PasabuyCreationService,
+  ) {}
+
+  @Post('requests')
+  @ApiOperation({ summary: 'Create a Pasabuy request for an eligible paid order' })
+  createRequest(@CurrentUser() user: JwtPayload, @Body() dto: CreatePasabuyRequestDto) {
+    return this.creation.create(user.sub, dto);
+  }
 
   @Get('profile')
   @ApiOperation({
