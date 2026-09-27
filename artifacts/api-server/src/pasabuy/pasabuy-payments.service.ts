@@ -8,6 +8,7 @@ import { Interval } from '@nestjs/schedule';
 import { PaymentPurpose, PaymentStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PaymongoService } from '../payments/paymongo.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 @Injectable()
 export class PasabuyPaymentsService {
@@ -16,6 +17,7 @@ export class PasabuyPaymentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly paymongo: PaymongoService,
+    private readonly realtimeGateway: RealtimeGateway,
   ) {}
 
   async createCheckout(userId: string, requestId: string) {
@@ -90,7 +92,7 @@ export class PasabuyPaymentsService {
         itemName: 'QueueLess Pasabuy convenience fee',
       });
     } catch (error) {
-      await this.prisma.$transaction([
+      const [, changed] = await this.prisma.$transaction([
         this.prisma.payment.updateMany({
           where: { id: payment.id, status: PaymentStatus.PENDING, providerPaymentId: null },
           data: { status: PaymentStatus.FAILED },
@@ -100,6 +102,7 @@ export class PasabuyPaymentsService {
           data: { paymentStatus: 'PAYMENT_FAILED' },
         }),
       ]);
+      if (changed.count) await this.realtimeGateway.emitPasabuyStatusUpdated(requestId);
       throw error;
     }
 
@@ -141,7 +144,7 @@ export class PasabuyPaymentsService {
   }
 
   async confirmPaid(paymentId: string, providerPaymentResourceId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const payment = await tx.payment.findUniqueOrThrow({
         where: { id: paymentId },
         select: { pasabuyRequestId: true, status: true, providerPaymentResourceId: true },
@@ -184,6 +187,10 @@ export class PasabuyPaymentsService {
         pasabuyRequestId: payment.pasabuyRequestId,
       };
     });
+    if (result.requestMarkedPaid) {
+      await this.realtimeGateway.emitPasabuyStatusUpdated(result.pasabuyRequestId);
+    }
+    return result;
   }
 
   @Interval(30_000)
@@ -193,7 +200,7 @@ export class PasabuyPaymentsService {
         status: 'AWAITING_PAYMENT',
         paymentDeadline: { lte: new Date() },
       },
-      select: { id: true, payment: {
+      select: { id: true, fulfillerUserId: true, payment: {
         select: { providerPaymentId: true, status: true } } },
       take: 50,
     });
@@ -204,7 +211,7 @@ export class PasabuyPaymentsService {
         if (payment?.providerPaymentId &&
           !(await this.paymongo.expireCheckoutSession(payment.providerPaymentId))) continue;
 
-        await this.prisma.$transaction(async (tx) => {
+        const changed = await this.prisma.$transaction(async (tx) => {
           const changed = await tx.pasabuyRequest.updateMany({
             where: { id: request.id, status: 'AWAITING_PAYMENT',
               paymentDeadline: { lte: new Date() } },
@@ -224,7 +231,12 @@ export class PasabuyPaymentsService {
                 note: 'The fee payment window expired' },
             });
           }
+          return changed.count;
         });
+        if (changed) {
+          await this.realtimeGateway.emitPasabuyStatusUpdated(request.id,
+            request.fulfillerUserId ?? undefined);
+        }
       } catch (error) {
         this.logger.warn(`Could not expire Pasabuy request ${request.id}: ${String(error)}`);
       }
