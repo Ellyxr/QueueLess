@@ -851,6 +851,7 @@ enum RefundStatus {
 
 enum RefundInitiator {
   BUYER
+  VENDOR
   SYSTEM
 }
 

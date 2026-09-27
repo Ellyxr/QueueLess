@@ -28,6 +28,7 @@ interface PaymongoCheckoutSessionResponse {
 interface CreateRefundParams {
   paymentResourceId: string;
   amount: number;
+  idempotencyKey: string;
   reason?: string;
   notes?: string;
 }
@@ -226,6 +227,7 @@ export class PaymongoService {
           headers: {
             Authorization: `Basic ${authorization}`,
             'Content-Type': 'application/json',
+            'Idempotency-Key': params.idempotencyKey,
           },
           body: JSON.stringify({
             data: {
