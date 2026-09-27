@@ -30,3 +30,13 @@ expiry, and public vendor details. It does not return the requester identity,
 dropoff location or coordinates, related order ID, or food order total.
 Filtering expired requests does not itself update their stored status;
 request creation records `EXPIRED` history when replacing an expired request.
+
+## US-036 acceptance
+
+`POST /api/v1/pasabuy/requests/:id/accept` requires a buyer with a completed
+Pasabuy profile. The requester cannot accept their own request. Acceptance
+requires an unclaimed `PENDING` request within its expiry window and a
+linked food order that is still paid, cooking, or ready for pickup. A
+conditional database update claims the request once; status history and
+the requester notification are written in the same transaction. A second
+claim receives `409` and creates no second acceptance history entry.
