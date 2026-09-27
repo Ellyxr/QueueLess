@@ -18,3 +18,15 @@ one active Pasabuy request.
 
 The remaining browse, acceptance, payment, and realtime steps belong to
 US-035 through US-038.
+
+## US-035 available requests
+
+`GET /api/v1/pasabuy/requests` requires an authenticated buyer with a
+Pasabuy profile containing a student ID, matching the existing acceptance
+eligibility check. It returns other buyers' unclaimed `PENDING` requests
+whose request window is still open and whose food order is still eligible.
+The listing includes the pickup point, item description, fee, distance,
+expiry, and public vendor details. It does not return the requester identity,
+dropoff location or coordinates, related order ID, or food order total.
+Filtering expired requests does not itself update their stored status;
+request creation records `EXPIRED` history when replacing an expired request.
