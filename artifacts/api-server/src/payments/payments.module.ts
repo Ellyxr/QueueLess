@@ -4,9 +4,10 @@ import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { PaymongoModule } from './paymongo.module';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { PasabuyModule } from '../pasabuy/pasabuy.module';
 
 @Module({
-  imports: [PaymongoModule, RefundsModule, RealtimeModule],
+  imports: [PaymongoModule, RefundsModule, RealtimeModule, PasabuyModule],
   controllers: [PaymentsController],
   providers: [PaymentsService],
 })
