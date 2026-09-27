@@ -34,6 +34,9 @@ export class OrdersService {
     dto: CreateOrderDto,
     idempotencyKey: string,
   ) {
+    if (dto.isPasabuyRequest) {
+      throw new BadRequestException('Pay for the order first, then POST /pasabuy/requests');
+    }
     const key = idempotencyKey?.trim();
 
     if (!key) {
@@ -250,7 +253,7 @@ export class OrdersService {
               eventId: dto.eventId ?? null,
               orderType: 'INDIVIDUAL',
               status: 'PENDING',
-              isPasabuyRequest: dto.isPasabuyRequest ?? false,
+              isPasabuyRequest: false,
               subtotal,
               marketplaceFee,
               estimatedReadyAt,
@@ -276,36 +279,6 @@ export class OrdersService {
               },
             },
           });
-
-            if (dto.isPasabuyRequest) {
-    const deliveryFee =
-      this.pricingService.getPasabuyDeliveryFee();
-
-    const itemDescription = cart.items
-      .map(
-        (item) =>
-          `${item.quantity}x ${item.product.name}`,
-      )
-      .join(', ');
-
-    await tx.pasabuyRequest.create({
-      data: {
-        requesterUserId: userId,
-        relatedOrderId: order.id,
-        status: 'PENDING',
-        itemDescription,
-        convenienceFee: deliveryFee,
-        totalAmount: order.totalAmount.add(deliveryFee),
-        statusHistory: {
-          create: {
-            status: 'PENDING',
-            changedByUserId: userId,
-            note: 'Pasabuy request created',
-          },
-        },
-      },
-    });
-  }
 
           await tx.orderIdempotencyKey.update({
             where: {

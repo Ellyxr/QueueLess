@@ -50,16 +50,9 @@ export class PasabuyService {
         status: true,
         itemDescription: true,
         pickupLocation: true,
-        dropoffLocation: true,
         convenienceFee: true,
         totalAmount: true,
         createdAt: true,
-        requester: {
-          select: {
-            id: true,
-            fullName: true,
-          },
-        },
         relatedOrder: {
           select: {
             id: true,
@@ -104,6 +97,7 @@ export class PasabuyService {
           requesterUserId: true,
           fulfillerUserId: true,
           status: true,
+          expiresAt: true,
         },
       });
 
@@ -146,12 +140,16 @@ export class PasabuyService {
       }
 
       const acceptedAt = new Date();
+      if (request.expiresAt && request.expiresAt <= acceptedAt) {
+        throw new ConflictException('Pasabuy request has expired');
+      }
 
       const claimed =
         await tx.pasabuyRequest.updateMany({
           where: {
             id: requestId,
             status: 'PENDING',
+            OR: [{ expiresAt: null }, { expiresAt: { gt: acceptedAt } }],
             fulfillerUserId: null,
           },
           data: {
