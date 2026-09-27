@@ -7,13 +7,17 @@ import {
 } from '@nestjs/common';
 import { OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { CreatePasabuyRequestDto } from './dto/create-pasabuy-request.dto';
 
 const REQUEST_WINDOW_MS = 15 * 60_000;
 
 @Injectable()
 export class PasabuyCreationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly realtimeGateway: RealtimeGateway,
+  ) {}
 
   async create(userId: string, dto: CreatePasabuyRequestDto) {
     if (dto.termsAccepted !== true) {
@@ -31,7 +35,7 @@ export class PasabuyCreationService {
     }
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const { request, expiredIds } = await this.prisma.$transaction(async (tx) => {
         const order = await tx.order.findFirst({
           where: { id: dto.orderId, customerId: userId },
           include: { vendor: true, items: { include: { product: true } } },
@@ -65,12 +69,14 @@ export class PasabuyCreationService {
           where: { relatedOrderId: order.id, status: 'PENDING', expiresAt: { lte: now } },
           select: { id: true },
         });
+        const expiredIds: string[] = [];
         for (const oldRequest of expired) {
           const changed = await tx.pasabuyRequest.updateMany({
             where: { id: oldRequest.id, status: 'PENDING', expiresAt: { lte: now } },
             data: { status: 'EXPIRED' },
           });
           if (changed.count) {
+            expiredIds.push(oldRequest.id);
             await tx.pasabuyStatusHistory.create({
               data: { pasabuyRequestId: oldRequest.id, status: 'EXPIRED', note: 'Request window expired' },
             });
@@ -108,8 +114,13 @@ export class PasabuyCreationService {
           },
         });
         await tx.order.update({ where: { id: order.id }, data: { isPasabuyRequest: true } });
-        return request;
+        return { request, expiredIds };
       });
+      for (const expiredId of expiredIds) {
+        await this.realtimeGateway.emitPasabuyStatusUpdated(expiredId);
+      }
+      await this.realtimeGateway.emitPasabuyStatusUpdated(request.id);
+      return request;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new ConflictException('Order already has an active Pasabuy request');

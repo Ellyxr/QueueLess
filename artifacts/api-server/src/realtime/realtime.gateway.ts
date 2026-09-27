@@ -7,12 +7,15 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { Server, Socket } from 'socket.io';
 import * as jwt from 'jsonwebtoken';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { Logger } from '@nestjs/common';
 
 @WebSocketGateway({
   namespace: '/realtime',
   cors: { origin: true },
 })
 export class RealtimeGateway implements OnGatewayConnection {
+  private readonly logger = new Logger(RealtimeGateway.name);
+
   @WebSocketServer()
   server!: Server;
 
@@ -128,6 +131,40 @@ export class RealtimeGateway implements OnGatewayConnection {
     this.server
       .to(this.userRoom(vendorOwnerUserId))
       .emit('order.created', payload);
+  }
+
+  async emitPasabuyStatusUpdated(requestId: string, previousFulfillerUserId?: string) {
+    try {
+      const request = await this.prisma.pasabuyRequest.findUnique({
+        where: { id: requestId },
+        select: {
+          id: true,
+          requesterUserId: true,
+          fulfillerUserId: true,
+          status: true,
+          paymentStatus: true,
+          updatedAt: true,
+        },
+      });
+      if (!request) return;
+
+      const recipients = new Set([
+        request.requesterUserId,
+        request.fulfillerUserId,
+        previousFulfillerUserId,
+      ]);
+      const payload = {
+        requestId: request.id,
+        status: request.status,
+        paymentStatus: request.paymentStatus,
+        updatedAt: request.updatedAt,
+      };
+      for (const userId of recipients) {
+        if (userId) this.server.to(this.userRoom(userId)).emit('pasabuy.status.updated', payload);
+      }
+    } catch (error) {
+      this.logger.warn(`Could not publish Pasabuy status for ${requestId}: ${String(error)}`);
+    }
   }
 
   private extractToken(client: Socket): string | null {
