@@ -27,7 +27,7 @@ export class CreateRefundDto {
   @IsNumber({
     maxDecimalPlaces: 2,
   })
-  @Min(0.01)
+  @Min(1)
   amount!: number;
 
   @IsOptional()

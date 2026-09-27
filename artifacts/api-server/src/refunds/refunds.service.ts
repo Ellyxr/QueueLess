@@ -148,6 +148,12 @@ export class RefundsService {
       orderItem,
     );
 
+    if (remaining.lessThan(1)) {
+      throw new ConflictException(
+        'Remaining refundable amount is below PHP 1.00',
+      );
+    }
+
     if (requestedAmount.greaterThan(remaining)) {
       throw new BadRequestException(
         `Refund amount exceeds the remaining refundable amount of ${remaining.toFixed(2)}`,
@@ -452,6 +458,7 @@ export class RefundsService {
     const providerRefund = await this.paymongoService.createRefund({
       paymentResourceId: refund.payment.providerPaymentResourceId,
       amount: amountInCentavos,
+      idempotencyKey: refund.id,
       reason: 'others',
       notes: refund.reason ?? undefined,
     });
@@ -747,6 +754,12 @@ export class RefundsService {
       orderItem,
     );
 
+    if (remaining.lessThan(1)) {
+      throw new ConflictException(
+        'Remaining refundable amount is below PHP 1.00',
+      );
+    }
+
     const refund = await this.prisma.refund.create({
       data: {
         paymentId: payment.id,
@@ -855,6 +868,12 @@ export class RefundsService {
       remaining = await this.resolveRefundableAmount(payment, null);
     } catch {
       return null;
+    }
+
+    if (remaining.lessThan(1)) {
+      throw new ConflictException(
+        'Remaining refundable amount is below PHP 1.00',
+      );
     }
 
     const refund = await this.prisma.refund.create({
