@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, UserRole } from '@prisma/client';
+import { Prisma, UserRole, VendorStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../common/prisma/prisma.service';
 import {
@@ -20,6 +20,63 @@ import {
 @Injectable()
 export class AdminService {
   constructor(private readonly prisma: PrismaService) {}
+
+  async listVendors() {
+    return this.prisma.vendor.findMany({
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        createdAt: true,
+        owner: { select: { fullName: true } },
+      },
+    });
+  }
+
+  async updateVendorStatus(
+    vendorId: string,
+    status: VendorStatus,
+    actorUserId: string,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const vendor = await tx.vendor.findUnique({
+        where: { id: vendorId },
+        select: { id: true, status: true, name: true },
+      });
+
+      if (!vendor) {
+        throw new NotFoundException('Vendor not found');
+      }
+      if (vendor.status === status) {
+        throw new ConflictException('Vendor already has this status');
+      }
+
+      const updated = await tx.vendor.updateMany({
+        where: { id: vendorId, status: vendor.status },
+        data: { status },
+      });
+      if (updated.count !== 1) {
+        throw new ConflictException('Vendor status changed; please retry');
+      }
+
+      const approved =
+        vendor.status === VendorStatus.PENDING_APPROVAL &&
+        status === VendorStatus.ACTIVE;
+      await tx.auditRecord.create({
+        data: {
+          actorUserId,
+          actionType: approved ? 'VENDOR_APPROVED' : 'VENDOR_STATUS_UPDATED',
+          entityType: 'Vendor',
+          entityId: vendor.id,
+          beforeState: { status: vendor.status },
+          afterState: { status },
+        },
+      });
+
+      return { id: vendor.id, name: vendor.name, status };
+    });
+  }
 
   private toPrismaRole(role: AdminUserRoleDto): UserRole {
     switch (role) {
@@ -449,15 +506,20 @@ export class AdminService {
 
     try {
       await this.prisma.$transaction(async (tx) => {
-        await tx.user.update({
+        const updated = await tx.user.updateMany({
           where: {
             id: userId,
+            dataAccessGrantedAt: { not: null },
           },
           data: {
             email,
             studentEmailVerifiedAt: null,
           },
         });
+
+        if (updated.count !== 1) {
+          throw new ForbiddenException('User consent has been revoked');
+        }
 
         await tx.auditRecord.create({
           data: {
@@ -496,14 +558,19 @@ export class AdminService {
     const passwordHash = await bcrypt.hash(dto.password, 12);
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.user.update({
+      const updated = await tx.user.updateMany({
         where: {
           id: userId,
+          dataAccessGrantedAt: { not: null },
         },
         data: {
           passwordHash,
         },
       });
+
+      if (updated.count !== 1) {
+        throw new ForbiddenException('User consent has been revoked');
+      }
 
       await tx.auditRecord.create({
         data: {
@@ -552,6 +619,8 @@ export class AdminService {
     pendingRefunds,
     newSignupsThisWeek,
     recentAuditRecords,
+    recentOrders,
+    recentRefunds,
   ] = await Promise.all([
     this.prisma.user.count({
       where: {
@@ -657,6 +726,16 @@ export class AdminService {
         },
       },
     }),
+    this.prisma.order.findMany({
+      take: 10,
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, createdAt: true },
+    }),
+    this.prisma.refund.findMany({
+      take: 10,
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, createdAt: true },
+    }),
   ]);
 
   // An order should only contribute once even if duplicate COMPLETED
@@ -685,7 +764,7 @@ export class AdminService {
     new Prisma.Decimal(0),
   );
 
-  const recentActivity = recentAuditRecords.map((record) => {
+  const auditActivity = recentAuditRecords.map((record) => {
     const actorName = record.actor?.fullName ?? 'System';
 
     const actionMessages: Record<string, string> = {
@@ -695,6 +774,8 @@ export class AdminService {
       USER_EMAIL_UPDATED: "updated a user's email",
       USER_PASSWORD_UPDATED: "updated a user's password",
       REFUND_STATUS_UPDATED: "updated a refund's status",
+      VENDOR_APPROVED: 'approved a vendor',
+      VENDOR_STATUS_UPDATED: "updated a vendor's status",
     };
 
     const actionMessage =
@@ -707,6 +788,22 @@ export class AdminService {
       timestamp: record.createdAt,
     };
   });
+
+  const recentActivity = [
+    ...auditActivity,
+    ...recentOrders.map((order) => ({
+      id: `order:${order.id}`,
+      message: 'New order placed',
+      timestamp: order.createdAt,
+    })),
+    ...recentRefunds.map((refund) => ({
+      id: `refund:${refund.id}`,
+      message: 'Refund requested',
+      timestamp: refund.createdAt,
+    })),
+  ]
+    .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+    .slice(0, 10);
 
   return {
     metrics: {

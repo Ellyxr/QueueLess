@@ -24,6 +24,7 @@ import {
   RequestOrderRefundDto,
 } from './dto/request-order-refund.dto';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import type { UserRole } from '../auth/roles';
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 const TWO_MINUTES_MS = 2 * 60 * 1000;
@@ -43,26 +44,42 @@ export class RefundsService {
   async createRefund(
     userId: string,
     dto: CreateRefundDto,
+    roles: UserRole[],
   ) {
-    const payment = await this.prisma.payment.findFirst({
+    const payment = await this.prisma.payment.findUnique({
       where: {
         id: dto.paymentId,
-        payerUserId: userId,
       },
       select: {
         id: true,
+        payerUserId: true,
         amount: true,
         currency: true,
         status: true,
         paymentShares: {
           select: {
             orderId: true,
+            order: {
+              select: {
+                vendor: { select: { ownerUserId: true } },
+              },
+            },
           },
         },
       },
     });
 
-    if (!payment) {
+    const isPayer = payment?.payerUserId === userId;
+    const isVendorOwner = Boolean(
+      payment &&
+      roles.includes('VENDOR_OWNER') &&
+      payment.paymentShares.length > 0 &&
+      payment.paymentShares.every(
+        (share) => share.order.vendor.ownerUserId === userId,
+      ),
+    );
+
+    if (!payment || (!isPayer && !isVendorOwner)) {
       throw new NotFoundException('Payment not found');
     }
 
@@ -131,6 +148,12 @@ export class RefundsService {
       orderItem,
     );
 
+    if (remaining.lessThan(1)) {
+      throw new ConflictException(
+        'Remaining refundable amount is below PHP 1.00',
+      );
+    }
+
     if (requestedAmount.greaterThan(remaining)) {
       throw new BadRequestException(
         `Refund amount exceeds the remaining refundable amount of ${remaining.toFixed(2)}`,
@@ -148,7 +171,9 @@ export class RefundsService {
           amount: requestedAmount,
           reason,
           status: RefundStatus.REQUESTED,
-          initiatedBy: RefundInitiator.BUYER,
+          initiatedBy: isPayer
+            ? RefundInitiator.BUYER
+            : RefundInitiator.VENDOR,
           requestedByUserId: userId,
         },
         select: {
@@ -282,9 +307,7 @@ export class RefundsService {
     }
 
     if (dto.status === RefundStatus.PROCESSED) {
-      throw new BadRequestException(
-        'Use the refund processing endpoint to process an approved refund',
-      );
+      return this.processRefund(refundId, actorUserId);
     }
 
     const allowedTransitions: Record<
@@ -310,9 +333,15 @@ export class RefundsService {
 
     const updatedRefund = await this.prisma.$transaction(
       async (tx) => {
-        const updated = await tx.refund.update({
-          where: { id: refund.id },
+        const result = await tx.refund.updateMany({
+          where: { id: refund.id, status: refund.status },
           data: { status: dto.status },
+        });
+        if (result.count !== 1) {
+          throw new ConflictException('Refund status changed; please retry');
+        }
+        const updated = await tx.refund.findUniqueOrThrow({
+          where: { id: refund.id },
           select: {
             id: true,
             paymentId: true,
@@ -429,6 +458,7 @@ export class RefundsService {
     const providerRefund = await this.paymongoService.createRefund({
       paymentResourceId: refund.payment.providerPaymentResourceId,
       amount: amountInCentavos,
+      idempotencyKey: refund.id,
       reason: 'others',
       notes: refund.reason ?? undefined,
     });
@@ -724,6 +754,12 @@ export class RefundsService {
       orderItem,
     );
 
+    if (remaining.lessThan(1)) {
+      throw new ConflictException(
+        'Remaining refundable amount is below PHP 1.00',
+      );
+    }
+
     const refund = await this.prisma.refund.create({
       data: {
         paymentId: payment.id,
@@ -832,6 +868,12 @@ export class RefundsService {
       remaining = await this.resolveRefundableAmount(payment, null);
     } catch {
       return null;
+    }
+
+    if (remaining.lessThan(1)) {
+      throw new ConflictException(
+        'Remaining refundable amount is below PHP 1.00',
+      );
     }
 
     const refund = await this.prisma.refund.create({
