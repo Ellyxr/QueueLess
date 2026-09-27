@@ -11,7 +11,9 @@ interface CreateCheckoutSessionParams {
   amount: number;
   description: string;
   referenceNumber: string;
-  orderId: string;
+  orderId?: string;
+  pasabuyRequestId?: string;
+  itemName?: string;
 }
 
 interface PaymongoCheckoutSessionResponse {
@@ -87,13 +89,15 @@ export class PaymongoService {
       `${secretKey}:`,
     ).toString('base64');
 
-    const orderIdParam = `orderId=${encodeURIComponent(params.orderId)}`;
+    const redirectParam = params.pasabuyRequestId
+      ? `pasabuyRequestId=${encodeURIComponent(params.pasabuyRequestId)}`
+      : `orderId=${encodeURIComponent(params.orderId ?? '')}`;
 
     const successUrlWithOrder =
-      `${successUrl}${successUrl.includes('?') ? '&' : '?'}${orderIdParam}`;
+      `${successUrl}${successUrl.includes('?') ? '&' : '?'}${redirectParam}`;
 
     const cancelUrlWithOrder =
-      `${cancelUrl}${cancelUrl.includes('?') ? '&' : '?'}${orderIdParam}`;
+      `${cancelUrl}${cancelUrl.includes('?') ? '&' : '?'}${redirectParam}`;
 
     try {
       const response = await fetch(
@@ -111,7 +115,7 @@ export class PaymongoService {
                   {
                     currency: 'PHP',
                     amount: params.amount,
-                    name: 'QueueLess Order Payment',
+                    name: params.itemName ?? 'QueueLess Order Payment',
                     description: params.description,
                     quantity: 1,
                   },
@@ -176,6 +180,121 @@ export class PaymongoService {
         'Unable to connect to PayMongo',
       );
     }
+  }
+
+  async expireCheckoutSession(checkoutSessionId: string): Promise<boolean> {
+    const secretKey = this.configService.get<string>('PAYMONGO_SECRET_KEY');
+    if (!secretKey || !secretKey.startsWith('sk_test_')) {
+      throw new InternalServerErrorException('PayMongo Sandbox secret key is not configured');
+    }
+    if (!/^cs_[A-Za-z0-9]+$/.test(checkoutSessionId)) {
+      throw new BadGatewayException('Invalid PayMongo checkout session ID');
+    }
+    const response = await fetch(
+      `https://api.paymongo.com/v1/checkout_sessions/${checkoutSessionId}/expire`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${secretKey}:`).toString('base64')}`,
+        },
+      },
+    );
+    if (response.status === 400) {
+      // A retry may see an already expired session; a paid session must wait
+      // for its webhook and must not release the assigned deliverer.
+      const current = await fetch(
+        `https://api.paymongo.com/v1/checkout_sessions/${checkoutSessionId}`,
+        { headers: { Authorization: `Basic ${Buffer.from(`${secretKey}:`).toString('base64')}` } },
+      );
+      if (!current.ok) return false;
+      const body = (await current.json()) as { data?: { attributes?: { status?: string } } };
+      return body.data?.attributes?.status === 'expired';
+    }
+    if (!response.ok) throw new BadGatewayException('Unable to expire PayMongo checkout');
+    return true;
+  }
+
+  async retrievePayment(paymentResourceId: string): Promise<{
+    status: string;
+    amount: number;
+    currency: string;
+  }> {
+    const secretKey = this.configService.get<string>('PAYMONGO_SECRET_KEY');
+    if (!secretKey || !secretKey.startsWith('sk_test_')) {
+      throw new InternalServerErrorException('PayMongo Sandbox secret key is not configured');
+    }
+    if (!/^pay_[A-Za-z0-9]+$/.test(paymentResourceId)) {
+      throw new BadGatewayException('Invalid PayMongo payment resource ID');
+    }
+
+    const response = await fetch(
+      `https://api.paymongo.com/v1/payments/${paymentResourceId}`,
+      { headers: { Authorization: `Basic ${Buffer.from(`${secretKey}:`).toString('base64')}` } },
+    );
+    if (!response.ok) {
+      throw new BadGatewayException('Unable to verify PayMongo payment');
+    }
+    const resource = (await response.json()) as {
+      data?: {
+        id?: string;
+        type?: string;
+        attributes?: { status?: string; amount?: number; currency?: string };
+      };
+    };
+    if (resource.data?.id !== paymentResourceId || resource.data.type !== 'payment' ||
+      typeof resource.data.attributes?.status !== 'string' ||
+      typeof resource.data.attributes.amount !== 'number' ||
+      typeof resource.data.attributes.currency !== 'string') {
+      throw new BadGatewayException('Invalid PayMongo payment resource');
+    }
+    return {
+      status: resource.data.attributes.status,
+      amount: resource.data.attributes.amount,
+      currency: resource.data.attributes.currency,
+    };
+  }
+
+  async retrieveCheckoutPaymentIds(checkoutSessionId: string): Promise<{
+    referenceNumber: string;
+    paymentIds: string[];
+  }> {
+    const secretKey = this.configService.get<string>('PAYMONGO_SECRET_KEY');
+    if (!secretKey || !secretKey.startsWith('sk_test_')) {
+      throw new InternalServerErrorException('PayMongo Sandbox secret key is not configured');
+    }
+    if (!/^cs_[A-Za-z0-9]+$/.test(checkoutSessionId)) {
+      throw new BadGatewayException('Invalid PayMongo checkout session ID');
+    }
+
+    const response = await fetch(
+      `https://api.paymongo.com/v1/checkout_sessions/${checkoutSessionId}`,
+      { headers: { Authorization: `Basic ${Buffer.from(`${secretKey}:`).toString('base64')}` } },
+    );
+    if (!response.ok) throw new BadGatewayException('Unable to verify PayMongo checkout session');
+    const resource = (await response.json()) as {
+      data?: {
+        id?: string;
+        type?: string;
+        attributes?: {
+          reference_number?: string;
+          payments?: Array<{ id?: string; type?: string }>;
+        };
+      };
+    };
+    if (!resource.data || resource.data.id !== checkoutSessionId ||
+      resource.data.type !== 'checkout_session' ||
+      !resource.data.attributes ||
+      typeof resource.data.attributes.reference_number !== 'string' ||
+      !Array.isArray(resource.data.attributes.payments)) {
+      throw new BadGatewayException('Invalid PayMongo checkout session');
+    }
+    return {
+      referenceNumber: resource.data.attributes.reference_number,
+      paymentIds: resource.data.attributes.payments
+        .filter((item) => item?.type === 'payment' &&
+          typeof item.id === 'string' && /^pay_[A-Za-z0-9]+$/.test(item.id))
+        .map((item) => item.id as string),
+    };
   }
 
   async createRefund(

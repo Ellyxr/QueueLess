@@ -16,6 +16,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { PaymongoService } from './paymongo.service';
 import { RefundsService } from '../refunds/refunds.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { PasabuyPaymentsService } from '../pasabuy/pasabuy-payments.service';
 
 @Injectable()
 export class PaymentsService {
@@ -24,6 +25,7 @@ export class PaymentsService {
     private readonly paymongoService: PaymongoService,
     private readonly refundsService: RefundsService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly pasabuyPayments: PasabuyPaymentsService,
   ) {}
 
   async createCheckout(
@@ -431,7 +433,14 @@ export class PaymentsService {
       );
     }
 
-    const data = (event as {
+    const modern = (event as {
+      data?: { type?: string; data?: unknown };
+    }).data;
+    const webhookEvent = modern?.type === 'checkout_session.payment.paid' && modern.data
+      ? { data: { attributes: { type: modern.type, data: modern.data } } }
+      : event;
+
+    const data = (webhookEvent as {
       data?: {
         id?: string;
         type?: string;
@@ -449,6 +458,8 @@ export class PaymentsService {
                 type?: string;
                 attributes?: {
                   status?: string;
+                  amount?: number;
+                  currency?: string;
                 };
               }>;
 
@@ -555,6 +566,7 @@ export class PaymentsService {
           status: true,
           providerRefundId: true,
           processedAt: true,
+          paymentId: true,
         },
       });
 
@@ -662,6 +674,8 @@ export class PaymentsService {
         };
       }
 
+      await this.refundsService.markPasabuyRefunded(refund.paymentId);
+
       return {
         received: true,
         processed: true,
@@ -703,24 +717,30 @@ export class PaymentsService {
 
 
 
-    const payment = await this.prisma.payment.findFirst({
+    let payment = await this.prisma.payment.findFirst({
       where: {
         providerPaymentId: checkoutSession.id,
-        purpose: PaymentPurpose.ORDER_SHARE,
+        purpose: { in: [PaymentPurpose.ORDER_SHARE, PaymentPurpose.PASABUY] },
       },
       include: {
         paymentShares: true,
       },
     });
 
+    const referenceNumber = checkoutSession.attributes?.reference_number;
+    if (!payment && typeof referenceNumber === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(referenceNumber)) {
+      payment = await this.prisma.payment.findFirst({
+        where: { id: referenceNumber, purpose: PaymentPurpose.PASABUY,
+          providerPaymentId: null },
+        include: { paymentShares: true },
+      });
+    }
     if (!payment) {
       throw new NotFoundException(
         'Payment for PayMongo checkout session not found',
       );
     }
-
-    const referenceNumber =
-      checkoutSession.attributes?.reference_number;
 
     if (
       typeof referenceNumber !== 'string' ||
@@ -737,6 +757,41 @@ export class PaymentsService {
       );
     }
 
+    if (payment.purpose === PaymentPurpose.PASABUY) {
+      if (payment.providerPaymentId && payment.providerPaymentId !== checkoutSession.id) {
+        throw new BadRequestException('Pasabuy checkout session does not match');
+      }
+      // The event can omit payments altogether. Read the checkout directly
+      // from PayMongo and verify its payment before updating local state.
+      const checkout = await this.paymongoService.retrieveCheckoutPaymentIds(checkoutSession.id);
+      if (checkout.referenceNumber !== payment.id) {
+        throw new BadRequestException('PayMongo checkout reference does not match');
+      }
+      if (!checkout.paymentIds.length || checkout.paymentIds.length > 10) {
+        throw new BadRequestException('PayMongo checkout session has no verifiable payment');
+      }
+      let paidPaymentId: string | undefined;
+      for (const paymentId of checkout.paymentIds) {
+        const verified = await this.paymongoService.retrievePayment(paymentId);
+        if (verified.status === 'paid' &&
+          verified.amount === payment.amount.mul(100).toNumber() &&
+          verified.currency === payment.currency) {
+          paidPaymentId = paymentId;
+          break;
+        }
+      }
+      if (!paidPaymentId) {
+        throw new BadRequestException('Pasabuy payment is not paid or amount does not match');
+      }
+      const result = await this.pasabuyPayments.confirmPaid(payment.id, paidPaymentId);
+      if (result.autoRefund) {
+        await this.refundsService.autoRefundPayment(payment.id, 'PASABUY_PAYMENT_EXPIRED',
+          'Pasabuy fee arrived after the assignment expired.');
+      }
+      return { received: true, processed: !result.duplicate, eventType,
+        paymentId: payment.id, ...result };
+    }
+
     /*
      * PayMongo checkout_session.payment.paid sends the actual
      * Payment resource inside attributes.payments.
@@ -747,7 +802,8 @@ export class PaymentsService {
     const providerPayment =
       checkoutSession.attributes?.payments?.find(
         (providerPayment) =>
-          providerPayment.type === 'payment' &&
+          (providerPayment.type === 'payment' ||
+            (modern?.type === 'checkout_session.payment.paid' && !providerPayment.type)) &&
           providerPayment.attributes?.status === 'paid' &&
           typeof providerPayment.id === 'string' &&
           providerPayment.id.trim().length > 0,
