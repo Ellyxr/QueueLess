@@ -5,7 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { VendorType } from '@prisma/client';
+import { VendorStatus, VendorType } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import * as jwt from 'jsonwebtoken';
 import type { SignOptions } from 'jsonwebtoken';
@@ -94,6 +94,7 @@ export class AuthService {
             ownerUserId: createdUser.id,
             name: businessName!.trim(),
             vendorType: VendorType.STUDENT,
+            status: VendorStatus.PENDING_APPROVAL,
           },
         });
       }
