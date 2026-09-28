@@ -40,3 +40,20 @@ vendor role. A successful change and its `VENDOR_APPROVED` or
 `VENDOR_STATUS_UPDATED` audit record commit together. Repeating the current
 status returns 409 and does not add an audit entry. Public vendor discovery
 already returns only `ACTIVE` stores.
+
+## Transaction monitoring (US-047)
+
+All routes require a current `ADMIN` role. `GET /admin/transactions` returns
+payments in descending creation order with `page` (default 1), `limit`
+(default 20, maximum 100), `total`, and `totalPages`. Filter by `status`,
+`purpose`, `provider`, `payerUserId`, `vendorId`, `orderId`, `from`, and `to`.
+Dates are inclusive ISO-8601 instants; a reversed range returns 400. An order
+filter matches order-share payments and Pasabuy payments with a related order.
+The vendor filter also covers subscription and featured-listing payments.
+
+`GET /admin/transactions/summary` uses the same filters and groups payment
+counts and amounts by purpose, status, and currency. `GET /admin/transactions/:id`
+returns a single payment. Amounts are decimal strings. Both list and detail
+include the payer's ID/name and selected linked order, Pasabuy, subscription,
+or featured-listing data. Responses exclude payer contact information,
+checkout URLs, and PayMongo resource IDs. No payment mutation is exposed.
