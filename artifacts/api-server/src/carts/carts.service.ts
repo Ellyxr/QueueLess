@@ -215,23 +215,19 @@ export class CartsService {
     const totals =
       this.pricingService.calculateOrderTotals(subtotal);
 
-    const pasabuyDeliveryFee = isPasabuyRequest
-      ? this.pricingService.getPasabuyDeliveryFee()
-      : new Prisma.Decimal(0);
-
-    const finalTotal = totals.totalAmount
-      .add(pasabuyDeliveryFee)
-      .toDecimalPlaces(2);
-
     return {
       cartId: cart.id,
       items,
       subtotal: totals.subtotal.toFixed(2),
       fees: {
         marketplaceFee: totals.marketplaceFee.toFixed(2),
-        pasabuyDeliveryFee: pasabuyDeliveryFee.toFixed(2),
+        pasabuyDeliveryFee: '0.00',
       },
-      totalAmount: finalTotal.toFixed(2),
+      ...(isPasabuyRequest ? {
+        pasabuyFeeOptions: this.pricingService.getPasabuyFeeOptions(),
+        pasabuyFeePayableAfterAcceptance: true,
+      } : {}),
+      totalAmount: totals.totalAmount.toFixed(2),
     };
   }
 
