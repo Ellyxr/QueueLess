@@ -16,6 +16,7 @@ import AdminDashboardPage from '@/features/admin/admin-dashboard';
 import AdminRefundsPage from '@/features/admin/admin-refunds';
 import AdminUsersPage from '@/features/admin/admin-users';
 import PasabuyPage from '@/features/pasabuy/pasabuy-page';
+import ReportsPage from "@/features/reports/reports-page";
 import { useLocation } from 'wouter';
 
 import {
@@ -117,6 +118,7 @@ export function AppRouter() {
             <Route path="/payment/success" component={PaymentSuccessPage} />
             <Route path="/payment/cancel" component={PaymentCancelPage} />
             <Route path="/profile" component={Profile} />
+            <Route path="/reports" component={ReportsPage} />
             <Route path="/pasabuy/:id" component={PasabuyPage} />
             <Route path="/pasabuy" component={PasabuyPage} />
             <Route path="/vendor" component={VendorRoute} />

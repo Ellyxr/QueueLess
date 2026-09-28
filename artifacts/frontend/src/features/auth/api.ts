@@ -285,8 +285,10 @@ export async function fetchWithAuth<T = unknown>(
     typeof window !== "undefined" ? localStorage.getItem("token") : null;
 
   const headers: HeadersInit = {
-    "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(!(options.body instanceof FormData)
+      ? { "Content-Type": "application/json" }
+      : {}),
     ...options.headers,
   };
 
@@ -906,4 +908,57 @@ export function setActivePortal(portal: Portal): void {
     localStorage.setItem("active-portal", portal);
     window.dispatchEvent(new Event(PORTAL_CHANGED_EVENT));
   }
+}
+
+export interface CreateReportInput {
+  targetType:
+    | "VENDOR"
+    | "USER"
+    | "ORDER"
+    | "TRANSACTION"
+    | "PRODUCT"
+    | "PASABUY";
+  targetId?: string;
+  category: string;
+  description: string;
+  attachment?: File;
+}
+
+export interface Report {
+  id: string;
+  category: string;
+  description: string;
+  status: string;
+  reporterUserId: string;
+  reportedVendorId: string | null;
+  reportedUserId: string | null;
+  reportedOrderId: string | null;
+  reportedPaymentId: string | null;
+  reportedProductId: string | null;
+  reportedPasabuyId: string | null;
+  createdAt: string;
+}
+
+export async function createReport(
+  data: CreateReportInput,
+): Promise<unknown> {
+  const formData = new FormData();
+
+  formData.append("targetType", data.targetType);
+
+  if (data.targetId?.trim()) {
+    formData.append("targetId", data.targetId.trim());
+  }
+
+  formData.append("category", data.category.trim());
+  formData.append("description", data.description.trim());
+
+  if (data.attachment) {
+    formData.append("attachment", data.attachment);
+  }
+
+  return fetchWithAuth("/reports", {
+    method: "POST",
+    body: formData,
+  });
 }

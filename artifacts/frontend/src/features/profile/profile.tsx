@@ -3,8 +3,11 @@ import {
   AlertCircle,
   Check,
   CreditCard,
+  ChevronDown,
+  ChevronRight,
   Eye,
   EyeOff,
+  HelpCircle,
   LifeBuoy,
   LogOut,
   MoonStar,
@@ -121,6 +124,7 @@ export default function ProfilePage() {
   const [vendorApplicationSubmitted, setVendorApplicationSubmitted] = useState(false);
   const [vendorBusinessName, setVendorBusinessName] = useState("");
   const [vendorDescription, setVendorDescription] = useState("");
+  const [showHelpCenter, setShowHelpCenter] = useState(false);
 
   useEffect(() => {
     Promise.all([getMyProfile(), getMyOrders(), getMyFavoriteVendors()])
@@ -974,36 +978,45 @@ export default function ProfilePage() {
         </aside>
       </div>
 
-      <div className="mt-8 flex flex-col gap-3 border-t border-border pt-6 sm:flex-row sm:justify-end">
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() =>
-            (window.location.href =
-              "mailto:nicholequimpan@gmail.com?cc=avrilphoebematanguiham@gmail.com,lingahanayanna@gmail.com&subject=QueueLess%20problem")
-          }
-          className="rounded-full text-blue-600 hover:bg-blue-50 hover:text-blue-700"
-        >
-          Report a problem
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={logoutUser}
-          className="gap-2 rounded-full hover:bg-destructive/10 hover:text-destructive"
-        >
-          <LogOut className="h-4 w-4" />
-          Log out
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          className="gap-2 rounded-full text-destructive hover:bg-destructive/5"
-        >
-          <Trash2 className="h-4 w-4" />
-          Delete account
-        </Button>
+      <div className="mt-8 flex flex-col gap-4 border-t border-border pt-6 sm:flex-row sm:items-center sm:justify-between">
+  <div className="relative">
+
+    <Button type="button" variant="ghost" onClick={() => setShowHelpCenter((current) => !current)} className="w-fit gap-2 rounded-full text-blue-600 hover:bg-blue-50 hover:text-blue-700" aria-expanded={showHelpCenter} aria-haspopup="menu">
+      <LifeBuoy className="h-4 w-4" />
+      Help Center
+      <ChevronDown className={`h-4 w-4 transition-transform ${showHelpCenter ? "rotate-180" : ""}`} />
+    </Button>
+
+    {showHelpCenter && (
+      <div className="absolute bottom-full left-0 z-50 mb-3 w-[320px] overflow-hidden rounded-[18px] border border-border bg-background shadow-xl">
+        <div className="flex items-center justify-between bg-primary px-5 py-3 text-primary-foreground">
+          <div className="flex items-center gap-2"><LifeBuoy className="h-4 w-4" /><span className="font-semibold">Help Center</span></div>
+          <button type="button" onClick={() => setShowHelpCenter(false)} className="rounded-full p-1 transition-colors hover:bg-white/10" aria-label="Close Help Center"><ChevronDown className="h-5 w-5" /></button>
+        </div>
+
+        <button type="button" onClick={() => { setShowHelpCenter(false); window.location.href = "/reports"; }} className="flex w-full items-center gap-3 border-b border-border px-5 py-4 text-left transition-colors hover:bg-secondary/50">
+          <LifeBuoy className="h-5 w-5 shrink-0 text-blue-600" />
+          <div className="flex-1"><p className="text-sm font-medium text-foreground">Report a problem</p><p className="mt-0.5 text-xs text-muted-foreground">Report an issue with an order, payment, vendor, or product.</p></div>
+          <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
+        </button>
+
+        <button type="button" disabled className="flex w-full cursor-not-allowed items-center gap-3 px-5 py-4 text-left opacity-60">
+          <HelpCircle className="h-5 w-5 shrink-0 text-muted-foreground" />
+          <div className="flex-1"><div className="flex items-center gap-2"><p className="text-sm font-medium text-foreground">FAQ</p></div><p className="mt-0.5 text-xs text-muted-foreground">Find answers to frequently asked questions.</p></div>
+          <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
+        </button>
+
       </div>
+    )}
+
+  </div>
+
+  <div className="flex items-center gap-2">
+    <Button type="button" variant="ghost" onClick={logoutUser} className="gap-2 rounded-full hover:bg-destructive/10 hover:text-destructive"><LogOut className="h-4 w-4" />Log out</Button>
+    <Button type="button" variant="ghost" className="gap-2 rounded-full text-destructive hover:bg-destructive/5"><Trash2 className="h-4 w-4" />Delete account</Button>
+  </div>
+
+</div>
     </main>
   );
 }
