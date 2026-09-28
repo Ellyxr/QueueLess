@@ -2,14 +2,83 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateReportDto, ReportTargetType } from './dto/create-report.dto';
+import { ListReportsDto } from './dto/list-reports.dto';
 
 type TargetFields = Pick<Prisma.ReportUncheckedCreateInput,
   'reportedVendorId' | 'reportedUserId' | 'reportedOrderId' |
   'reportedPaymentId' | 'reportedProductId' | 'reportedPasabuyId'>;
 
+const targetFilters: Record<ReportTargetType, Prisma.ReportWhereInput> = {
+  VENDOR: { reportedVendorId: { not: null } },
+  USER: { reportedUserId: { not: null } },
+  ORDER: { reportedOrderId: { not: null } },
+  TRANSACTION: { reportedPaymentId: { not: null } },
+  PRODUCT: { reportedProductId: { not: null } },
+  PASABUY: { reportedPasabuyId: { not: null } },
+};
+
+const reportSummary = {
+  id: true,
+  category: true,
+  description: true,
+  status: true,
+  reporterUserId: true,
+  reporter: { select: { id: true, fullName: true, email: true } },
+  reportedVendorId: true,
+  reportedUserId: true,
+  reportedOrderId: true,
+  reportedPaymentId: true,
+  reportedProductId: true,
+  reportedPasabuyId: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.ReportSelect;
+
 @Injectable()
 export class ReportsService {
   constructor(private readonly prisma: PrismaService) {}
+
+  async list(query: ListReportsDto) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    const where: Prisma.ReportWhereInput = {
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.category ? { category: query.category } : {}),
+      ...(query.targetType ? targetFilters[query.targetType] : {}),
+    };
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.report.findMany({
+        where,
+        select: reportSummary,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.report.count({ where }),
+    ]);
+    return { items, page, limit, total, totalPages: Math.ceil(total / limit) };
+  }
+
+  async detail(id: string) {
+    const report = await this.prisma.report.findUnique({
+      where: { id },
+      select: {
+        ...reportSummary,
+        reportedVendor: { select: { id: true, name: true } },
+        reportedUser: { select: { id: true, fullName: true } },
+        reportedOrder: { select: { id: true, status: true } },
+        reportedPayment: { select: { id: true, purpose: true, status: true } },
+        reportedProduct: { select: { id: true, name: true, vendorId: true } },
+        reportedPasabuy: { select: { id: true, status: true } },
+        statusHistory: {
+          orderBy: [{ changedAt: 'asc' }, { id: 'asc' }],
+          select: { id: true, status: true, note: true, changedAt: true, adminUserId: true },
+        },
+      },
+    });
+    if (!report) throw new NotFoundException('Report not found');
+    return report;
+  }
 
   async create(reporterUserId: string, dto: CreateReportDto) {
     const category = dto.category.trim();
