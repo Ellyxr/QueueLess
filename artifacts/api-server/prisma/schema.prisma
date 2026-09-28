@@ -725,18 +725,36 @@ model FeaturedListing {
   id        String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   vendorId  String                @db.Uuid
   productId String?               @db.Uuid
-  startDate DateTime              @db.Timestamptz(6)
-  endDate   DateTime              @db.Timestamptz(6)
-  pricePaid Decimal               @db.Decimal(10, 2)
-  status    FeaturedListingStatus @default(ACTIVE)
+  planId    String?               @db.Uuid
+  placement FeaturedListingPlacement @default(MARKETPLACE_HOME)
+  startDate DateTime?             @db.Timestamptz(6)
+  endDate   DateTime?             @db.Timestamptz(6)
+  pricePaid Decimal?              @db.Decimal(10, 2)
+  status    FeaturedListingStatus @default(PENDING)
   createdAt DateTime              @default(now()) @db.Timestamptz(6)
   product   Product?              @relation(fields: [productId], references: [id])
   vendor    Vendor                @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  plan      FeaturedListingPlan?  @relation(fields: [planId], references: [id], onDelete: Restrict)
   payments  Payment[]
 
   @@index([vendorId])
   @@index([productId])
+  @@index([placement, status, endDate])
   @@map("featured_listings")
+}
+
+model FeaturedListingPlan {
+  id           String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String                   @unique
+  placement    FeaturedListingPlacement
+  price        Decimal                  @db.Decimal(10, 2)
+  durationDays Int
+  isActive     Boolean                  @default(true)
+  createdAt    DateTime                 @default(now()) @db.Timestamptz(6)
+  listings     FeaturedListing[]
+
+  @@index([placement, isActive])
+  @@map("featured_listing_plans")
 }
 
 model Notification {
@@ -930,8 +948,16 @@ enum VendorSubscriptionStatus {
 }
 
 enum FeaturedListingStatus {
+  PENDING
   ACTIVE
   EXPIRED
+  CANCELLED
+}
+
+enum FeaturedListingPlacement {
+  MARKETPLACE_HOME
+  VENDOR_DIRECTORY
+  PRODUCT_SPOTLIGHT
 }
 
 enum EventStatus {
