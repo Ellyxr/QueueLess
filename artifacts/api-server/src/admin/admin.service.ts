@@ -16,13 +16,26 @@ import {
   UpdateAdminUserRolesDto,
   UpdateAdminUserStatusDto,
 } from './dto/admin-user.dto';
+import { ListAdminVendorsDto } from './dto/admin-vendor.dto';
 
 @Injectable()
 export class AdminService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async listVendors() {
+  async listVendors(query: ListAdminVendorsDto = {}) {
+    const where: Prisma.VendorWhereInput = {
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.vendorType ? { vendorType: query.vendorType } : {}),
+      ...(query.search ? {
+        OR: [
+          { name: { contains: query.search, mode: 'insensitive' as const } },
+          { businessName: { contains: query.search, mode: 'insensitive' as const } },
+          { owner: { fullName: { contains: query.search, mode: 'insensitive' as const } } },
+        ],
+      } : {}),
+    };
     return this.prisma.vendor.findMany({
+      where,
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
@@ -34,15 +47,108 @@ export class AdminService {
     });
   }
 
+  async getVendor(vendorId: string) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { id: vendorId },
+      select: {
+        id: true,
+        name: true,
+        businessName: true,
+        description: true,
+        campusLocation: true,
+        pickupLocation: true,
+        vendorType: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        owner: {
+          select: {
+            id: true, fullName: true, isActive: true, archivedAt: true,
+            roleAssignments: {
+              where: { role: UserRole.VENDOR_OWNER, revokedAt: null },
+              select: { id: true },
+            },
+          },
+        },
+        _count: { select: { products: true, orders: true, reportsTargeting: true } },
+      },
+    });
+    if (!vendor) throw new NotFoundException('Vendor not found');
+    return {
+      id: vendor.id,
+      name: vendor.name,
+      businessName: vendor.businessName,
+      description: vendor.description,
+      campusLocation: vendor.campusLocation,
+      pickupLocation: vendor.pickupLocation,
+      vendorType: vendor.vendorType,
+      status: vendor.status,
+      createdAt: vendor.createdAt,
+      updatedAt: vendor.updatedAt,
+      owner: {
+        id: vendor.owner.id,
+        fullName: vendor.owner.fullName,
+        isActive: vendor.owner.isActive,
+        isArchived: vendor.owner.archivedAt !== null,
+        hasVendorRole: vendor.owner.roleAssignments.length > 0,
+      },
+      productCount: vendor._count.products,
+      orderCount: vendor._count.orders,
+      reportCount: vendor._count.reportsTargeting,
+    };
+  }
+
+  async getVendorAudit(vendorId: string, page: number, limit: number) {
+    if (!Number.isSafeInteger(page) || page < 1 ||
+        !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+        !Number.isSafeInteger((page - 1) * limit)) {
+      throw new BadRequestException('page must be positive and limit must be between 1 and 100');
+    }
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { id: vendorId }, select: { id: true },
+    });
+    if (!vendor) throw new NotFoundException('Vendor not found');
+    const where: Prisma.AuditRecordWhereInput = {
+      entityType: 'Vendor', entityId: vendorId,
+      actionType: { startsWith: 'VENDOR_' },
+    };
+    const [total, items] = await this.prisma.$transaction([
+      this.prisma.auditRecord.count({ where }),
+      this.prisma.auditRecord.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true, actorUserId: true, actionType: true,
+          beforeState: true, afterState: true, createdAt: true,
+        },
+      }),
+    ]);
+    return { items, page, limit, total, totalPages: Math.ceil(total / limit) };
+  }
+
   async updateVendorStatus(
     vendorId: string,
     status: VendorStatus,
     actorUserId: string,
+    reason?: string,
   ) {
     return this.prisma.$transaction(async (tx) => {
       const vendor = await tx.vendor.findUnique({
         where: { id: vendorId },
-        select: { id: true, status: true, name: true },
+        select: {
+          id: true, status: true, name: true,
+          owner: {
+            select: {
+              isActive: true, archivedAt: true,
+              roleAssignments: {
+                where: { role: UserRole.VENDOR_OWNER, revokedAt: null },
+                select: { id: true },
+              },
+            },
+          },
+        },
       });
 
       if (!vendor) {
@@ -50,6 +156,11 @@ export class AdminService {
       }
       if (vendor.status === status) {
         throw new ConflictException('Vendor already has this status');
+      }
+      if (status === VendorStatus.ACTIVE &&
+          (!vendor.owner.isActive || vendor.owner.archivedAt !== null ||
+           vendor.owner.roleAssignments.length === 0)) {
+        throw new ConflictException('Vendor owner needs an active account and vendor role');
       }
 
       const updated = await tx.vendor.updateMany({
@@ -70,7 +181,7 @@ export class AdminService {
           entityType: 'Vendor',
           entityId: vendor.id,
           beforeState: { status: vendor.status },
-          afterState: { status },
+          afterState: { status, ...(reason ? { reason } : {}) },
         },
       });
 
