@@ -26,6 +26,8 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { AdminService } from './admin.service';
+import { AdminTransactionsService } from './admin-transactions.service';
+import { AdminTransactionFiltersDto, AdminTransactionsQueryDto } from './dto/admin-transactions.dto';
 import {
   AdminUserRoleDto,
   CreateAdminUserDto,
@@ -51,7 +53,8 @@ type AuthenticatedRequest = Request & {
 @Roles('ADMIN')
 export class AdminController {
   constructor(private readonly adminService: AdminService,
-    private readonly pasabuyIdentity: PasabuyIdentityService) {}
+    private readonly pasabuyIdentity: PasabuyIdentityService,
+    private readonly transactions: AdminTransactionsService) {}
 
   @Get('pasabuy/student-ids')
   @ApiOperation({ summary: 'Review private student ID submissions' })
@@ -140,6 +143,30 @@ export class AdminController {
       request.user.sub,
       dto.reason,
     );
+  }
+
+  @Get('transactions')
+  @ApiOperation({ summary: 'List payments across orders and paid features' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
+  listTransactions(
+    @Query() query: AdminTransactionsQueryDto,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    return this.transactions.list(query, page, limit);
+  }
+
+  @Get('transactions/summary')
+  @ApiOperation({ summary: 'Aggregate matching payments by purpose, status, and currency' })
+  transactionSummary(@Query() query: AdminTransactionFiltersDto) {
+    return this.transactions.summary(query);
+  }
+
+  @Get('transactions/:id')
+  @ApiOperation({ summary: 'Get a payment and its linked platform resource' })
+  transactionDetail(@Param('id', ParseUUIDPipe) id: string) {
+    return this.transactions.detail(id);
   }
 
   @Get('users')
