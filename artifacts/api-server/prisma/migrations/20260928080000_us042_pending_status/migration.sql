@@ -1,0 +1,1 @@
+ALTER TYPE "VendorSubscriptionStatus" ADD VALUE IF NOT EXISTS 'PENDING';
