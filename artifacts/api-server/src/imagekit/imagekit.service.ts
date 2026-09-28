@@ -31,4 +31,23 @@ export class ImagekitService {
   signedStudentIdUrl(path: string) {
     return this.imagekit.url({ path, signed: true, expireSeconds: 300 });
   }
+
+  async uploadPrivateReportAttachment(reportId: string, file: Buffer, extension: string) {
+    const result = await this.imagekit.upload({
+      file,
+      fileName: `${reportId}.${extension}`,
+      folder: '/report-attachments',
+      useUniqueFileName: true,
+      isPrivateFile: true,
+    });
+    return { fileId: result.fileId, path: result.filePath };
+  }
+
+  signedReportAttachmentUrl(path: string) {
+    return this.imagekit.url({ path, signed: true, expireSeconds: 300 });
+  }
+
+  async deletePrivateFile(fileId: string) {
+    await this.imagekit.deleteFile(fileId);
+  }
 }
