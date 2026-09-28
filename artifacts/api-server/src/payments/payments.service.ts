@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  FeaturedListingStatus,
   LedgerEntryType,
   OrderStatus,
   PaymentPurpose,
@@ -720,7 +721,7 @@ export class PaymentsService {
     let payment = await this.prisma.payment.findFirst({
       where: {
         providerPaymentId: checkoutSession.id,
-        purpose: { in: [PaymentPurpose.ORDER_SHARE, PaymentPurpose.PASABUY, PaymentPurpose.SUBSCRIPTION] },
+        purpose: { in: [PaymentPurpose.ORDER_SHARE, PaymentPurpose.PASABUY, PaymentPurpose.SUBSCRIPTION, PaymentPurpose.FEATURED_LISTING] },
       },
       include: {
         paymentShares: true,
@@ -731,7 +732,7 @@ export class PaymentsService {
     if (!payment && typeof referenceNumber === 'string' &&
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(referenceNumber)) {
       payment = await this.prisma.payment.findFirst({
-        where: { id: referenceNumber, purpose: { in: [PaymentPurpose.PASABUY, PaymentPurpose.SUBSCRIPTION] },
+        where: { id: referenceNumber, purpose: { in: [PaymentPurpose.PASABUY, PaymentPurpose.SUBSCRIPTION, PaymentPurpose.FEATURED_LISTING] },
           providerPaymentId: null },
         include: { paymentShares: true },
       });
@@ -755,6 +756,61 @@ export class PaymentsService {
       throw new BadRequestException(
         'PayMongo payment reference does not match',
       );
+    }
+
+    if (payment.purpose === PaymentPurpose.FEATURED_LISTING) {
+      if (!payment.featuredListingId ||
+        (payment.providerPaymentId && payment.providerPaymentId !== checkoutSession.id)) {
+        throw new BadRequestException('Featured listing checkout session does not match');
+      }
+      const checkout = await this.paymongoService.retrieveCheckoutPaymentIds(checkoutSession.id);
+      if (checkout.referenceNumber !== payment.id ||
+        !checkout.paymentIds.length || checkout.paymentIds.length > 10) {
+        throw new BadRequestException('Featured listing checkout cannot be verified');
+      }
+      let paidPaymentId: string | undefined;
+      for (const candidate of checkout.paymentIds) {
+        const verified = await this.paymongoService.retrievePayment(candidate);
+        if (verified.status === 'paid' &&
+          verified.amount === payment.amount.mul(100).toNumber() &&
+          verified.currency === payment.currency) {
+          paidPaymentId = candidate;
+          break;
+        }
+      }
+      if (!paidPaymentId) throw new BadRequestException('Featured listing payment is not paid or amount does not match');
+      const listingId = payment.featuredListingId;
+      const result = await this.prisma.$transaction(async (tx) => {
+        const current = await tx.featuredListing.findUnique({
+          where: { id: listingId }, include: { plan: true,
+            vendor: { select: { status: true } },
+            product: { select: { isAvailable: true } } },
+        });
+        if (!current) throw new NotFoundException('Featured listing not found');
+        if (payment.status === PaymentStatus.SUCCEEDED) {
+          return { duplicate: true, autoRefund: false };
+        }
+        const updatedPayment = await tx.payment.updateMany({
+          where: { id: payment.id, status: PaymentStatus.PENDING },
+          data: { status: PaymentStatus.SUCCEEDED, providerPaymentResourceId: paidPaymentId,
+            providerPaymentId: checkoutSession.id },
+        });
+        if (!updatedPayment.count) return { duplicate: true, autoRefund: false };
+        const now = new Date();
+        const eligible = current.plan && current.vendor.status === 'ACTIVE' &&
+          (!current.productId || current.product?.isAvailable);
+        const activated = eligible ? await tx.featuredListing.updateMany({
+          where: { id: listingId, status: FeaturedListingStatus.PENDING },
+          data: { status: FeaturedListingStatus.ACTIVE, pricePaid: payment.amount,
+            startDate: now,
+            endDate: new Date(now.getTime() + current.plan!.durationDays * 86_400_000) },
+        }) : { count: 0 };
+        return { duplicate: false, autoRefund: !activated.count };
+      });
+      if (result.autoRefund) await this.refundsService.autoRefundPayment(payment.id,
+        'FEATURED_LISTING_UNAVAILABLE', 'Featured listing payment arrived after the placement became unavailable.');
+      return { received: true, processed: !result.duplicate, eventType,
+        paymentId: payment.id, listingId, ...result };
     }
 
     if (payment.purpose === PaymentPurpose.SUBSCRIPTION) {
