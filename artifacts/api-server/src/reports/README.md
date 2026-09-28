@@ -14,3 +14,13 @@ that do not exist or are private to another user return 404.
 it creates a report and also changes the Pasabuy request to `DISPUTED`. The
 generic reports endpoint records an issue for review without changing the
 target's lifecycle.
+
+## Admin review (US-040)
+
+Only users with the `ADMIN` role may access `GET /api/v1/reports` and
+`GET /api/v1/reports/:id`. The list accepts optional `status` (`OPEN`,
+`IN_REVIEW`, `RESOLVED`, `DISMISSED`), exact `category`, and `targetType`
+(`VENDOR`, `USER`, `ORDER`, `TRANSACTION`, `PRODUCT`, `PASABUY`). `page` defaults
+to 1 and `limit` to 20, with a maximum of 100. It returns `{ items, page,
+limit, total, totalPages }`, sorted newest first (ID breaks timestamp ties).
+The detail route returns reporter and target summaries and status history.
