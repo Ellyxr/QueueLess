@@ -16,4 +16,19 @@ export class ImagekitService {
   getAuthenticationParameters() {
     return this.imagekit.getAuthenticationParameters();
   }
+
+  async uploadPrivateStudentId(userId: string, file: Buffer, extension: string) {
+    const result = await this.imagekit.upload({
+      file,
+      fileName: `${userId}-${Date.now()}.${extension}`,
+      folder: '/pasabuy-student-ids',
+      useUniqueFileName: true,
+      isPrivateFile: true,
+    });
+    return result.filePath;
+  }
+
+  signedStudentIdUrl(path: string) {
+    return this.imagekit.url({ path, signed: true, expireSeconds: 300 });
+  }
 }

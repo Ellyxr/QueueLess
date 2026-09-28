@@ -253,7 +253,20 @@ export class RefundsService {
           },
           payment: {
             select: {
+              id: true,
               currency: true,
+              pasabuyRequestId: true,
+              pasabuyRequest: {
+                select: {
+                  relatedOrderId: true,
+                  relatedOrder: {
+                    select: {
+                      createdAt: true,
+                      vendor: { select: { businessName: true } },
+                    },
+                  },
+                },
+              },
               paymentShares: {
                 select: {
                   orderId: true,
@@ -281,8 +294,10 @@ export class RefundsService {
 
       return {
         id: refund.id,
+        paymentId: refund.payment.id,
+        pasabuyRequestId: refund.payment.pasabuyRequestId,
         orderId:
-          paymentShare?.orderId ?? null,
+          paymentShare?.orderId ?? refund.payment.pasabuyRequest?.relatedOrderId ?? null,
         requesterName:
           refund.requestedBy.fullName,
         requesterEmail:
@@ -292,9 +307,9 @@ export class RefundsService {
             : null,
         vendorName:
           paymentShare?.order.vendor
-            .businessName ?? null,
+            .businessName ?? refund.payment.pasabuyRequest?.relatedOrder?.vendor.businessName ?? null,
         orderedAt:
-          paymentShare?.order.createdAt ?? null,
+          paymentShare?.order.createdAt ?? refund.payment.pasabuyRequest?.relatedOrder?.createdAt ?? null,
         isGroupOrder:
           paymentShare?.order.groupOrderId != null,
         amount: Number(
@@ -417,10 +432,13 @@ export class RefundsService {
     const refunded = payment.refunds.reduce((total, refund) => total.add(refund.amount),
       new Prisma.Decimal(0));
     if (refunded.lessThan(payment.amount)) return;
-    await this.prisma.pasabuyRequest.updateMany({
+    const updated = await this.prisma.pasabuyRequest.updateMany({
       where: { id: payment.pasabuyRequestId, paymentStatus: 'PAID' },
       data: { paymentStatus: 'REFUNDED' },
     });
+    if (updated.count) {
+      await this.realtimeGateway.emitPasabuyStatusUpdated(payment.pasabuyRequestId);
+    }
   }
 
   async processRefund(

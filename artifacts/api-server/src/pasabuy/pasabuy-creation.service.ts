@@ -41,6 +41,9 @@ export class PasabuyCreationService {
           include: { vendor: true, items: { include: { product: true } } },
         });
         if (!order) throw new NotFoundException('Order not found');
+        if (order.isPreorder) {
+          throw new ConflictException('Preorders cannot use Pasabuy');
+        }
         if (order.orderType !== 'INDIVIDUAL' ||
           !(order.status === OrderStatus.PAID || order.status === OrderStatus.COOKING || order.status === OrderStatus.READY_FOR_PICKUP)) {
           throw new ConflictException('An individual paid order is required');
