@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { randomInt } from 'node:crypto';
 import { Interval } from '@nestjs/schedule';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -58,25 +59,35 @@ export class PasabuyService {
       select: {
         id: true,
         studentId: true,
+        studentIdPhotoUrl: true,
+        verifiedAt: true,
         createdAt: true,
         updatedAt: true,
       },
     });
 
     return {
-      isComplete: Boolean(profile?.studentId?.trim()),
-      profile,
+      isComplete: Boolean(profile?.studentId?.trim() && profile.studentIdPhotoUrl && profile.verifiedAt),
+      studentIdVerified: profile?.verifiedAt != null && profile.studentIdPhotoUrl != null,
+      profile: profile && {
+        id: profile.id,
+        studentId: profile.studentId,
+        studentIdVerified: profile.verifiedAt != null && profile.studentIdPhotoUrl != null,
+        photoSubmitted: profile.studentIdPhotoUrl != null,
+        createdAt: profile.createdAt,
+        updatedAt: profile.updatedAt,
+      },
     };
   }
 
   async getAvailableRequests(userId: string) {
     const profile = await this.prisma.pasabuyProfile.findUnique({
       where: { userId },
-      select: { studentId: true },
+      select: { studentId: true, studentIdPhotoUrl: true, verifiedAt: true },
     });
-    if (!profile?.studentId?.trim()) {
+    if (!profile?.studentId?.trim() || !profile.studentIdPhotoUrl || !profile.verifiedAt) {
       throw new ForbiddenException(
-        'Complete your Pasabuy profile before browsing requests',
+        'A verified student ID is required to browse requests',
       );
     }
 
@@ -142,6 +153,7 @@ export class PasabuyService {
         expiresAt: true, acceptedAt: true, pickedUpAt: true,
         deliveredAt: true, createdAt: true, updatedAt: true,
         payment: { select: { id: true, status: true, amount: true } },
+        pickupCode: true,
         statusHistory: { orderBy: { changedAt: 'asc' },
           select: { status: true, note: true, changedAt: true } },
       },
@@ -150,7 +162,11 @@ export class PasabuyService {
       (request.requesterUserId !== userId && request.fulfillerUserId !== userId)) {
       throw new NotFoundException('Pasabuy request not found');
     }
-    return request;
+    return {
+      ...request,
+      pickupCode: request.fulfillerUserId === userId &&
+        request.paymentStatus === 'PAID' ? request.pickupCode : null,
+    };
   }
 
   async confirmReceipt(userId: string, requestId: string) {
@@ -219,6 +235,8 @@ export class PasabuyService {
           pasabuyProfile: {
             select: {
               studentId: true,
+              studentIdPhotoUrl: true,
+              verifiedAt: true,
             },
           },
         },
@@ -230,9 +248,10 @@ export class PasabuyService {
         );
       }
 
-      if (!user.pasabuyProfile?.studentId?.trim()) {
+      if (!user.pasabuyProfile?.studentId?.trim() ||
+        !user.pasabuyProfile.studentIdPhotoUrl || !user.pasabuyProfile.verifiedAt) {
         throw new ForbiddenException(
-          'Complete your Pasabuy profile before accepting a request',
+          'A verified student ID is required to accept a request',
         );
       }
 
@@ -263,6 +282,7 @@ export class PasabuyService {
             status: 'AWAITING_PAYMENT',
             paymentStatus: 'AWAITING_PAYMENT',
             paymentDeadline: new Date(acceptedAt.getTime() + 5 * 60_000),
+            pickupCode: randomInt(100000, 1000000).toString(),
             acceptedAt,
           },
         });
@@ -351,9 +371,9 @@ export class PasabuyService {
           'Only the assigned fulfiller can mark this Pasabuy request as picked up',
         );
       }
-      if (request.status !== 'PAID' || request.paymentStatus !== 'PAID') {
+      if (request.status !== 'PICKUP_READY' || request.paymentStatus !== 'PAID') {
         throw new ConflictException(
-          'The Pasabuy fee must be confirmed paid before pickup',
+          'The fee must be paid and the pickup code verified by the vendor',
         );
       }
       if (!request.relatedOrderId || !request.relatedOrder) {
@@ -399,8 +419,9 @@ export class PasabuyService {
         where: {
           id: requestId,
           fulfillerUserId: userId,
-          status: 'PAID',
+          status: 'PICKUP_READY',
           paymentStatus: 'PAID',
+          pickupVerifiedAt: { not: null },
         },
         data: {
           status: 'PICKED_UP',
@@ -573,6 +594,9 @@ export class PasabuyService {
     dto: UpsertPasabuyProfileDto,
   ) {
     const studentId = dto.studentId.trim();
+    const existing = await this.prisma.pasabuyProfile.findUnique({
+      where: { userId }, select: { studentId: true },
+    });
 
     try {
       const profile = await this.prisma.pasabuyProfile.upsert({
@@ -581,6 +605,9 @@ export class PasabuyService {
         },
         update: {
           studentId,
+          ...(existing?.studentId !== studentId
+            ? { studentIdPhotoUrl: null, verifiedAt: null }
+            : {}),
         },
         create: {
           userId,
@@ -594,10 +621,19 @@ export class PasabuyService {
         },
       });
 
-      return {
-        isComplete: true,
-        profile,
-      };
+      const current = await this.prisma.pasabuyProfile.findUniqueOrThrow({
+        where: { userId }, select: { verifiedAt: true, studentIdPhotoUrl: true },
+      });
+      return { isComplete: current.verifiedAt != null && current.studentIdPhotoUrl != null,
+        studentIdVerified: current.verifiedAt != null && current.studentIdPhotoUrl != null,
+        profile: {
+          id: profile.id,
+          studentId: profile.studentId,
+          studentIdVerified: current.verifiedAt != null && current.studentIdPhotoUrl != null,
+          photoSubmitted: current.studentIdPhotoUrl != null,
+          createdAt: profile.createdAt,
+          updatedAt: profile.updatedAt,
+        } };
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&

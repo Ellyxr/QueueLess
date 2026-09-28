@@ -32,6 +32,8 @@ import {
   UpdateAdminUserStatusDto,
 } from './dto/admin-user.dto';
 import { UpdateAdminVendorStatusDto } from './dto/admin-vendor.dto';
+import { PasabuyIdentityService } from '../pasabuy/pasabuy-identity.service';
+import { ReviewStudentIdDto } from '../pasabuy/dto/review-student-id.dto';
 
 type AuthenticatedRequest = Request & {
   user: {
@@ -45,7 +47,27 @@ type AuthenticatedRequest = Request & {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('ADMIN')
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(private readonly adminService: AdminService,
+    private readonly pasabuyIdentity: PasabuyIdentityService) {}
+
+  @Get('pasabuy/student-ids')
+  @ApiOperation({ summary: 'Review private student ID submissions' })
+  pendingPasabuyStudentIds() {
+    return this.pasabuyIdentity.pendingReviews();
+  }
+
+  @Get('pasabuy/student-ids/:userId/photo')
+  @ApiOperation({ summary: 'Get a short-lived private ID photo link as an admin' })
+  pasabuyStudentIdPhoto(@Param('userId') userId: string) {
+    return this.pasabuyIdentity.reviewPhoto(userId);
+  }
+
+  @Patch('pasabuy/student-ids/:userId')
+  @ApiOperation({ summary: 'Approve or reject a submitted student ID' })
+  reviewPasabuyStudentId(@Req() request: AuthenticatedRequest,
+    @Param('userId') userId: string, @Body() dto: ReviewStudentIdDto) {
+    return this.pasabuyIdentity.review(userId, dto.decision, request.user.sub);
+  }
 
   @Get()
   @HttpCode(HttpStatus.NOT_IMPLEMENTED)

@@ -5,8 +5,11 @@ import {
   Param,
   Post,
   Put,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -25,6 +28,9 @@ import { PasabuyService } from './pasabuy.service';
 import { PasabuyCreationService } from './pasabuy-creation.service';
 import { PasabuyPaymentsService } from './pasabuy-payments.service';
 import { CreatePasabuyRequestDto } from './dto/create-pasabuy-request.dto';
+import { PasabuyWorkflowsService } from './pasabuy-workflows.service';
+import { CancelPasabuyDto, ReportPasabuyDto, VerifyPasabuyPickupDto } from './dto/pasabuy-workflow.dto';
+import { PasabuyIdentityService } from './pasabuy-identity.service';
 
 @ApiTags('Pasabuy')
 @ApiBearerAuth()
@@ -36,12 +42,43 @@ export class PasabuyController {
     private readonly pasabuyService: PasabuyService,
     private readonly creation: PasabuyCreationService,
     private readonly payments: PasabuyPaymentsService,
+    private readonly workflows: PasabuyWorkflowsService,
+    private readonly identity: PasabuyIdentityService,
   ) {}
 
   @Post('requests')
   @ApiOperation({ summary: 'Create a Pasabuy request for an eligible paid order' })
   createRequest(@CurrentUser() user: JwtPayload, @Body() dto: CreatePasabuyRequestDto) {
     return this.creation.create(user.sub, dto);
+  }
+
+  @Post('requests/:id/cancel')
+  @ApiOperation({ summary: 'Cancel before pickup as the requester or assigned deliverer' })
+  cancel(@CurrentUser() user: JwtPayload, @Param('id') id: string,
+    @Body() dto: CancelPasabuyDto) {
+    return this.workflows.cancel(user.sub, id, dto.reason);
+  }
+
+  @Post('requests/:id/report')
+  @ApiOperation({ summary: 'Report a problem with a paid Pasabuy request' })
+  report(@CurrentUser() user: JwtPayload, @Param('id') id: string,
+    @Body() dto: ReportPasabuyDto) {
+    return this.workflows.report(user.sub, id, dto.description);
+  }
+
+  @Get('vendor/orders/:orderId')
+  @Roles('VENDOR_OWNER')
+  @ApiOperation({ summary: 'View assigned deliverer and pickup details for your order' })
+  vendorOrder(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string) {
+    return this.workflows.vendorOrder(user.sub, orderId);
+  }
+
+  @Post('vendor/orders/:orderId/verify-pickup')
+  @Roles('VENDOR_OWNER')
+  @ApiOperation({ summary: 'Verify the deliverer pickup code for your order' })
+  verifyPickup(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string,
+    @Body() dto: VerifyPasabuyPickupDto) {
+    return this.workflows.verifyPickup(user.sub, orderId, dto.code);
   }
 
   @Get('profile')
@@ -105,6 +142,14 @@ export class PasabuyController {
     @CurrentUser() user: JwtPayload,
   ) {
     return this.pasabuyService.getAvailableRequests(user.sub);
+  }
+
+  @Post('profile/student-id-photo')
+  @UseInterceptors(FileInterceptor('photo', { limits: { fileSize: 2 * 1024 * 1024 } }))
+  @ApiOperation({ summary: 'Upload a private student ID photo for admin review' })
+  uploadStudentIdPhoto(@CurrentUser() user: JwtPayload,
+    @UploadedFile() photo?: { buffer: Buffer; mimetype: string; size: number }) {
+    return this.identity.uploadPhoto(user.sub, photo);
   }
 
   @Get('requests/:id')
