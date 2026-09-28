@@ -1,6 +1,9 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, ReportStatus } from '@prisma/client';
+import { randomUUID } from 'crypto';
+import { extname } from 'path';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { ImagekitService } from '../imagekit/imagekit.service';
 import { CreateReportDto, ReportTargetType } from './dto/create-report.dto';
 import { ListReportsDto } from './dto/list-reports.dto';
 import { UpdateReportStatusDto } from './dto/update-report-status.dto';
@@ -13,15 +16,19 @@ const targetFilters: Record<ReportTargetType, Prisma.ReportWhereInput> = {
   VENDOR: { reportedVendorId: { not: null } },
   USER: { reportedUserId: { not: null } },
   ORDER: { reportedOrderId: { not: null } },
-  TRANSACTION: { reportedPaymentId: { not: null } },
+  TRANSACTION: { OR: [{ reportedPaymentId: { not: null } }, { targetType: 'TRANSACTION' }] },
   PRODUCT: { reportedProductId: { not: null } },
   PASABUY: { reportedPasabuyId: { not: null } },
 };
 
 const reportSummary = {
   id: true,
+  targetType: true,
   category: true,
   description: true,
+  attachmentName: true,
+  attachmentMimeType: true,
+  attachmentSize: true,
   status: true,
   reporterUserId: true,
   reporter: { select: { id: true, fullName: true, email: true } },
@@ -44,7 +51,7 @@ const allowedTransitions: Record<ReportStatus, ReportStatus[]> = {
 
 @Injectable()
 export class ReportsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly images: ImagekitService) {}
 
   async list(query: ListReportsDto) {
     const page = query.page ?? 1;
@@ -64,7 +71,8 @@ export class ReportsService {
       }),
       this.prisma.report.count({ where }),
     ]);
-    return { items, page, limit, total, totalPages: Math.ceil(total / limit) };
+    return { items: items.map((item) => ({ ...item, attachment: this.attachmentReference(item) })),
+      page, limit, total, totalPages: Math.ceil(total / limit) };
   }
 
   async detail(id: string) {
@@ -85,7 +93,16 @@ export class ReportsService {
       },
     });
     if (!report) throw new NotFoundException('Report not found');
-    return report;
+    return { ...report, attachment: this.attachmentReference(report) };
+  }
+
+  async attachment(id: string) {
+    const report = await this.prisma.report.findUnique({ where: { id },
+      select: { attachmentPath: true, attachmentName: true, attachmentMimeType: true, attachmentSize: true } });
+    if (!report?.attachmentPath) throw new NotFoundException('Report attachment not found');
+    return { url: this.images.signedReportAttachmentUrl(report.attachmentPath),
+      expiresInSeconds: 300, fileName: report.attachmentName,
+      mimeType: report.attachmentMimeType, size: report.attachmentSize };
   }
 
   async updateStatus(id: string, adminUserId: string, dto: UpdateReportStatusDto) {
@@ -126,23 +143,72 @@ export class ReportsService {
     return this.detail(id);
   }
 
-  async create(reporterUserId: string, dto: CreateReportDto) {
+  async create(reporterUserId: string, dto: CreateReportDto,
+    attachment?: { buffer: Buffer; mimetype: string; size: number; originalname: string }) {
     const category = dto.category.trim();
     const description = dto.description.trim();
     if (!category || !description) {
       throw new BadRequestException('Category and description are required');
     }
 
-    const target = await this.resolveTarget(reporterUserId, dto.targetType, dto.targetId);
-    return this.prisma.report.create({
-      data: { reporterUserId, category, description, status: 'OPEN', ...target },
-      select: {
-        id: true, category: true, description: true, status: true,
-        reporterUserId: true, reportedVendorId: true, reportedUserId: true,
-        reportedOrderId: true, reportedPaymentId: true, reportedProductId: true,
-        reportedPasabuyId: true, createdAt: true,
-      },
-    });
+    const extension = attachment ? this.validateAttachment(attachment) : null;
+    const targetId = dto.targetId?.trim();
+    if (!targetId && (dto.targetType !== ReportTargetType.TRANSACTION || !attachment)) {
+      throw new BadRequestException('A target ID is required unless transaction proof is attached');
+    }
+    const target = targetId
+      ? await this.resolveTarget(reporterUserId, dto.targetType, targetId)
+      : {};
+    const id = randomUUID();
+    const uploaded = attachment && extension
+      ? await this.images.uploadPrivateReportAttachment(id, attachment.buffer, extension)
+      : null;
+    try {
+      const report = await this.prisma.report.create({
+        data: { id, reporterUserId, targetType: dto.targetType, category, description, status: 'OPEN',
+          ...target, ...(uploaded && attachment ? {
+            attachmentPath: uploaded.path, attachmentFileId: uploaded.fileId,
+            attachmentName: attachment.originalname.slice(0, 255),
+            attachmentMimeType: attachment.mimetype, attachmentSize: attachment.size,
+          } : {}) },
+        select: {
+          id: true, targetType: true, category: true, description: true, status: true,
+          reporterUserId: true, reportedVendorId: true, reportedUserId: true,
+          reportedOrderId: true, reportedPaymentId: true, reportedProductId: true,
+          reportedPasabuyId: true, attachmentName: true, attachmentMimeType: true,
+          attachmentSize: true, createdAt: true,
+        },
+      });
+      return { ...report, attachment: this.attachmentReference(report) };
+    } catch (error) {
+      if (uploaded) await this.images.deletePrivateFile(uploaded.fileId).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private attachmentReference(report: { id: string; attachmentName: string | null;
+    attachmentMimeType: string | null; attachmentSize: number | null }) {
+    return report.attachmentName ? { fileName: report.attachmentName,
+      mimeType: report.attachmentMimeType, size: report.attachmentSize,
+      adminUrl: `/api/v1/reports/${report.id}/attachment` } : null;
+  }
+
+  private validateAttachment(file: { buffer: Buffer; mimetype: string;
+    size: number; originalname: string }) {
+    if (!file.buffer || file.size < 1 || file.size > 5 * 1024 * 1024) {
+      throw new BadRequestException('Attachment must be between 1 byte and 5 MB');
+    }
+    const extension = extname(file.originalname).toLowerCase();
+    const matches = (
+      (['.jpg', '.jpeg'].includes(extension) && file.mimetype === 'image/jpeg' &&
+        file.buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) ||
+      (extension === '.png' && file.mimetype === 'image/png' &&
+        file.buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) ||
+      (extension === '.pdf' && file.mimetype === 'application/pdf' &&
+        file.buffer.subarray(0, 5).equals(Buffer.from('%PDF-')))
+    );
+    if (!matches) throw new BadRequestException('Only JPG, JPEG, PNG, or PDF attachments are allowed');
+    return extension.slice(1);
   }
 
   private async resolveTarget(userId: string, type: ReportTargetType, id: string): Promise<TargetFields> {

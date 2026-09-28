@@ -645,8 +645,14 @@ model PasabuyStatusHistory {
 model Report {
   id                String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   reporterUserId    String                @db.Uuid
+  targetType        String?               @db.VarChar(20)
   category          String
   description       String
+  attachmentPath    String?
+  attachmentFileId  String?
+  attachmentName    String?
+  attachmentMimeType String?
+  attachmentSize    Int?
   status            ReportStatus          @default(OPEN)
   reportedUserId    String?               @db.Uuid
   reportedVendorId  String?               @db.Uuid
