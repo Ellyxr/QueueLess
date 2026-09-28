@@ -264,6 +264,15 @@ export class OrdersService {
               marketplaceFee,
               estimatedReadyAt,
               totalAmount,
+              feeAssessments: {
+                create: {
+                  type: 'MARKETPLACE_MARKUP',
+                  basisAmount: subtotal,
+                  ratePercent: totals.marketplaceFeeRate,
+                  amount: marketplaceFee,
+                  ruleVersion: totals.ruleVersion,
+                },
+              },
               items: {
                 create: orderItems,
               },
