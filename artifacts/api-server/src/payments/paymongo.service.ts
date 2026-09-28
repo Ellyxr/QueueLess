@@ -13,6 +13,7 @@ interface CreateCheckoutSessionParams {
   referenceNumber: string;
   orderId?: string;
   pasabuyRequestId?: string;
+  vendorSubscriptionId?: string;
   itemName?: string;
 }
 
@@ -91,7 +92,9 @@ export class PaymongoService {
 
     const redirectParam = params.pasabuyRequestId
       ? `pasabuyRequestId=${encodeURIComponent(params.pasabuyRequestId)}`
-      : `orderId=${encodeURIComponent(params.orderId ?? '')}`;
+      : params.vendorSubscriptionId
+        ? `vendorSubscriptionId=${encodeURIComponent(params.vendorSubscriptionId)}`
+        : `orderId=${encodeURIComponent(params.orderId ?? '')}`;
 
     const successUrlWithOrder =
       `${successUrl}${successUrl.includes('?') ? '&' : '?'}${redirectParam}`;

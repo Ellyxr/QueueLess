@@ -701,9 +701,9 @@ model VendorSubscription {
   id        String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   vendorId  String                   @db.Uuid
   planId    String                   @db.Uuid
-  status    VendorSubscriptionStatus @default(ACTIVE)
-  startDate DateTime                 @db.Timestamptz(6)
-  endDate   DateTime                 @db.Timestamptz(6)
+  status    VendorSubscriptionStatus @default(PENDING)
+  startDate DateTime?                @db.Timestamptz(6)
+  endDate   DateTime?                @db.Timestamptz(6)
   createdAt DateTime                 @default(now()) @db.Timestamptz(6)
   updatedAt DateTime                 @updatedAt @db.Timestamptz(6)
   payments  Payment[]
@@ -917,6 +917,7 @@ enum ReportStatus {
 }
 
 enum VendorSubscriptionStatus {
+  PENDING
   ACTIVE
   EXPIRED
   CANCELLED
