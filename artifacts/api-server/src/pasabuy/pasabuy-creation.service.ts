@@ -86,6 +86,11 @@ export class PasabuyCreationService {
             await tx.pasabuyStatusHistory.create({
               data: { pasabuyRequestId: oldRequest.id, status: 'EXPIRED', note: 'Request window expired' },
             });
+            await tx.auditRecord.create({ data: {
+              actorUserId: null, actionType: 'PASABUY_STATUS_UPDATED',
+              entityType: 'PasabuyRequest', entityId: oldRequest.id,
+              beforeState: { status: 'PENDING' }, afterState: { status: 'EXPIRED' },
+            } });
           }
         }
         const active = await tx.pasabuyRequest.findFirst({
@@ -129,6 +134,18 @@ export class PasabuyCreationService {
           },
         });
         await tx.order.update({ where: { id: order.id }, data: { isPasabuyRequest: true } });
+        await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'PASABUY_CREATED',
+          entityType: 'PasabuyRequest', entityId: request.id,
+          afterState: { status: 'PENDING', relatedOrderId: order.id,
+            feeTier: feeAssessment.feeTier },
+        } });
+        await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'FEE_ASSESSED',
+          entityType: 'PasabuyRequest', entityId: request.id,
+          afterState: { type: 'PASABUY_CONVENIENCE', amount: fee.toFixed(2),
+            ruleVersion: feeAssessment.ruleVersion },
+        } });
         return { request, expiredIds };
       });
       for (const expiredId of expiredIds) {

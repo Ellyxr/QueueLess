@@ -21,7 +21,9 @@ export class SubscriptionsController {
   @Roles('ADMIN')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Configure a vendor subscription plan' })
-  createPlan(@Body() dto: CreatePlanDto) { return this.subscriptions.createPlan(dto); }
+  createPlan(@CurrentUser() user: { sub: string }, @Body() dto: CreatePlanDto) {
+    return this.subscriptions.createPlan(dto, user.sub);
+  }
 
   @Get('mine')
   @UseGuards(JwtAuthGuard, RolesGuard)
