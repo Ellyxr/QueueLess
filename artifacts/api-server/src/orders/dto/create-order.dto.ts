@@ -25,4 +25,9 @@ export class CreateOrderDto {
   @IsOptional()
   @IsBoolean()
   isPasabuyRequest?: boolean;
+
+  @ApiPropertyOptional({ description: 'Marks an order placed as a vendor preorder', default: false })
+  @IsOptional()
+  @IsBoolean()
+  isPreorder?: boolean;
 }

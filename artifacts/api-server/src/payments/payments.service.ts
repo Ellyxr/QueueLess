@@ -720,7 +720,7 @@ export class PaymentsService {
     let payment = await this.prisma.payment.findFirst({
       where: {
         providerPaymentId: checkoutSession.id,
-        purpose: { in: [PaymentPurpose.ORDER_SHARE, PaymentPurpose.PASABUY] },
+        purpose: { in: [PaymentPurpose.ORDER_SHARE, PaymentPurpose.PASABUY, PaymentPurpose.SUBSCRIPTION] },
       },
       include: {
         paymentShares: true,
@@ -731,7 +731,7 @@ export class PaymentsService {
     if (!payment && typeof referenceNumber === 'string' &&
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(referenceNumber)) {
       payment = await this.prisma.payment.findFirst({
-        where: { id: referenceNumber, purpose: PaymentPurpose.PASABUY,
+        where: { id: referenceNumber, purpose: { in: [PaymentPurpose.PASABUY, PaymentPurpose.SUBSCRIPTION] },
           providerPaymentId: null },
         include: { paymentShares: true },
       });
@@ -755,6 +755,57 @@ export class PaymentsService {
       throw new BadRequestException(
         'PayMongo payment reference does not match',
       );
+    }
+
+    if (payment.purpose === PaymentPurpose.SUBSCRIPTION) {
+      if (!payment.vendorSubscriptionId ||
+        (payment.providerPaymentId && payment.providerPaymentId !== checkoutSession.id)) {
+        throw new BadRequestException('Subscription checkout session does not match');
+      }
+      const checkout = await this.paymongoService.retrieveCheckoutPaymentIds(checkoutSession.id);
+      if (checkout.referenceNumber !== payment.id ||
+        !checkout.paymentIds.length || checkout.paymentIds.length > 10) {
+        throw new BadRequestException('Subscription checkout cannot be verified');
+      }
+      let paidPaymentId: string | undefined;
+      for (const candidate of checkout.paymentIds) {
+        const verified = await this.paymongoService.retrievePayment(candidate);
+        if (verified.status === 'paid' &&
+          verified.amount === payment.amount.mul(100).toNumber() &&
+          verified.currency === payment.currency) {
+          paidPaymentId = candidate;
+          break;
+        }
+      }
+      if (!paidPaymentId) throw new BadRequestException('Subscription payment is not paid or amount does not match');
+      const subscriptionId = payment.vendorSubscriptionId;
+      const result = await this.prisma.$transaction(async (tx) => {
+        const current = await tx.vendorSubscription.findUnique({
+          where: { id: subscriptionId }, include: { plan: true,
+            vendor: { select: { status: true } } },
+        });
+        if (!current) throw new NotFoundException('Vendor subscription not found');
+        if (payment.status === PaymentStatus.SUCCEEDED && current.status === 'ACTIVE') {
+          return { duplicate: true, autoRefund: false };
+        }
+        const updatedPayment = await tx.payment.updateMany({
+          where: { id: payment.id, status: { not: PaymentStatus.SUCCEEDED } },
+          data: { status: PaymentStatus.SUCCEEDED, providerPaymentResourceId: paidPaymentId,
+            providerPaymentId: checkoutSession.id },
+        });
+        if (!updatedPayment.count) return { duplicate: true, autoRefund: false };
+        const now = new Date();
+        const activated = await tx.vendorSubscription.updateMany({
+          where: { id: subscriptionId, status: 'PENDING', vendor: { status: 'ACTIVE' } },
+          data: { status: 'ACTIVE', startDate: now,
+            endDate: new Date(now.getTime() + current.plan.durationDays * 86_400_000) },
+        });
+        return { duplicate: false, autoRefund: !activated.count };
+      });
+      if (result.autoRefund) await this.refundsService.autoRefundPayment(payment.id,
+        'SUBSCRIPTION_CHECKOUT_EXPIRED', 'Subscription payment arrived after checkout expiry.');
+      return { received: true, processed: !result.duplicate, eventType,
+        paymentId: payment.id, subscriptionId, ...result };
     }
 
     if (payment.purpose === PaymentPurpose.PASABUY) {

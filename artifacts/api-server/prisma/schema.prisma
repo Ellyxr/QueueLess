@@ -336,6 +336,7 @@ model Order {
   orderType         OrderType
   status            OrderStatus           @default(PENDING)
   isPasabuyRequest  Boolean               @default(false)
+  isPreorder        Boolean               @default(false)
   cancellationReason CancellationReason?
   cancellationNote  String?
   subtotal          Decimal               @db.Decimal(10, 2)
@@ -520,6 +521,7 @@ model Payment {
   payer                User                @relation("PaymentPayer", fields: [payerUserId], references: [id])
   vendorSubscription   VendorSubscription? @relation(fields: [vendorSubscriptionId], references: [id], onDelete: Restrict)
   refunds              Refund[]
+  reportsTargeting     Report[]            @relation("ReportTargetPayment")
   idempotencyKeys      PaymentIdempotencyKey[]
 
   @@index([payerUserId])
@@ -602,6 +604,8 @@ model PasabuyRequest {
   totalAmount      Decimal                @db.Decimal(10, 2)
   acceptedAt       DateTime?              @db.Timestamptz(6)
   pickupCode       String?
+  pickupVerifiedAt DateTime?              @db.Timestamptz(6)
+  pickupVerificationAttempts Int          @default(0)
   expiresAt        DateTime?             @db.Timestamptz(6)
   paymentStatus    PasabuyPaymentStatus  @default(NOT_CHARGED)
   paymentDeadline  DateTime?             @db.Timestamptz(6)
@@ -649,11 +653,13 @@ model Report {
   reportedProductId String?               @db.Uuid
   reportedOrderId   String?               @db.Uuid
   reportedPasabuyId String?               @db.Uuid
+  reportedPaymentId String?               @db.Uuid
   createdAt         DateTime              @default(now()) @db.Timestamptz(6)
   updatedAt         DateTime              @updatedAt @db.Timestamptz(6)
   statusHistory     ReportStatusHistory[]
   reportedOrder     Order?                @relation("ReportTargetOrder", fields: [reportedOrderId], references: [id])
   reportedPasabuy   PasabuyRequest?       @relation("ReportTargetPasabuy", fields: [reportedPasabuyId], references: [id])
+  reportedPayment   Payment?              @relation("ReportTargetPayment", fields: [reportedPaymentId], references: [id])
   reportedProduct   Product?              @relation("ReportTargetProduct", fields: [reportedProductId], references: [id])
   reportedUser      User?                 @relation("ReportTargetUser", fields: [reportedUserId], references: [id])
   reportedVendor    Vendor?               @relation("ReportTargetVendor", fields: [reportedVendorId], references: [id])
@@ -661,6 +667,7 @@ model Report {
 
   @@index([reporterUserId])
   @@index([status])
+  @@index([reportedPaymentId])
   @@map("reports")
 }
 
@@ -694,9 +701,9 @@ model VendorSubscription {
   id        String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   vendorId  String                   @db.Uuid
   planId    String                   @db.Uuid
-  status    VendorSubscriptionStatus @default(ACTIVE)
-  startDate DateTime                 @db.Timestamptz(6)
-  endDate   DateTime                 @db.Timestamptz(6)
+  status    VendorSubscriptionStatus @default(PENDING)
+  startDate DateTime?                @db.Timestamptz(6)
+  endDate   DateTime?                @db.Timestamptz(6)
   createdAt DateTime                 @default(now()) @db.Timestamptz(6)
   updatedAt DateTime                 @updatedAt @db.Timestamptz(6)
   payments  Payment[]
@@ -910,6 +917,7 @@ enum ReportStatus {
 }
 
 enum VendorSubscriptionStatus {
+  PENDING
   ACTIVE
   EXPIRED
   CANCELLED
