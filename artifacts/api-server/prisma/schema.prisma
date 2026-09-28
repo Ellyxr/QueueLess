@@ -357,6 +357,7 @@ model Order {
   groupOrder        GroupOrder?           @relation(fields: [groupOrderId], references: [id])
   vendor            Vendor                @relation(fields: [vendorId], references: [id])
   pasabuyRequests   PasabuyRequest[]
+  feeAssessments    FeeAssessment[]
   paymentShares     PaymentShare[]
   reportsTargeting  Report[]              @relation("ReportTargetOrder")
   ledgerEntry       VendorLedgerEntry?
@@ -620,6 +621,7 @@ model PasabuyRequest {
   requester        User                   @relation("PasabuyRequester", fields: [requesterUserId], references: [id])
   statusHistory    PasabuyStatusHistory[]
   payment          Payment?
+  feeAssessments   FeeAssessment[]
   reportsTargeting Report[]               @relation("ReportTargetPasabuy")
 
   @@index([requesterUserId])
@@ -640,6 +642,26 @@ model PasabuyStatusHistory {
 
   @@index([pasabuyRequestId])
   @@map("pasabuy_status_history")
+}
+
+model FeeAssessment {
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type             FeeAssessmentType
+  orderId          String?           @unique @db.Uuid
+  pasabuyRequestId String?           @unique @db.Uuid
+  basisAmount      Decimal?          @db.Decimal(10, 2)
+  ratePercent      Decimal?          @db.Decimal(10, 6)
+  amount           Decimal           @db.Decimal(10, 2)
+  feeTier          PasabuyFeeTier?
+  distanceMeters   Int?
+  ruleVersion      String
+  assessedAt       DateTime          @default(now()) @db.Timestamptz(6)
+  createdAt        DateTime          @default(now()) @db.Timestamptz(6)
+  order            Order?            @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  pasabuyRequest   PasabuyRequest?   @relation(fields: [pasabuyRequestId], references: [id], onDelete: Restrict)
+
+  @@index([type, assessedAt])
+  @@map("fee_assessments")
 }
 
 model Report {
@@ -931,6 +953,11 @@ enum PasabuyPaymentStatus {
 enum PasabuyFeeTier {
   IN_CAMPUS
   OUTSIDE_CAMPUS
+}
+
+enum FeeAssessmentType {
+  MARKETPLACE_MARKUP
+  PASABUY_CONVENIENCE
 }
 
 enum ReportStatus {

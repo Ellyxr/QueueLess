@@ -18,7 +18,7 @@ export class CalculateCartDto {
 
   @ApiPropertyOptional({
     description:
-      'Whether to include the Pasabuy delivery fee in the final payable total',
+      'Whether to show the Pasabuy fee options. The fee is paid after a deliverer accepts and is not included in this food checkout total.',
     default: false,
   })
   @IsOptional()
