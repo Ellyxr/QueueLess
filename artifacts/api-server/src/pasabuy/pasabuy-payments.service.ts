@@ -56,22 +56,38 @@ export class PasabuyPaymentsService {
     }
 
     if (payment?.status === PaymentStatus.FAILED) {
-      const reserved = await this.prisma.payment.updateMany({
-        where: { id: payment.id, status: PaymentStatus.FAILED, providerPaymentId: null },
-        data: { status: PaymentStatus.PENDING },
+      const retryPaymentId = payment.id;
+      const reserved = await this.prisma.$transaction(async (tx) => {
+        const changed = await tx.payment.updateMany({
+          where: { id: retryPaymentId, status: PaymentStatus.FAILED, providerPaymentId: null },
+          data: { status: PaymentStatus.PENDING },
+        });
+        if (changed.count) await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'PAYMENT_STATUS_UPDATED',
+          entityType: 'Payment', entityId: retryPaymentId,
+          beforeState: { status: PaymentStatus.FAILED },
+          afterState: { status: PaymentStatus.PENDING, reason: 'CHECKOUT_RETRY' },
+        } });
+        return changed;
       });
       if (!reserved.count) throw new ConflictException('Pasabuy checkout is being created');
     } else {
       try {
-        payment = await this.prisma.payment.create({
-          data: {
-            payerUserId: userId,
-            purpose: PaymentPurpose.PASABUY,
-            pasabuyRequestId: requestId,
-            amount: request.convenienceFee,
-            currency: 'PHP',
-            status: PaymentStatus.PENDING,
-          },
+        payment = await this.prisma.$transaction(async (tx) => {
+          const created = await tx.payment.create({
+            data: {
+              payerUserId: userId, purpose: PaymentPurpose.PASABUY,
+              pasabuyRequestId: requestId, amount: request.convenienceFee,
+              currency: 'PHP', status: PaymentStatus.PENDING,
+            },
+          });
+          await tx.auditRecord.create({ data: {
+            actorUserId: userId, actionType: 'PAYMENT_CREATED',
+            entityType: 'Payment', entityId: created.id,
+            afterState: { status: created.status, purpose: created.purpose,
+              amount: created.amount.toFixed(2), pasabuyRequestId: requestId },
+          } });
+          return created;
         });
       } catch (error) {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -92,16 +108,22 @@ export class PasabuyPaymentsService {
         itemName: 'QueueLess Pasabuy convenience fee',
       });
     } catch (error) {
-      const [, changed] = await this.prisma.$transaction([
-        this.prisma.payment.updateMany({
+      const changed = await this.prisma.$transaction(async (tx) => {
+        const failed = await tx.payment.updateMany({
           where: { id: payment.id, status: PaymentStatus.PENDING, providerPaymentId: null },
           data: { status: PaymentStatus.FAILED },
-        }),
-        this.prisma.pasabuyRequest.updateMany({
+        });
+        if (failed.count) await tx.auditRecord.create({ data: {
+          actorUserId: null, actionType: 'PAYMENT_STATUS_UPDATED',
+          entityType: 'Payment', entityId: payment.id,
+          beforeState: { status: PaymentStatus.PENDING },
+          afterState: { status: PaymentStatus.FAILED, reason: 'CHECKOUT_ERROR' },
+        } });
+        return tx.pasabuyRequest.updateMany({
           where: { id: requestId, status: 'AWAITING_PAYMENT', paymentStatus: 'AWAITING_PAYMENT' },
           data: { paymentStatus: 'PAYMENT_FAILED' },
-        }),
-      ]);
+        });
+      });
       if (changed.count) await this.realtimeGateway.emitPasabuyStatusUpdated(requestId);
       throw error;
     }
@@ -159,6 +181,12 @@ export class PasabuyPaymentsService {
         where: { id: paymentId, status: { not: PaymentStatus.SUCCEEDED } },
         data: { status: PaymentStatus.SUCCEEDED, providerPaymentResourceId },
       });
+      if (updated.count) await tx.auditRecord.create({ data: {
+        actorUserId: null, actionType: 'PAYMENT_STATUS_UPDATED',
+        entityType: 'Payment', entityId: paymentId,
+        beforeState: { status: payment.status },
+        afterState: { status: PaymentStatus.SUCCEEDED, source: 'PAYMONGO_WEBHOOK' },
+      } });
       const request = await tx.pasabuyRequest.updateMany({
         where: {
           id: payment.pasabuyRequestId,
@@ -175,6 +203,12 @@ export class PasabuyPaymentsService {
             note: 'Pasabuy fee confirmed by PayMongo webhook',
           },
         });
+        await tx.auditRecord.create({ data: {
+          actorUserId: null, actionType: 'PASABUY_STATUS_UPDATED',
+          entityType: 'PasabuyRequest', entityId: payment.pasabuyRequestId,
+          beforeState: { status: 'AWAITING_PAYMENT' },
+          afterState: { status: 'PAID', paymentStatus: 'PAID' },
+        } });
       }
       const currentRequest = await tx.pasabuyRequest.findUniqueOrThrow({
         where: { id: payment.pasabuyRequestId },
@@ -201,7 +235,7 @@ export class PasabuyPaymentsService {
         paymentDeadline: { lte: new Date() },
       },
       select: { id: true, fulfillerUserId: true, payment: {
-        select: { providerPaymentId: true, status: true } } },
+        select: { id: true, providerPaymentId: true, status: true } } },
       take: 50,
     });
     for (const request of expired) {
@@ -219,17 +253,29 @@ export class PasabuyPaymentsService {
               fulfillerUserId: null },
           });
           if (changed.count) {
-            await tx.payment.updateMany({
+            const failed = await tx.payment.updateMany({
               where: {
                 pasabuyRequestId: request.id,
                 status: PaymentStatus.PENDING,
               },
               data: { status: PaymentStatus.FAILED },
             });
+            if (failed.count && payment) await tx.auditRecord.create({ data: {
+              actorUserId: null, actionType: 'PAYMENT_STATUS_UPDATED',
+              entityType: 'Payment', entityId: payment.id,
+              beforeState: { status: PaymentStatus.PENDING },
+              afterState: { status: PaymentStatus.FAILED, reason: 'PAYMENT_WINDOW_EXPIRED' },
+            } });
             await tx.pasabuyStatusHistory.create({
               data: { pasabuyRequestId: request.id, status: 'PAYMENT_EXPIRED',
                 note: 'The fee payment window expired' },
             });
+            await tx.auditRecord.create({ data: {
+              actorUserId: null, actionType: 'PASABUY_STATUS_UPDATED',
+              entityType: 'PasabuyRequest', entityId: request.id,
+              beforeState: { status: 'AWAITING_PAYMENT' },
+              afterState: { status: 'PAYMENT_EXPIRED' },
+            } });
           }
           return changed.count;
         });

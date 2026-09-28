@@ -75,3 +75,18 @@ strings. Recorded order amounts and assessed fees represent snapshots, not
 collected revenue. Payment amounts include their recorded status, so callers
 can distinguish pending, successful, and failed transactions. No user contact,
 payment provider identifiers, or individual report descriptions are returned.
+
+## Critical action audit (US-049)
+
+State changes write `AuditRecord` rows with the actor (null for webhooks and
+schedulers), entity type/ID, action, before/after snapshots, and timestamp.
+Order creation and status updates, payment creation and status updates, refund
+requests and outcomes, fee assessments, Pasabuy creation and status updates,
+report creation and resolution, subscription and featured-listing creation and
+status updates, and administrator plan/user/vendor actions are covered. Audit
+inserts participate in the database transaction with the corresponding change;
+replayed webhooks and unchanged state do not create a second transition record.
+Snapshots contain operational IDs, statuses, amounts, and rule versions, not
+checkout links, credentials, pickup codes, or report descriptions. Existing
+admin user and vendor audit endpoints expose their respective histories; other
+records are currently available to authorized database operators.

@@ -164,7 +164,8 @@ export class ReportsService {
       ? await this.images.uploadPrivateReportAttachment(id, attachment.buffer, extension)
       : null;
     try {
-      const report = await this.prisma.report.create({
+      const report = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.report.create({
         data: { id, reporterUserId, targetType: dto.targetType, category, description, status: 'OPEN',
           ...target, ...(uploaded && attachment ? {
             attachmentPath: uploaded.path, attachmentFileId: uploaded.fileId,
@@ -178,6 +179,14 @@ export class ReportsService {
           reportedPasabuyId: true, attachmentName: true, attachmentMimeType: true,
           attachmentSize: true, createdAt: true,
         },
+        });
+        await tx.auditRecord.create({ data: {
+          actorUserId: reporterUserId, actionType: 'REPORT_CREATED',
+          entityType: 'Report', entityId: created.id,
+          afterState: { status: created.status, targetType: created.targetType,
+            targetId: targetId || null, category, hasAttachment: Boolean(uploaded) },
+        } });
+        return created;
       });
       return { ...report, attachment: this.attachmentReference(report) };
     } catch (error) {

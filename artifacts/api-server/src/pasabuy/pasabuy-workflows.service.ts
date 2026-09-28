@@ -63,13 +63,19 @@ export class PasabuyWorkflowsService {
           data: { isPasabuyRequest: false } });
       }
       if (!paid && request.payment) {
-        await tx.payment.updateMany({
+        const failed = await tx.payment.updateMany({
           where: { id: request.payment.id, status: PaymentStatus.PENDING },
           data: { status: PaymentStatus.FAILED },
         });
+        if (failed.count) await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'PAYMENT_STATUS_UPDATED',
+          entityType: 'Payment', entityId: request.payment.id,
+          beforeState: { status: PaymentStatus.PENDING },
+          afterState: { status: PaymentStatus.FAILED, reason: 'PASABUY_CANCELLED' },
+        } });
       }
       if (paid && request.payment) {
-        await tx.refund.create({ data: {
+        const refund = await tx.refund.create({ data: {
           paymentId: request.payment.id, amount: request.payment.amount,
           status: RefundStatus.REQUESTED,
           initiatedBy: userId === request.requesterUserId
@@ -77,10 +83,22 @@ export class PasabuyWorkflowsService {
           requestedByUserId: userId,
           reason: `Pasabuy cancellation: ${reason.trim()}`,
         } });
+        await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'REFUND_REQUESTED',
+          entityType: 'Refund', entityId: refund.id,
+          afterState: { status: refund.status, paymentId: refund.paymentId,
+            amount: refund.amount.toFixed(2) },
+        } });
       }
       await tx.pasabuyStatusHistory.create({ data: {
         pasabuyRequestId: requestId, status: 'CANCELLED', changedByUserId: userId,
         note: reason.trim(),
+      } });
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'PASABUY_STATUS_UPDATED',
+        entityType: 'PasabuyRequest', entityId: requestId,
+        beforeState: { status: request.status, paymentStatus: request.paymentStatus },
+        afterState: { status: 'CANCELLED', paymentStatus: paid ? 'PAID' : 'NOT_CHARGED' },
       } });
       return tx.pasabuyRequest.findUniqueOrThrow({ where: { id: requestId },
         select: { id: true, status: true, paymentStatus: true, updatedAt: true } });
@@ -113,6 +131,16 @@ export class PasabuyWorkflowsService {
       await tx.pasabuyStatusHistory.create({ data: {
         pasabuyRequestId: requestId, status: 'DISPUTED', changedByUserId: userId,
         note: 'Participant reported a problem',
+      } });
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'REPORT_CREATED',
+        entityType: 'Report', entityId: created.id,
+        afterState: { status: created.status, targetType: 'PASABUY', targetId: requestId },
+      } });
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'PASABUY_STATUS_UPDATED',
+        entityType: 'PasabuyRequest', entityId: requestId,
+        beforeState: { status: request.status }, afterState: { status: 'DISPUTED' },
       } });
       return created;
     });
@@ -184,6 +212,11 @@ export class PasabuyWorkflowsService {
       await tx.pasabuyStatusHistory.create({ data: {
         pasabuyRequestId: request.id, status: 'PICKUP_READY', changedByUserId: userId,
         note: 'Vendor verified the pickup code',
+      } });
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'PASABUY_STATUS_UPDATED',
+        entityType: 'PasabuyRequest', entityId: request.id,
+        beforeState: { status: 'PAID' }, afterState: { status: 'PICKUP_READY' },
       } });
       return tx.pasabuyRequest.findUniqueOrThrow({ where: { id: request.id },
         select: { id: true, status: true, updatedAt: true } });
