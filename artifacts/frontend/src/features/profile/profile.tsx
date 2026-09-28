@@ -978,10 +978,9 @@ export default function ProfilePage() {
         <Button
           type="button"
           variant="ghost"
-          onClick={() =>
-            (window.location.href =
-              "mailto:nicholequimpan@gmail.com?cc=avrilphoebematanguiham@gmail.com,lingahanayanna@gmail.com&subject=QueueLess%20problem")
-          }
+          onClick={() => {
+            window.location.href = "/reports";
+          }}
           className="rounded-full text-blue-600 hover:bg-blue-50 hover:text-blue-700"
         >
           Report a problem

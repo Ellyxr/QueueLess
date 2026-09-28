@@ -907,3 +907,43 @@ export function setActivePortal(portal: Portal): void {
     window.dispatchEvent(new Event(PORTAL_CHANGED_EVENT));
   }
 }
+
+export interface CreateReportInput {
+  targetType:
+    | "VENDOR"
+    | "USER"
+    | "ORDER"
+    | "TRANSACTION"
+    | "PRODUCT"
+    | "PASABUY";
+  targetId: string;
+  category: string;
+  description: string;
+}
+
+export interface Report {
+  id: string;
+  category: string;
+  description: string;
+  status: string;
+  reporterUserId: string;
+  reportedVendorId: string | null;
+  reportedUserId: string | null;
+  reportedOrderId: string | null;
+  reportedPaymentId: string | null;
+  reportedProductId: string | null;
+  reportedPasabuyId: string | null;
+  createdAt: string;
+}
+
+export async function createReport(
+  input: CreateReportInput
+): Promise<Report> {
+  return fetchWithAuth<Report>("/reports", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+}
