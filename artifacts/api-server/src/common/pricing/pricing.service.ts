@@ -1,6 +1,9 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Prisma } from '@prisma/client';
+import { PasabuyFeeTier, Prisma } from '@prisma/client';
+
+const MARKETPLACE_RULE_VERSION = 'MARKETPLACE_PERCENT_V1';
+const PASABUY_RULE_VERSION = 'PASABUY_CAMPUS_TIER_V1';
 
 @Injectable()
 export class PricingService {
@@ -22,38 +25,32 @@ export class PricingService {
       );
     }
 
-    if (rate.lessThan(0) || rate.greaterThan(100)) {
+    if (!rate.isFinite() || rate.lessThan(0) || rate.greaterThan(100)) {
       throw new BadRequestException(
         'MARKETPLACE_FEE_RATE must be between 0 and 100',
       );
     }
 
+    if (rate.decimalPlaces() > 6) {
+      throw new BadRequestException('MARKETPLACE_FEE_RATE supports up to six decimal places');
+    }
+
     return rate;
   }
 
-  getPasabuyDeliveryFee(): Prisma.Decimal {
-    const rawFee = this.configService.get<string>(
-      'PASABUY_DELIVERY_FEE',
-      '35',
-    );
+  calculatePasabuyFee(inCampus: boolean) {
+    return {
+      feeTier: inCampus ? PasabuyFeeTier.IN_CAMPUS : PasabuyFeeTier.OUTSIDE_CAMPUS,
+      amount: new Prisma.Decimal(inCampus ? 30 : 50),
+      ruleVersion: PASABUY_RULE_VERSION,
+    };
+  }
 
-    let fee: Prisma.Decimal;
-
-    try {
-      fee = new Prisma.Decimal(rawFee);
-    } catch {
-      throw new BadRequestException(
-        'PASABUY_DELIVERY_FEE must be a valid number',
-      );
-    }
-
-    if (fee.lessThan(0)) {
-      throw new BadRequestException(
-        'PASABUY_DELIVERY_FEE must be zero or greater',
-      );
-    }
-
-    return fee.toDecimalPlaces(2);
+  getPasabuyFeeOptions() {
+    return {
+      inCampus: this.calculatePasabuyFee(true).amount.toFixed(2),
+      outsideCampus: this.calculatePasabuyFee(false).amount.toFixed(2),
+    };
   }
 
   calculateOrderTotals(subtotal: Prisma.Decimal) {
@@ -69,7 +66,7 @@ export class PricingService {
     const marketplaceFee = normalizedSubtotal
       .mul(marketplaceFeeRate)
       .div(100)
-      .toDecimalPlaces(2);
+      .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
 
     const totalAmount = normalizedSubtotal
       .add(marketplaceFee)
@@ -80,6 +77,7 @@ export class PricingService {
       marketplaceFeeRate,
       marketplaceFee,
       totalAmount,
+      ruleVersion: MARKETPLACE_RULE_VERSION,
     };
   }
 }

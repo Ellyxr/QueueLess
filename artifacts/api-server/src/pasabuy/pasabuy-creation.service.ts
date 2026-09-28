@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { PricingService } from '../common/pricing/pricing.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { CreatePasabuyRequestDto } from './dto/create-pasabuy-request.dto';
 
@@ -17,6 +18,7 @@ export class PasabuyCreationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly pricing: PricingService,
   ) {}
 
   async create(userId: string, dto: CreatePasabuyRequestDto) {
@@ -66,7 +68,8 @@ export class PasabuyCreationService {
 
         const inCampus = dto.dropoffLatitude >= bounds[0] && dto.dropoffLatitude <= bounds[2] &&
           dto.dropoffLongitude >= bounds[1] && dto.dropoffLongitude <= bounds[3];
-        const fee = new Prisma.Decimal(inCampus ? 30 : 50);
+        const feeAssessment = this.pricing.calculatePasabuyFee(inCampus);
+        const fee = feeAssessment.amount;
         const now = new Date();
         const expired = await tx.pasabuyRequest.findMany({
           where: { relatedOrderId: order.id, status: 'PENDING', expiresAt: { lte: now } },
@@ -104,10 +107,19 @@ export class PasabuyCreationService {
             dropoffLocation,
             dropoffLatitude: dto.dropoffLatitude,
             dropoffLongitude: dto.dropoffLongitude,
-            feeTier: inCampus ? 'IN_CAMPUS' : 'OUTSIDE_CAMPUS',
+            feeTier: feeAssessment.feeTier,
             deliveryDistanceMeters: distance,
             convenienceFee: fee,
             totalAmount: order.totalAmount.add(fee),
+            feeAssessments: {
+              create: {
+                type: 'PASABUY_CONVENIENCE',
+                amount: fee,
+                feeTier: feeAssessment.feeTier,
+                distanceMeters: distance,
+                ruleVersion: feeAssessment.ruleVersion,
+              },
+            },
             itemDescription: order.items.map((item) => `${item.quantity}x ${item.product.name}`).join(', '),
             termsAcceptedAt: now,
             expiresAt: new Date(now.getTime() + REQUEST_WINDOW_MS),
