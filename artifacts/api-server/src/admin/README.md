@@ -22,3 +22,21 @@ audit record. Email and password changes require current consent at write time.
 Role and status changes protect the acting admin account and the last active
 administrator; concurrent changes run in serializable transactions. Unchanged
 role or status requests return the current user without another audit event.
+
+## Vendor participation (US-046)
+
+New vendor registrations start in `PENDING_APPROVAL`. Existing vendors retain their current status. An administrator can approve an eligible vendor by changing its status to `ACTIVE`.
+
+All `/api/v1/admin/vendors` routes use the same current `ADMIN` role guard.
+`GET /admin/vendors` retains its array response and supports optional `status`,
+`vendorType`, and `search` filters. `GET /admin/vendors/:id` includes owner
+eligibility and store counts without exposing owner email. The paginated
+`GET /admin/vendors/:id/audit?page=1&limit=20` returns participation changes.
+
+`PATCH /admin/vendors/:id/status` accepts `ACTIVE`, `SUSPENDED`, or
+`PENDING_APPROVAL` and an optional `reason` (3–500 characters). Activating a
+store requires its owner to have an active, unarchived account and a current
+vendor role. A successful change and its `VENDOR_APPROVED` or
+`VENDOR_STATUS_UPDATED` audit record commit together. Repeating the current
+status returns 409 and does not add an audit entry. Public vendor discovery
+already returns only `ACTIVE` stores.

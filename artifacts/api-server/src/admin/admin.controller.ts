@@ -34,7 +34,7 @@ import {
   UpdateAdminUserRolesDto,
   UpdateAdminUserStatusDto,
 } from './dto/admin-user.dto';
-import { UpdateAdminVendorStatusDto } from './dto/admin-vendor.dto';
+import { ListAdminVendorsDto, UpdateAdminVendorStatusDto } from './dto/admin-vendor.dto';
 import { PasabuyIdentityService } from '../pasabuy/pasabuy-identity.service';
 import { ReviewStudentIdDto } from '../pasabuy/dto/review-student-id.dto';
 
@@ -104,20 +104,41 @@ export class AdminController {
   }
 
   @Get('vendors')
-  listVendors() {
-    return this.adminService.listVendors();
+  @ApiOperation({ summary: 'List vendors, including pending and suspended stores' })
+  listVendors(@Query() query: ListAdminVendorsDto) {
+    return this.adminService.listVendors(query);
+  }
+
+  @Get('vendors/:id')
+  @ApiOperation({ summary: 'Get a vendor for admin management' })
+  getVendor(@Param('id', ParseUUIDPipe) vendorId: string) {
+    return this.adminService.getVendor(vendorId);
+  }
+
+  @Get('vendors/:id/audit')
+  @ApiOperation({ summary: 'Get the vendor participation audit history' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
+  getVendorAudit(
+    @Param('id', ParseUUIDPipe) vendorId: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    return this.adminService.getVendorAudit(vendorId, page, limit);
   }
 
   @Patch('vendors/:id/status')
+  @ApiOperation({ summary: 'Approve, suspend, or reactivate a vendor' })
   updateVendorStatus(
     @Req() request: AuthenticatedRequest,
-    @Param('id') vendorId: string,
+    @Param('id', ParseUUIDPipe) vendorId: string,
     @Body() dto: UpdateAdminVendorStatusDto,
   ) {
     return this.adminService.updateVendorStatus(
       vendorId,
       dto.status,
       request.user.sub,
+      dto.reason,
     );
   }
 
