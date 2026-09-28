@@ -521,6 +521,7 @@ model Payment {
   payer                User                @relation("PaymentPayer", fields: [payerUserId], references: [id])
   vendorSubscription   VendorSubscription? @relation(fields: [vendorSubscriptionId], references: [id], onDelete: Restrict)
   refunds              Refund[]
+  reportsTargeting     Report[]            @relation("ReportTargetPayment")
   idempotencyKeys      PaymentIdempotencyKey[]
 
   @@index([payerUserId])
@@ -652,11 +653,13 @@ model Report {
   reportedProductId String?               @db.Uuid
   reportedOrderId   String?               @db.Uuid
   reportedPasabuyId String?               @db.Uuid
+  reportedPaymentId String?               @db.Uuid
   createdAt         DateTime              @default(now()) @db.Timestamptz(6)
   updatedAt         DateTime              @updatedAt @db.Timestamptz(6)
   statusHistory     ReportStatusHistory[]
   reportedOrder     Order?                @relation("ReportTargetOrder", fields: [reportedOrderId], references: [id])
   reportedPasabuy   PasabuyRequest?       @relation("ReportTargetPasabuy", fields: [reportedPasabuyId], references: [id])
+  reportedPayment   Payment?              @relation("ReportTargetPayment", fields: [reportedPaymentId], references: [id])
   reportedProduct   Product?              @relation("ReportTargetProduct", fields: [reportedProductId], references: [id])
   reportedUser      User?                 @relation("ReportTargetUser", fields: [reportedUserId], references: [id])
   reportedVendor    Vendor?               @relation("ReportTargetVendor", fields: [reportedVendorId], references: [id])
@@ -664,6 +667,7 @@ model Report {
 
   @@index([reporterUserId])
   @@index([status])
+  @@index([reportedPaymentId])
   @@map("reports")
 }
 
