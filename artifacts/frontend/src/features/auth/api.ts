@@ -285,8 +285,10 @@ export async function fetchWithAuth<T = unknown>(
     typeof window !== "undefined" ? localStorage.getItem("token") : null;
 
   const headers: HeadersInit = {
-    "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(!(options.body instanceof FormData)
+      ? { "Content-Type": "application/json" }
+      : {}),
     ...options.headers,
   };
 
@@ -916,9 +918,10 @@ export interface CreateReportInput {
     | "TRANSACTION"
     | "PRODUCT"
     | "PASABUY";
-  targetId: string;
+  targetId?: string;
   category: string;
   description: string;
+  attachment?: File;
 }
 
 export interface Report {
@@ -937,13 +940,25 @@ export interface Report {
 }
 
 export async function createReport(
-  input: CreateReportInput
-): Promise<Report> {
-  return fetchWithAuth<Report>("/reports", {
+  data: CreateReportInput,
+): Promise<unknown> {
+  const formData = new FormData();
+
+  formData.append("targetType", data.targetType);
+
+  if (data.targetId?.trim()) {
+    formData.append("targetId", data.targetId.trim());
+  }
+
+  formData.append("category", data.category.trim());
+  formData.append("description", data.description.trim());
+
+  if (data.attachment) {
+    formData.append("attachment", data.attachment);
+  }
+
+  return fetchWithAuth("/reports", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(input),
+    body: formData,
   });
 }

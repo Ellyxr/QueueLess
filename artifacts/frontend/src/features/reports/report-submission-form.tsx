@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import {
   createReport,
@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Check, Paperclip, X } from "lucide-react";
 
 interface ReportSubmissionFormProps {
   initialTargetType?: string;
@@ -58,15 +59,62 @@ const TARGET_TYPES: Array<{
   { value: "VENDOR", label: "A vendor" },
   { value: "PRODUCT", label: "A product" },
   { value: "TRANSACTION", label: "A transaction / payment" },
+  { value: "PASABUY", label: "A Pasabuy transaction" },
 ];
 
-const REPORT_CATEGORIES = [
-  { value: "ORDER_ISSUE", label: "Order issue" },
-  { value: "WRONG_ITEM", label: "Wrong item" },
-  { value: "FRAUD", label: "Fraud or suspicious activity" },
-  { value: "INAPPROPRIATE_BEHAVIOR", label: "Inappropriate behavior" },
-  { value: "OTHER", label: "Other" },
-];
+const REPORT_CATEGORIES_BY_TARGET: Record<
+  ReportTargetType,
+  Array<{ value: string; label: string }>
+> = {
+  ORDER: [
+    { value: "ORDER_ISSUE", label: "Order issue" },
+    { value: "WRONG_ITEM", label: "Wrong item" },
+    { value: "FRAUD", label: "Fraud or suspicious activity" },
+    { value: "INAPPROPRIATE_BEHAVIOR", label: "Inappropriate behavior" },
+    { value: "OTHER", label: "Other" },
+  ],
+  VENDOR: [
+    { value: "VENDOR_ISSUE", label: "Vendor issue" },
+    { value: "FRAUD", label: "Fraud or suspicious activity" },
+    { value: "INAPPROPRIATE_BEHAVIOR", label: "Inappropriate behavior" },
+    { value: "PRODUCT_OR_LISTING_ISSUE", label: "Product or listing issue" },
+    { value: "OTHER", label: "Other" },
+  ],
+  PRODUCT: [
+    { value: "PRODUCT_ISSUE", label: "Product issue" },
+    { value: "WRONG_OR_MISLEADING_ITEM", label: "Wrong or misleading item" },
+    { value: "FRAUD", label: "Fraud or suspicious activity" },
+    { value: "INAPPROPRIATE_CONTENT", label: "Inappropriate content" },
+    { value: "OTHER", label: "Other" },
+  ],
+  TRANSACTION: [
+    { value: "PAYMENT_ISSUE", label: "Payment issue" },
+    {
+      value: "CHARGED_BUT_NOT_PROCESSED",
+      label: "Charged but payment was not processed",
+    },
+    { value: "DUPLICATE_CHARGE", label: "Duplicate charge" },
+    { value: "REFUND_ISSUE", label: "Refund issue" },
+    {
+      value: "UNAUTHORIZED_PAYMENT",
+      label: "Unauthorized or suspicious payment",
+    },
+    { value: "OTHER", label: "Other" },
+  ],
+  PASABUY: [
+    { value: "PASABUY_TRANSACTION_ISSUE", label: "Pasabuy transaction issue" },
+    { value: "PAYMENT_OR_FEE_ISSUE", label: "Payment or convenience fee issue" },
+    { value: "WRONG_OR_MISSING_ITEM", label: "Wrong or missing item" },
+    { value: "INAPPROPRIATE_BEHAVIOR", label: "Inappropriate behavior" },
+    { value: "FRAUD", label: "Fraud or suspicious activity" },
+    { value: "OTHER", label: "Other" },
+  ],
+  USER: [
+    { value: "INAPPROPRIATE_BEHAVIOR", label: "Inappropriate behavior" },
+    { value: "FRAUD", label: "Fraud or suspicious activity" },
+    { value: "OTHER", label: "Other" },
+  ],
+};
 
 function formatDate(dateString: string) {
   return new Date(dateString).toLocaleDateString("en-PH", {
@@ -79,13 +127,9 @@ function formatDate(dateString: string) {
 function getOrderLabel(order: CustomerOrder) {
   const firstItem = order.items[0];
   const itemName = firstItem?.name ?? "Order";
-  const extraItems = order.items.length > 1
-    ? ` +${order.items.length - 1}`
-    : "";
+  const extraItems = order.items.length > 1 ? ` +${order.items.length - 1}` : "";
 
-  return `${itemName}${extraItems} • ₱${order.total} • ${formatDate(
-    order.createdAt,
-  )}`;
+  return `${itemName}${extraItems} • ₱${order.total} • ${formatDate(order.createdAt)}`;
 }
 
 function getVendorLabel(vendor: VendorStorefront) {
@@ -105,20 +149,23 @@ export default function ReportSubmissionForm({
 }: ReportSubmissionFormProps) {
   const [targetType, setTargetType] = useState(initialTargetType);
   const [targetId, setTargetId] = useState(initialTargetId);
-
   const [targetOptions, setTargetOptions] = useState<TargetOption[]>([]);
   const [selectedTargetLabel, setSelectedTargetLabel] = useState("");
-
   const [isLoadingTargets, setIsLoadingTargets] = useState(false);
   const [targetLoadError, setTargetLoadError] = useState("");
 
   const [category, setCategory] = useState(initialCategory);
   const [description, setDescription] = useState("");
+  const [attachment, setAttachment] = useState<File | null>(null);
+  const [attachmentError, setAttachmentError] = useState("");
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState("");
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const reportCategories =
+    REPORT_CATEGORIES_BY_TARGET[targetType as ReportTargetType] ?? [];
 
   useEffect(() => {
     setDescription(initialDescription);
@@ -146,25 +193,25 @@ export default function ReportSubmissionForm({
 
           if (cancelled) return;
 
-          const options = orders.map((order) => ({
-            id: order.id,
-            label: getOrderLabel(order),
-            description: `From ${order.vendor.name}`,
-          }));
-
-          setTargetOptions(options);
+          setTargetOptions(
+            orders.map((order) => ({
+              id: order.id,
+              label: getOrderLabel(order),
+              description: `From ${order.vendor.name}`,
+            })),
+          );
         } else if (targetType === "VENDOR") {
           const vendors = await listVendors();
 
           if (cancelled) return;
 
-          const options = vendors.map((vendor) => ({
-            id: vendor.id,
-            label: getVendorLabel(vendor),
-            description: vendor.description ?? undefined,
-          }));
-
-          setTargetOptions(options);
+          setTargetOptions(
+            vendors.map((vendor) => ({
+              id: vendor.id,
+              label: getVendorLabel(vendor),
+              description: vendor.description ?? undefined,
+            })),
+          );
         } else if (targetType === "PRODUCT") {
           const vendors = await listVendors();
 
@@ -172,9 +219,7 @@ export default function ReportSubmissionForm({
 
           const storefronts = await Promise.all(
             vendors.map(async (vendor) => {
-              if (vendor.products) {
-                return vendor;
-              }
+              if (vendor.products) return vendor;
 
               try {
                 return await getVendorStorefront(vendor.id);
@@ -201,43 +246,8 @@ export default function ReportSubmissionForm({
           });
 
           setTargetOptions(options);
-        } else if (targetType === "TRANSACTION") {
-          const orders = await getMyOrders();
-
-          if (cancelled) return;
-
-          const paymentResults: Array<TargetOption | null> =
-            await Promise.all(
-                orders.map(async (order) => {
-                try {
-                    const payment = await getOrderPaymentStatus(order.id);
-
-                    if (!payment.payment) return null;
-
-                    const paymentOption: TargetOption = {
-                    id: payment.payment.id,
-                    label: `${
-                        order.items[0]?.name ?? "Order payment"
-                    } • ₱${payment.payment.amount} • ${formatDate(
-                        payment.payment.createdAt,
-                    )}`,
-                    description: `Payment for ${order.vendor.name}`,
-                    };
-
-                    return paymentOption;
-                } catch {
-                    return null;
-                }
-                }),
-            );
-
-            if (cancelled) return;
-
-            setTargetOptions(
-            paymentResults.filter(
-                (payment): payment is TargetOption => payment !== null,
-            ),
-            );
+        } else if (targetType === "TRANSACTION" || targetType === "PASABUY") {
+          setTargetOptions([]);
         }
       } catch (error) {
         if (cancelled) return;
@@ -264,91 +274,85 @@ export default function ReportSubmissionForm({
   useEffect(() => {
     if (lockTarget) {
       setSelectedTargetLabel(
-        targetType === "ORDER"
-          ? "Selected order"
-          : "Selected item",
+        targetType === "ORDER" ? "Selected order" : "Selected item",
       );
-
       return;
     }
 
-    const selected = targetOptions.find(
-      (option) => option.id === targetId,
-    );
-
+    const selected = targetOptions.find((option) => option.id === targetId);
     setSelectedTargetLabel(selected?.label ?? "");
-  }, [
-    lockTarget,
-    targetId,
-    targetOptions,
-    targetType,
-  ]);
+  }, [lockTarget, targetId, targetOptions, targetType]);
 
-  async function handleSubmit(
-    event: React.FormEvent<HTMLFormElement>,
-  ) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const newErrors: Record<string, string> = {};
 
     if (!targetType) {
-      newErrors.targetType =
-        "Please select what you are reporting.";
+      newErrors.targetType = "Please select what you are reporting.";
     }
 
-    if (!targetId.trim()) {
+    if (targetType !== "TRANSACTION" && !targetId.trim()) {
+      newErrors.targetId = "Please select the item you want to report.";
+    }
+
+    if (targetType === "TRANSACTION" && !targetId.trim() && !attachment) {
       newErrors.targetId =
-        "Please select the item you want to report.";
+        "A target ID is required unless transaction proof is attached.";
     }
 
     if (!category.trim()) {
-      newErrors.category =
-        "Please select a report category.";
+      newErrors.category = "Please select a report category.";
     }
 
     if (!description.trim()) {
-      newErrors.description =
-        "Please provide details about the report.";
+      newErrors.description = "Please provide details about the report.";
     }
 
     if (description.trim().length > 2000) {
-      newErrors.description =
-        "Details must not exceed 2000 characters.";
+      newErrors.description = "Details must not exceed 2000 characters.";
     }
 
     if (category.trim().length > 100) {
-      newErrors.category =
-        "Category must not exceed 100 characters.";
+      newErrors.category = "Category must not exceed 100 characters.";
+    }
+
+    if (attachment && attachment.size > 5 * 1024 * 1024) {
+      newErrors.attachment = "File must not exceed 5 MB.";
     }
 
     setErrors(newErrors);
     setSubmitError("");
-    setSubmitSuccess(false);
 
-    if (Object.keys(newErrors).length > 0) {
-      return;
-    }
+    if (Object.keys(newErrors).length > 0) return;
 
     setIsSubmitting(true);
 
     try {
       const reportData: CreateReportInput = {
-        targetType:
-          targetType as CreateReportInput["targetType"],
-        targetId: targetId.trim(),
+        targetType: targetType as CreateReportInput["targetType"],
+        ...(targetId.trim() ? { targetId: targetId.trim() } : {}),
         category: category.trim(),
         description: description.trim(),
+        attachment: attachment ?? undefined,
       };
 
       await createReport(reportData);
 
       setSubmitSuccess(true);
       setErrors({});
+      setSubmitError("");
+
+      setTargetType("");
+      setTargetId("");
+      setTargetOptions([]);
+      setSelectedTargetLabel("");
+      setCategory("");
+      setDescription("");
+      setAttachment(null);
+      setAttachmentError("");
     } catch (error) {
-      console.error(
-        "Failed to submit report:",
-        error,
-      );
+      console.error("Failed to submit report:", error);
 
       setSubmitError(
         error instanceof Error
@@ -360,26 +364,61 @@ export default function ReportSubmissionForm({
     }
   }
 
+  if (submitSuccess) {
+    return (
+      <Card className="w-full max-w-2xl">
+        <CardHeader>
+          <CardTitle>Report a Problem</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Tell us about the issue you would like to report.
+          </p>
+        </CardHeader>
+
+        <CardContent>
+          <div className="rounded-[18px] border border-emerald-500/30 bg-emerald-500/10 px-6 py-10 text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10">
+              <Check className="h-7 w-7 text-emerald-600" />
+            </div>
+
+            <h2 className="mt-5 text-2xl font-semibold text-emerald-700 dark:text-emerald-400">
+              Report submitted!
+            </h2>
+
+            <p className="mx-auto mt-3 max-w-lg text-sm leading-6 text-emerald-700/80 dark:text-emerald-300/80">
+              Thanks for letting us know. Our team will review your report and
+              take the appropriate action.
+            </p>
+
+            <Button
+              type="button"
+              variant="outline"
+              className="mt-6 rounded-full"
+              onClick={() => {
+                setSubmitSuccess(false);
+                setSubmitError("");
+              }}
+            >
+              Submit another report
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card className="w-full max-w-2xl">
       <CardHeader>
         <CardTitle>Report a Problem</CardTitle>
-
         <p className="text-sm text-muted-foreground">
           Tell us about the issue you would like to report.
         </p>
       </CardHeader>
 
       <CardContent>
-        <form
-          onSubmit={handleSubmit}
-          className="space-y-6"
-        >
-          {/* Target Type */}
+        <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-2">
-            <Label htmlFor="target-type">
-              What would you like to report?
-            </Label>
+            <Label htmlFor="target-type">What would you like to report?</Label>
 
             <Select
               value={targetType}
@@ -388,7 +427,10 @@ export default function ReportSubmissionForm({
                 setTargetType(value);
                 setTargetId("");
                 setSelectedTargetLabel("");
-
+                setTargetLoadError("");
+                setCategory("");
+                setAttachment(null);
+                setAttachmentError("");
                 setErrors((previous) => ({
                   ...previous,
                   targetType: "",
@@ -402,10 +444,7 @@ export default function ReportSubmissionForm({
 
               <SelectContent>
                 {TARGET_TYPES.map((target) => (
-                  <SelectItem
-                    key={target.value}
-                    value={target.value}
-                  >
+                  <SelectItem key={target.value} value={target.value}>
                     {target.label}
                   </SelectItem>
                 ))}
@@ -413,13 +452,10 @@ export default function ReportSubmissionForm({
             </Select>
 
             {errors.targetType && (
-              <p className="text-sm text-destructive">
-                {errors.targetType}
-              </p>
+              <p className="text-sm text-destructive">{errors.targetType}</p>
             )}
           </div>
 
-          {/* Target Selection */}
           <div className="space-y-2">
             <Label htmlFor="target-selection">
               {targetType === "ORDER"
@@ -429,8 +465,10 @@ export default function ReportSubmissionForm({
                   : targetType === "PRODUCT"
                     ? "Which product?"
                     : targetType === "TRANSACTION"
-                      ? "Which transaction?"
-                      : "Select an item"}
+                      ? "Transaction proof"
+                      : targetType === "PASABUY"
+                        ? "Which Pasabuy transaction?"
+                        : "Select an item"}
             </Label>
 
             {lockTarget ? (
@@ -440,16 +478,102 @@ export default function ReportSubmissionForm({
               >
                 {selectedTargetLabel}
               </div>
+            ) : targetType === "TRANSACTION" ? (
+              <div className="space-y-3">
+                <div className="rounded-[14px] border border-dashed bg-muted/20 p-4">
+                  <div className="flex items-start gap-3">
+                    <Paperclip className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">Upload payment proof</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Add a screenshot, image, or PDF of the transaction if you have one.
+                      </p>
+                    </div>
+                  </div>
+
+                  <input
+                    id="transaction-attachment"
+                    type="file"
+                    accept="image/png,image/jpeg,application/pdf"
+                    className="sr-only"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] ?? null;
+                      setAttachmentError("");
+                      setErrors((previous) => ({ ...previous, attachment: "" }));
+
+                      if (!file) {
+                        setAttachment(null);
+                        return;
+                      }
+
+                      if (file.size > 5 * 1024 * 1024) {
+                        setAttachment(null);
+                        setAttachmentError("File must not exceed 5 MB.");
+                        setErrors((previous) => ({
+                          ...previous,
+                          attachment: "File must not exceed 5 MB.",
+                        }));
+                        event.target.value = "";
+                        return;
+                      }
+
+                      setAttachment(file);
+                    }}
+                  />
+
+                  {!attachment ? (
+                    <label
+                      htmlFor="transaction-attachment"
+                      className="mt-4 inline-flex cursor-pointer items-center rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                    >
+                      Choose File
+                    </label>
+                  ) : (
+                    <div className="mt-4 flex items-center justify-between gap-3 rounded-lg bg-background px-3 py-2 text-sm">
+                      <span className="min-w-0 truncate">{attachment.name}</span>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        onClick={() => {
+                          setAttachment(null);
+                          setAttachmentError("");
+                          setErrors((previous) => ({ ...previous, attachment: "" }));
+                          const input = document.getElementById(
+                            "transaction-attachment",
+                          ) as HTMLInputElement | null;
+                          if (input) input.value = "";
+                        }}
+                        aria-label="Remove attachment"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    JPG, JPEG, PNG, or PDF • Max 5 MB
+                  </p>
+
+                  {(attachmentError || errors.attachment) && (
+                    <p className="text-sm text-destructive">
+                      {attachmentError || errors.attachment}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : targetType === "PASABUY" ? (
+              <div
+                id="target-selection"
+                className="rounded-md border border-dashed bg-muted/20 px-4 py-3 text-sm text-muted-foreground"
+              >
+                Pasabuy transaction selection will appear here once the Pasabuy history data is available.
+              </div>
             ) : (
               <Select
                 value={targetId}
-                disabled={
-                  !targetType ||
-                  isLoadingTargets
-                }
+                disabled={!targetType || isLoadingTargets}
                 onValueChange={(value) => {
                   setTargetId(value);
-
                   setErrors((previous) => ({
                     ...previous,
                     targetId: "",
@@ -468,17 +592,13 @@ export default function ReportSubmissionForm({
                   />
                 </SelectTrigger>
 
-                <SelectContent>
+                <SelectContent className="max-h-64 overflow-y-auto">
                   {targetOptions.map((option) => (
-                    <SelectItem
-                      key={option.id}
-                      value={option.id}
-                    >
-                      <div className="flex flex-col">
-                        <span>{option.label}</span>
-
+                    <SelectItem key={option.id} value={option.id}>
+                      <div className="flex max-w-[520px] flex-col">
+                        <span className="truncate">{option.label}</span>
                         {option.description && (
-                          <span className="text-xs text-muted-foreground">
+                          <span className="truncate text-xs text-muted-foreground">
                             {option.description}
                           </span>
                         )}
@@ -491,43 +611,42 @@ export default function ReportSubmissionForm({
 
             {lockTarget ? (
               <p className="text-xs text-muted-foreground">
-                This report is linked to the selected order.
+                This report is linked to the selected {targetType === "ORDER" ? "order" : "item"}.
               </p>
             ) : targetLoadError ? (
-              <p className="text-sm text-destructive">
-                {targetLoadError}
-              </p>
-            ) : targetType &&
-              !isLoadingTargets &&
-              targetOptions.length === 0 ? (
+              <p className="text-sm text-destructive">{targetLoadError}</p>
+            ) : targetType === "ORDER" ? (
               <p className="text-xs text-muted-foreground">
-                We couldn't find any available items to report.
+                Select the order from your QueueLess activity. You don't need
+                to enter an ID.
               </p>
-            ) : (
+            ) : targetType === "TRANSACTION" ? (
               <p className="text-xs text-muted-foreground">
-                Select the item from your QueueLess activity.
-                You don't need to enter an ID.
+                A transaction record is optional here. Upload payment proof if you need to show transaction details.
               </p>
-            )}
+            ) : targetType === "PASABUY" ? (
+              <p className="text-xs text-muted-foreground">
+                Pasabuy transaction history will be connected once its frontend data source is available.
+              </p>
+            ) : targetType ? (
+              <p className="text-xs text-muted-foreground">
+                Select the item from your QueueLess activity. You don't need to
+                enter an ID.
+              </p>
+            ) : null}
 
             {errors.targetId && (
-              <p className="text-sm text-destructive">
-                {errors.targetId}
-              </p>
+              <p className="text-sm text-destructive">{errors.targetId}</p>
             )}
           </div>
 
-          {/* Category */}
           <div className="space-y-2">
-            <Label htmlFor="category">
-              What happened?
-            </Label>
+            <Label htmlFor="category">What happened?</Label>
 
             <Select
               value={category}
               onValueChange={(value) => {
                 setCategory(value);
-
                 setErrors((previous) => ({
                   ...previous,
                   category: "",
@@ -539,31 +658,24 @@ export default function ReportSubmissionForm({
               </SelectTrigger>
 
               <SelectContent>
-                {REPORT_CATEGORIES.map(
-                  (reportCategory) => (
-                    <SelectItem
-                      key={reportCategory.value}
-                      value={reportCategory.value}
-                    >
-                      {reportCategory.label}
-                    </SelectItem>
-                  ),
-                )}
+                {reportCategories.map((reportCategory) => (
+                  <SelectItem
+                    key={reportCategory.value}
+                    value={reportCategory.value}
+                  >
+                    {reportCategory.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
 
             {errors.category && (
-              <p className="text-sm text-destructive">
-                {errors.category}
-              </p>
+              <p className="text-sm text-destructive">{errors.category}</p>
             )}
           </div>
 
-          {/* Description */}
           <div className="space-y-2">
-            <Label htmlFor="description">
-              Tell us more
-            </Label>
+            <Label htmlFor="description">Tell us more</Label>
 
             <Textarea
               id="description"
@@ -571,7 +683,6 @@ export default function ReportSubmissionForm({
               value={description}
               onChange={(event) => {
                 setDescription(event.target.value);
-
                 setErrors((previous) => ({
                   ...previous,
                   description: "",
@@ -583,10 +694,8 @@ export default function ReportSubmissionForm({
 
             <div className="flex justify-between gap-4">
               <p className="text-xs text-muted-foreground">
-                Please provide enough information to help us
-                review your report.
+                Please provide enough information to help us review your report.
               </p>
-
               <p className="shrink-0 text-xs text-muted-foreground">
                 {description.length}/2000
               </p>
@@ -599,36 +708,18 @@ export default function ReportSubmissionForm({
             )}
           </div>
 
-          {/* API Error */}
           {submitError && (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3">
-              <p className="text-sm text-destructive">
-                {submitError}
-              </p>
+              <p className="text-sm text-destructive">{submitError}</p>
             </div>
           )}
 
-          {/* Success Message */}
-          {submitSuccess && (
-            <div className="rounded-md border border-green-500/30 bg-green-500/10 p-3">
-              <p className="text-sm text-green-600">
-                Report submitted successfully.
-              </p>
-            </div>
-          )}
-
-          {/* Submit */}
           <Button
             type="submit"
             className="w-full"
-            disabled={
-              isSubmitting ||
-              isLoadingTargets
-            }
+            disabled={isSubmitting || isLoadingTargets}
           >
-            {isSubmitting
-              ? "Submitting..."
-              : "Submit Report"}
+            {isSubmitting ? "Submitting..." : "Submit Report"}
           </Button>
         </form>
       </CardContent>
