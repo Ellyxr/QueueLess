@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma, ReportStatus } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateReportDto, ReportTargetType } from './dto/create-report.dto';
 import { ListReportsDto } from './dto/list-reports.dto';
+import { UpdateReportStatusDto } from './dto/update-report-status.dto';
 
 type TargetFields = Pick<Prisma.ReportUncheckedCreateInput,
   'reportedVendorId' | 'reportedUserId' | 'reportedOrderId' |
@@ -33,6 +34,13 @@ const reportSummary = {
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.ReportSelect;
+
+const allowedTransitions: Record<ReportStatus, ReportStatus[]> = {
+  OPEN: [ReportStatus.IN_REVIEW, ReportStatus.RESOLVED, ReportStatus.DISMISSED],
+  IN_REVIEW: [ReportStatus.RESOLVED, ReportStatus.DISMISSED],
+  RESOLVED: [],
+  DISMISSED: [],
+};
 
 @Injectable()
 export class ReportsService {
@@ -78,6 +86,44 @@ export class ReportsService {
     });
     if (!report) throw new NotFoundException('Report not found');
     return report;
+  }
+
+  async updateStatus(id: string, adminUserId: string, dto: UpdateReportStatusDto) {
+    const note = dto.note?.trim() ?? null;
+    if (dto.status !== ReportStatus.IN_REVIEW && !note) {
+      throw new BadRequestException('A resolution or dismissal note is required');
+    }
+    const current = await this.prisma.report.findUnique({
+      where: { id }, select: { status: true },
+    });
+    if (!current) throw new NotFoundException('Report not found');
+    if (!allowedTransitions[current.status].includes(dto.status)) {
+      throw new ConflictException(`Report cannot transition from ${current.status} to ${dto.status}`);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.report.updateMany({
+        where: { id, status: current.status },
+        data: { status: dto.status },
+      });
+      if (updated.count !== 1) {
+        throw new ConflictException('Report status changed; please retry');
+      }
+      await tx.reportStatusHistory.create({
+        data: { reportId: id, status: dto.status, adminUserId, note },
+      });
+      await tx.auditRecord.create({
+        data: {
+          actorUserId: adminUserId,
+          actionType: 'REPORT_STATUS_UPDATED',
+          entityType: 'Report',
+          entityId: id,
+          beforeState: { status: current.status },
+          afterState: { status: dto.status, note },
+        },
+      });
+    });
+    return this.detail(id);
   }
 
   async create(reporterUserId: string, dto: CreateReportDto) {
