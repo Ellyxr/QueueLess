@@ -76,7 +76,8 @@ export class OrdersService {
     if (existing) {
       if (
         existing.cartId !== dto.cartId ||
-        existing.eventId !== (dto.eventId ?? null)
+        existing.eventId !== (dto.eventId ?? null) ||
+        (existing.order && existing.order.isPreorder !== (dto.isPreorder ?? false))
       ) {
         throw new ConflictException(
           'Idempotency-Key was already used for a different order request',
@@ -136,6 +137,10 @@ export class OrdersService {
             throw new BadRequestException(
               'Vendor is not active',
             );
+          }
+
+          if (dto.isPreorder && !cart.vendor.preorderEnabled) {
+            throw new BadRequestException('This vendor does not accept preorders');
           }
 
           for (const item of cart.items) {
@@ -254,6 +259,7 @@ export class OrdersService {
               orderType: 'INDIVIDUAL',
               status: 'PENDING',
               isPasabuyRequest: false,
+              isPreorder: dto.isPreorder ?? false,
               subtotal,
               marketplaceFee,
               estimatedReadyAt,
@@ -399,11 +405,13 @@ export class OrdersService {
       select: {
         id: true,
         status: true,
+        isPreorder: true,
+        isPasabuyRequest: true,
         totalAmount: true,
         createdAt: true,
         paidAt: true,
         buyerContactPingAt: true,
-        vendor: { select: { id: true, name: true } },
+        vendor: { select: { id: true, name: true, pickupLocation: true } },
         items: {
           orderBy: { createdAt: 'asc' },
           take: 1,
@@ -423,6 +431,9 @@ export class OrdersService {
     return orders.map((order) => ({
       id: order.id,
       status: order.status,
+      isPreorder: order.isPreorder,
+      isPasabuyRequest: order.isPasabuyRequest,
+      orderReference: order.id.slice(0, 8).toUpperCase(),
       total: order.totalAmount.toFixed(2),
       createdAt: order.createdAt,
       paidAt: order.paidAt,
@@ -461,6 +472,7 @@ export class OrdersService {
         orderType: true,
         status: true,
         isPasabuyRequest: true,
+        isPreorder: true,
         cancellationReason: true,
         cancellationNote: true,
         estimatedReadyAt: true,
@@ -486,6 +498,7 @@ export class OrdersService {
             id: true,
             name: true,
             campusLocation: true,
+            pickupLocation: true,
           },
         },
         items: {
@@ -565,6 +578,8 @@ export class OrdersService {
       orderType: order.orderType,
       status: order.status,
       isPasabuyRequest: order.isPasabuyRequest,
+      isPreorder: order.isPreorder,
+      orderReference: order.id.slice(0, 8).toUpperCase(),
       cancellationReason: order.cancellationReason,
       cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
@@ -1162,6 +1177,8 @@ export class OrdersService {
       orderType: order.orderType,
       status: order.status,
       isPasabuyRequest: order.isPasabuyRequest,
+      isPreorder: order.isPreorder,
+      orderReference: order.id.slice(0, 8).toUpperCase(),
       cancellationReason: order.cancellationReason,
       cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,

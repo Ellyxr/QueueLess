@@ -73,3 +73,38 @@ Events are notifications. Clients should call
 `GET /api/v1/pasabuy/requests/:id` for authoritative state after receiving
 an event or `realtime.ready` on reconnect. An open request expiring without a
 deliverer is persisted by a 30-second sweep before its event is sent.
+
+## Issue #96 remaining backend flows
+
+The requester or assigned deliverer can `POST /api/v1/pasabuy/requests/:id/cancel`
+with a nonempty `reason` while the request is waiting or paid and before the
+vendor verifies pickup. Unpaid checkout sessions are closed before cancellation;
+paid cancellations create a refund request for the existing admin refund flow.
+Participants can `POST /api/v1/pasabuy/requests/:id/report` with a
+`description` after payment; this creates a linked Report and moves the request
+to `DISPUTED`. Fully processed Pasabuy refunds update `paymentStatus` to
+`REFUNDED` and notify participants.
+
+The vendor owner can call `GET /api/v1/pasabuy/vendor/orders/:orderId` to see
+the assigned deliverer and pickup code once the fee is paid. When the food
+order is ready, the vendor verifies the six digit code with
+`POST /api/v1/pasabuy/vendor/orders/:orderId/verify-pickup` and body
+`{ "code": "123456" }`. Five failed attempts lock further verification.
+Only after verification can the deliverer use the existing pickup endpoint.
+
+A buyer submits a student ID number via `PUT /api/v1/pasabuy/profile` and a
+photo using multipart field `photo` at `POST /api/v1/pasabuy/profile/student-id-photo`.
+The photo is uploaded privately; the profile response exposes submission and
+verification booleans, never its file path. Admins review private links using
+`GET /api/v1/admin/pasabuy/student-ids`, may retrieve a fresh short-lived link
+from `GET /api/v1/admin/pasabuy/student-ids/:userId/photo`, and approve or reject
+via `PATCH /api/v1/admin/pasabuy/student-ids/:userId` with
+`{ "decision": "APPROVE" }` or `REJECT`. Browsing and accepting requests require
+an approved student ID photo. Existing profiles containing only an ID number
+must submit a photo for review.
+
+Individual order creation accepts an optional `isPreorder` boolean when the
+vendor supports preorders. It is returned by order creation, customer history,
+and order status; marked preorders cannot create Pasabuy requests. Customer
+history now includes `isPasabuyRequest` and a short `orderReference`; order
+status includes the vendor's `pickupLocation` separately from its name.

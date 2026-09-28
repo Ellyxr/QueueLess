@@ -336,6 +336,7 @@ model Order {
   orderType         OrderType
   status            OrderStatus           @default(PENDING)
   isPasabuyRequest  Boolean               @default(false)
+  isPreorder        Boolean               @default(false)
   cancellationReason CancellationReason?
   cancellationNote  String?
   subtotal          Decimal               @db.Decimal(10, 2)
@@ -602,6 +603,8 @@ model PasabuyRequest {
   totalAmount      Decimal                @db.Decimal(10, 2)
   acceptedAt       DateTime?              @db.Timestamptz(6)
   pickupCode       String?
+  pickupVerifiedAt DateTime?              @db.Timestamptz(6)
+  pickupVerificationAttempts Int          @default(0)
   expiresAt        DateTime?             @db.Timestamptz(6)
   paymentStatus    PasabuyPaymentStatus  @default(NOT_CHARGED)
   paymentDeadline  DateTime?             @db.Timestamptz(6)
