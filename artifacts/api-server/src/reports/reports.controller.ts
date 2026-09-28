@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -7,6 +7,7 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CreateReportDto } from './dto/create-report.dto';
 import { ListReportsDto } from './dto/list-reports.dto';
+import { UpdateReportStatusDto } from './dto/update-report-status.dto';
 import { ReportsService } from './reports.service';
 
 @ApiTags('reports')
@@ -35,6 +36,23 @@ export class ReportsController {
   @ApiResponse({ status: 404, description: 'Report not found' })
   detail(@Param('id', ParseUUIDPipe) id: string) {
     return this.reports.detail(id);
+  }
+
+  @Patch(':id/status')
+  @UseGuards(RolesGuard)
+  @Roles('ADMIN')
+  @ApiOperation({ summary: 'Review, resolve, or dismiss a report' })
+  @ApiResponse({ status: 200, description: 'Updated report with status history' })
+  @ApiResponse({ status: 400, description: 'Invalid status or missing outcome note' })
+  @ApiResponse({ status: 403, description: 'Administrator role required' })
+  @ApiResponse({ status: 404, description: 'Report not found' })
+  @ApiResponse({ status: 409, description: 'Invalid or concurrent status transition' })
+  updateStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpdateReportStatusDto,
+  ) {
+    return this.reports.updateStatus(id, user.sub, dto);
   }
 
   @Post()

@@ -24,3 +24,15 @@ Only users with the `ADMIN` role may access `GET /api/v1/reports` and
 to 1 and `limit` to 20, with a maximum of 100. It returns `{ items, page,
 limit, total, totalPages }`, sorted newest first (ID breaks timestamp ties).
 The detail route returns reporter and target summaries and status history.
+
+## Admin resolution (US-041)
+
+Administrators can `PATCH /api/v1/reports/:id/status` with `status` set to
+`IN_REVIEW`, `RESOLVED`, or `DISMISSED`, and an optional `note`. Resolving or
+dismissing requires a nonblank note explaining the outcome. Reports may move
+from `OPEN` to any of these states, or from `IN_REVIEW` to `RESOLVED` or
+`DISMISSED`. Resolved and dismissed reports are final. A successful update
+atomically records the administrator, status, note, and timestamp in
+`ReportStatusHistory` and writes an `AuditRecord`. Conflicting transitions
+return 409; missing reports return 404. The response includes the updated
+report and its full status history.
