@@ -1,10 +1,13 @@
 import {
   Body,
   Controller,
+  DefaultValuePipe,
   Get,
   HttpCode,
   HttpStatus,
   Param,
+  ParseIntPipe,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -175,6 +178,24 @@ export class AdminController {
     );
   }
 
+  @Get('users/:id')
+  @ApiOperation({ summary: 'Get one user for admin management' })
+  getUser(@Param('id', ParseUUIDPipe) userId: string) {
+    return this.adminService.getUser(userId);
+  }
+
+  @Get('users/:id/audit')
+  @ApiOperation({ summary: 'Get the user management audit history' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
+  getUserAudit(
+    @Param('id', ParseUUIDPipe) userId: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    return this.adminService.getUserAudit(userId, page, limit);
+  }
+
   @Patch('users/:id/roles')
   @ApiOperation({
     summary: 'Update a user active roles',
@@ -189,7 +210,7 @@ export class AdminController {
   })
   updateRoles(
     @Req() request: AuthenticatedRequest,
-    @Param('id') userId: string,
+    @Param('id', ParseUUIDPipe) userId: string,
     @Body() dto: UpdateAdminUserRolesDto,
   ) {
     return this.adminService.updateRoles(
@@ -213,7 +234,7 @@ export class AdminController {
   })
   updateStatus(
     @Req() request: AuthenticatedRequest,
-    @Param('id') userId: string,
+    @Param('id', ParseUUIDPipe) userId: string,
     @Body() dto: UpdateAdminUserStatusDto,
   ) {
     return this.adminService.updateStatus(
@@ -245,7 +266,7 @@ export class AdminController {
   })
   updateEmail(
     @Req() request: AuthenticatedRequest,
-    @Param('id') userId: string,
+    @Param('id', ParseUUIDPipe) userId: string,
     @Body() dto: UpdateAdminUserEmailDto,
   ) {
     return this.adminService.updateEmail(
@@ -273,7 +294,7 @@ export class AdminController {
   })
   updatePassword(
     @Req() request: AuthenticatedRequest,
-    @Param('id') userId: string,
+    @Param('id', ParseUUIDPipe) userId: string,
     @Body() dto: UpdateAdminUserPasswordDto,
   ) {
     return this.adminService.updatePassword(
