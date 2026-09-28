@@ -57,3 +57,21 @@ returns a single payment. Amounts are decimal strings. Both list and detail
 include the payer's ID/name and selected linked order, Pasabuy, subscription,
 or featured-listing data. Responses exclude payer contact information,
 checkout URLs, and PayMongo resource IDs. No payment mutation is exposed.
+
+## Operational reports (US-048)
+
+`GET /admin/operational-reports/summary` and
+`GET /admin/operational-reports/daily` require the current `ADMIN` role.
+Optional `from` and `to` are inclusive UTC dates in `YYYY-MM-DD` form; the
+default covers today and the previous six days. Ranges are limited to 31
+calendar days. The daily response includes zero-count days and counts new
+users, vendors, orders, payments, reports, and refunds by creation date.
+
+The summary groups new vendors, orders, payments, reports, and refunds by
+their **current** status. It groups payments by purpose and currency, and
+assessed fee records by type and rule version. Fee assessments use
+`assessedAt`; other records use `createdAt`. Money is represented as decimal
+strings. Recorded order amounts and assessed fees represent snapshots, not
+collected revenue. Payment amounts include their recorded status, so callers
+can distinguish pending, successful, and failed transactions. No user contact,
+payment provider identifiers, or individual report descriptions are returned.

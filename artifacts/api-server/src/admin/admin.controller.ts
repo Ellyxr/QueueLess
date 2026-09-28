@@ -28,6 +28,8 @@ import { RolesGuard } from '../auth/roles.guard';
 import { AdminService } from './admin.service';
 import { AdminTransactionsService } from './admin-transactions.service';
 import { AdminTransactionFiltersDto, AdminTransactionsQueryDto } from './dto/admin-transactions.dto';
+import { OperationalReportQueryDto } from './dto/operational-report.dto';
+import { OperationalReportsService } from './operational-reports.service';
 import {
   AdminUserRoleDto,
   CreateAdminUserDto,
@@ -54,7 +56,8 @@ type AuthenticatedRequest = Request & {
 export class AdminController {
   constructor(private readonly adminService: AdminService,
     private readonly pasabuyIdentity: PasabuyIdentityService,
-    private readonly transactions: AdminTransactionsService) {}
+    private readonly transactions: AdminTransactionsService,
+    private readonly operationalReports: OperationalReportsService) {}
 
   @Get('pasabuy/student-ids')
   @ApiOperation({ summary: 'Review private student ID submissions' })
@@ -167,6 +170,18 @@ export class AdminController {
   @ApiOperation({ summary: 'Get a payment and its linked platform resource' })
   transactionDetail(@Param('id', ParseUUIDPipe) id: string) {
     return this.transactions.detail(id);
+  }
+
+  @Get('operational-reports/summary')
+  @ApiOperation({ summary: 'Summarize persisted platform activity and assessed fees' })
+  operationalSummary(@Query() query: OperationalReportQueryDto) {
+    return this.operationalReports.summary(query);
+  }
+
+  @Get('operational-reports/daily')
+  @ApiOperation({ summary: 'Count new platform records by UTC calendar day' })
+  operationalDaily(@Query() query: OperationalReportQueryDto) {
+    return this.operationalReports.daily(query);
   }
 
   @Get('users')
