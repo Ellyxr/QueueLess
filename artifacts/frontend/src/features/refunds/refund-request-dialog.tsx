@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { ImagePlus, X } from "lucide-react";
 import {
   Dialog,
@@ -57,6 +58,7 @@ export function RefundRequestDialog({
   order: RefundableOrder;
   onSuccess?: (message: string) => void;
 }) {
+  const [, setLocation] = useLocation();
   const [category, setCategory] = useState<RefundCategory | null>(null);
   const [description, setDescription] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -64,6 +66,7 @@ export function RefundRequestDialog({
   const [error, setError] = useState<string | null>(null);
   const [buyerContactPingAt, setBuyerContactPingAt] = useState(order.buyerContactPingAt);
   const [attachments, setAttachments] = useState<File[]>([]);
+  
 
   const attachmentPreviews = useMemo(
     () => attachments.map((file) => URL.createObjectURL(file)),
@@ -116,6 +119,25 @@ export function RefundRequestDialog({
     } finally {
       setIsContacting(false);
     }
+  };
+
+  const handleReportOrder = () => {
+    const params = new URLSearchParams();
+
+    params.set("targetType", "ORDER");
+    params.set("targetId", orderId);
+
+    if (category) {
+      params.set("category", category);
+    }
+
+    if (description.trim()) {
+      params.set("description", description.trim());
+    }
+
+    setLocation(`/reports?${params.toString()}`);
+    onOpenChange(false);
+    reset();
   };
 
   const handleSubmit = async () => {
@@ -256,9 +278,22 @@ export function RefundRequestDialog({
 
         {error && <p className="text-xs text-destructive">{error}</p>}
 
-        <DialogFooter>
+        <DialogFooter className="flex-row justify-end gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={handleReportOrder}
+            className="rounded-full text-destructive hover:bg-destructive/10 hover:text-destructive"
+          >
+            Report this order
+          </Button>
+
           {needsContactFirst ? (
-            <Button onClick={handleContactVendor} disabled={isContacting} className="rounded-full">
+            <Button
+              onClick={handleContactVendor}
+              disabled={isContacting}
+              className="rounded-full"
+            >
               {isContacting ? "Contacting..." : "Contact vendor"}
             </Button>
           ) : (
