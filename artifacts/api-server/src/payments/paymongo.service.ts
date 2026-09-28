@@ -14,6 +14,7 @@ interface CreateCheckoutSessionParams {
   orderId?: string;
   pasabuyRequestId?: string;
   vendorSubscriptionId?: string;
+  featuredListingId?: string;
   itemName?: string;
 }
 
@@ -94,6 +95,8 @@ export class PaymongoService {
       ? `pasabuyRequestId=${encodeURIComponent(params.pasabuyRequestId)}`
       : params.vendorSubscriptionId
         ? `vendorSubscriptionId=${encodeURIComponent(params.vendorSubscriptionId)}`
+        : params.featuredListingId
+          ? `featuredListingId=${encodeURIComponent(params.featuredListingId)}`
         : `orderId=${encodeURIComponent(params.orderId ?? '')}`;
 
     const successUrlWithOrder =
