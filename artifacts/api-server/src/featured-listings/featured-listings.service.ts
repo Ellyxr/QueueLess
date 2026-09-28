@@ -17,12 +17,21 @@ export class FeaturedListingsService {
     });
   }
 
-  async createPlan(dto: CreateFeaturedPlanDto) {
+  async createPlan(dto: CreateFeaturedPlanDto, actorUserId: string) {
     const name = dto.name.trim();
     if (!name) throw new BadRequestException('Plan name is required');
     try {
-      return await this.prisma.featuredListingPlan.create({
-        data: { name, placement: dto.placement, price: dto.price, durationDays: dto.durationDays },
+      return await this.prisma.$transaction(async (tx) => {
+        const plan = await tx.featuredListingPlan.create({
+          data: { name, placement: dto.placement, price: dto.price, durationDays: dto.durationDays },
+        });
+        await tx.auditRecord.create({ data: {
+          actorUserId, actionType: 'FEATURED_PLAN_CREATED',
+          entityType: 'FeaturedListingPlan', entityId: plan.id,
+          afterState: { name: plan.name, placement: plan.placement,
+            price: plan.price.toFixed(2), durationDays: plan.durationDays },
+        } });
+        return plan;
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -32,12 +41,22 @@ export class FeaturedListingsService {
     }
   }
 
-  async updatePlan(id: string, isActive: boolean) {
-    const updated = await this.prisma.featuredListingPlan.updateMany({
-      where: { id }, data: { isActive },
+  async updatePlan(id: string, isActive: boolean, actorUserId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const plan = await tx.featuredListingPlan.findUnique({ where: { id } });
+      if (!plan) throw new NotFoundException('Featured listing plan not found');
+      if (plan.isActive === isActive) return plan;
+      const updated = await tx.featuredListingPlan.updateMany({
+        where: { id, isActive: plan.isActive }, data: { isActive },
+      });
+      if (!updated.count) throw new ConflictException('Plan status changed; please retry');
+      await tx.auditRecord.create({ data: {
+        actorUserId, actionType: 'FEATURED_PLAN_STATUS_UPDATED',
+        entityType: 'FeaturedListingPlan', entityId: id,
+        beforeState: { isActive: plan.isActive }, afterState: { isActive },
+      } });
+      return tx.featuredListingPlan.findUniqueOrThrow({ where: { id } });
     });
-    if (!updated.count) throw new NotFoundException('Featured listing plan not found');
-    return this.prisma.featuredListingPlan.findUniqueOrThrow({ where: { id } });
   }
 
   async mine(userId: string) {
@@ -96,10 +115,23 @@ export class FeaturedListingsService {
           vendorId: vendor.id, planId: plan.id, placement: plan.placement,
           productId: dto.productId ?? null, status: FeaturedListingStatus.PENDING,
         } });
-        await tx.payment.create({ data: {
+        const payment = await tx.payment.create({ data: {
           payerUserId: userId, purpose: PaymentPurpose.FEATURED_LISTING,
           featuredListingId: created.id, amount: plan.price,
           currency: 'PHP', status: PaymentStatus.PENDING,
+        } });
+        await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'FEATURED_LISTING_CREATED',
+          entityType: 'FeaturedListing', entityId: created.id,
+          afterState: { status: created.status, vendorId: vendor.id,
+            planId: plan.id, placement: plan.placement,
+            productId: dto.productId ?? null, paymentId: payment.id },
+        } });
+        await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'PAYMENT_CREATED',
+          entityType: 'Payment', entityId: payment.id,
+          afterState: { status: payment.status, purpose: payment.purpose,
+            amount: payment.amount.toFixed(2), featuredListingId: created.id },
         } });
         return created;
       });
@@ -171,18 +203,34 @@ export class FeaturedListingsService {
   }
 
   private async expireVendor(vendorId: string) {
-    await this.prisma.featuredListing.updateMany({
-      where: { vendorId, status: FeaturedListingStatus.ACTIVE, endDate: { lte: new Date() } },
-      data: { status: FeaturedListingStatus.EXPIRED },
+    await this.expireActive(vendorId);
+  }
+
+  private async expireActive(vendorId?: string) {
+    const expired = await this.prisma.featuredListing.findMany({
+      where: { ...(vendorId ? { vendorId } : {}),
+        status: FeaturedListingStatus.ACTIVE, endDate: { lte: new Date() } },
+      select: { id: true }, take: 100,
     });
+    for (const listing of expired) {
+      await this.prisma.$transaction(async (tx) => {
+        const changed = await tx.featuredListing.updateMany({
+          where: { id: listing.id, status: FeaturedListingStatus.ACTIVE,
+            endDate: { lte: new Date() } },
+          data: { status: FeaturedListingStatus.EXPIRED },
+        });
+        if (changed.count) await tx.auditRecord.create({ data: {
+          actorUserId: null, actionType: 'FEATURED_LISTING_STATUS_UPDATED',
+          entityType: 'FeaturedListing', entityId: listing.id,
+          beforeState: { status: 'ACTIVE' }, afterState: { status: 'EXPIRED' },
+        } });
+      });
+    }
   }
 
   @Interval(60_000)
   async expireListings() {
-    await this.prisma.featuredListing.updateMany({
-      where: { status: FeaturedListingStatus.ACTIVE, endDate: { lte: new Date() } },
-      data: { status: FeaturedListingStatus.EXPIRED },
-    });
+    await this.expireActive();
     const stale = await this.prisma.featuredListing.findMany({
       where: { status: FeaturedListingStatus.PENDING,
         createdAt: { lte: new Date(Date.now() - 30 * 60_000) } },
@@ -200,10 +248,28 @@ export class FeaturedListingsService {
             where: { id: listing.id, status: FeaturedListingStatus.PENDING },
             data: { status: FeaturedListingStatus.CANCELLED },
           });
-          if (changed.count) await tx.payment.updateMany({
-            where: { featuredListingId: listing.id, status: PaymentStatus.PENDING },
-            data: { status: PaymentStatus.FAILED },
-          });
+          if (changed.count) {
+            const failed = await tx.payment.findMany({
+              where: { featuredListingId: listing.id, status: PaymentStatus.PENDING },
+              select: { id: true },
+            });
+            await tx.auditRecord.create({ data: {
+              actorUserId: null, actionType: 'FEATURED_LISTING_STATUS_UPDATED',
+              entityType: 'FeaturedListing', entityId: listing.id,
+              beforeState: { status: 'PENDING' }, afterState: { status: 'CANCELLED' },
+            } });
+            for (const payment of failed) {
+              const paymentChanged = await tx.payment.updateMany({
+                where: { id: payment.id, status: PaymentStatus.PENDING },
+                data: { status: PaymentStatus.FAILED },
+              });
+              if (paymentChanged.count) await tx.auditRecord.create({ data: {
+                actorUserId: null, actionType: 'PAYMENT_STATUS_UPDATED',
+                entityType: 'Payment', entityId: payment.id,
+                beforeState: { status: 'PENDING' }, afterState: { status: 'FAILED', source: 'CHECKOUT_EXPIRED' },
+              } });
+            }
+          }
         });
       } catch (error) {
         this.logger.warn(`Could not expire featured listing ${listing.id}: ${String(error)}`);

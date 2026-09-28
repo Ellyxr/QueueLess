@@ -41,6 +41,11 @@ export class PasabuyService {
               data: { pasabuyRequestId: request.id, status: 'EXPIRED',
                 note: 'Request window expired' },
             });
+            await tx.auditRecord.create({ data: {
+              actorUserId: null, actionType: 'PASABUY_STATUS_UPDATED',
+              entityType: 'PasabuyRequest', entityId: request.id,
+              beforeState: { status: 'PENDING' }, afterState: { status: 'EXPIRED' },
+            } });
           }
           return updated.count;
         });
@@ -188,6 +193,11 @@ export class PasabuyService {
         data: { pasabuyRequestId: requestId, status: 'COMPLETED',
           changedByUserId: userId, note: 'Requester confirmed receipt' },
       });
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'PASABUY_STATUS_UPDATED',
+        entityType: 'PasabuyRequest', entityId: requestId,
+        beforeState: { status: 'DELIVERED' }, afterState: { status: 'COMPLETED' },
+      } });
       return tx.pasabuyRequest.findUniqueOrThrow({ where: { id: requestId },
         select: { id: true, status: true, paymentStatus: true, updatedAt: true } });
     });
@@ -311,6 +321,13 @@ export class PasabuyService {
         },
       });
 
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'PASABUY_STATUS_UPDATED',
+        entityType: 'PasabuyRequest', entityId: requestId,
+        beforeState: { status: request.status },
+        afterState: { status: 'AWAITING_PAYMENT', fulfillerUserId: userId },
+      } });
+
       await tx.notification.create({
         data: {
           userId: request.requesterUserId,
@@ -413,6 +430,12 @@ export class PasabuyService {
           note: 'Order collected by assigned Pasabuy fulfiller',
         },
       });
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'ORDER_STATUS_UPDATED',
+        entityType: 'Order', entityId: request.relatedOrderId,
+        beforeState: { status: 'READY_FOR_PICKUP' },
+        afterState: { status: 'COMPLETED', source: 'PASABUY_PICKUP' },
+      } });
 
       const pickedUpAt = new Date();
       const updated = await tx.pasabuyRequest.updateMany({
@@ -443,6 +466,11 @@ export class PasabuyService {
           note: 'Pasabuy order picked up',
         },
       });
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'PASABUY_STATUS_UPDATED',
+        entityType: 'PasabuyRequest', entityId: requestId,
+        beforeState: { status: 'PICKUP_READY' }, afterState: { status: 'PICKED_UP' },
+      } });
 
       await tx.notification.create({
         data: {
@@ -554,6 +582,11 @@ export class PasabuyService {
           note: 'Pasabuy order delivered',
         },
       });
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'PASABUY_STATUS_UPDATED',
+        entityType: 'PasabuyRequest', entityId: requestId,
+        beforeState: { status: 'PICKED_UP' }, afterState: { status: 'DELIVERED' },
+      } });
 
       await tx.notification.create({
         data: {

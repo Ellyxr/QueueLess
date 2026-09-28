@@ -19,13 +19,16 @@ export class FeaturedListingsController {
   @Post('plans')
   @UseGuards(JwtAuthGuard, RolesGuard) @Roles('ADMIN') @ApiBearerAuth()
   @ApiOperation({ summary: 'Configure a featured listing plan' })
-  createPlan(@Body() dto: CreateFeaturedPlanDto) { return this.featured.createPlan(dto); }
+  createPlan(@CurrentUser() user: { sub: string }, @Body() dto: CreateFeaturedPlanDto) {
+    return this.featured.createPlan(dto, user.sub);
+  }
 
   @Patch('plans/:id')
   @UseGuards(JwtAuthGuard, RolesGuard) @Roles('ADMIN') @ApiBearerAuth()
   @ApiOperation({ summary: 'Enable or disable a featured listing plan' })
-  updatePlan(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateFeaturedPlanDto) {
-    return this.featured.updatePlan(id, dto.isActive);
+  updatePlan(@CurrentUser() user: { sub: string },
+    @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateFeaturedPlanDto) {
+    return this.featured.updatePlan(id, dto.isActive, user.sub);
   }
 
   @Get('mine')

@@ -107,10 +107,19 @@ export class RefundsService {
       if (amount.greaterThan(remaining)) {
         throw new BadRequestException('Refund amount exceeds the remaining Pasabuy fee');
       }
-      const refund = await this.prisma.refund.create({
-        data: { paymentId: payment.id, amount,
-          reason: dto.reason?.trim() || null, status: RefundStatus.REQUESTED,
-          initiatedBy: RefundInitiator.BUYER, requestedByUserId: userId },
+      const refund = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.refund.create({
+          data: { paymentId: payment.id, amount,
+            reason: dto.reason?.trim() || null, status: RefundStatus.REQUESTED,
+            initiatedBy: RefundInitiator.BUYER, requestedByUserId: userId },
+        });
+        await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'REFUND_REQUESTED',
+          entityType: 'Refund', entityId: created.id,
+          afterState: { status: created.status, paymentId: payment.id,
+            amount: created.amount.toFixed(2) },
+        } });
+        return created;
       });
       return { ...refund, amount: refund.amount.toFixed(2), currency: payment.currency };
     }
@@ -189,7 +198,8 @@ export class RefundsService {
     const reason = dto.reason?.trim() || null;
 
     const refund =
-      await this.prisma.refund.create({
+      await this.prisma.$transaction(async (tx) => {
+        const created = await tx.refund.create({
         data: {
           paymentId: payment.id,
           orderId,
@@ -211,6 +221,14 @@ export class RefundsService {
           status: true,
           createdAt: true,
         },
+        });
+        await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'REFUND_REQUESTED',
+          entityType: 'Refund', entityId: created.id,
+          afterState: { status: created.status, paymentId: payment.id,
+            orderId, amount: created.amount.toFixed(2) },
+        } });
+        return created;
       });
 
     return {
@@ -823,29 +841,26 @@ export class RefundsService {
       );
     }
 
-    const refund = await this.prisma.refund.create({
-      data: {
-        paymentId: payment.id,
-        orderId,
-        orderItemId: orderItem?.id ?? null,
-        amount: remaining,
-        reason: dto.description?.trim() || null,
-        category: dto.category,
-        status: RefundStatus.REQUESTED,
-        initiatedBy: RefundInitiator.BUYER,
-        requestedByUserId: userId,
-      },
-      select: {
-        id: true,
-        paymentId: true,
-        orderId: true,
-        orderItemId: true,
-        amount: true,
-        reason: true,
-        category: true,
-        status: true,
-        createdAt: true,
-      },
+    const refund = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.refund.create({
+        data: {
+          paymentId: payment.id, orderId, orderItemId: orderItem?.id ?? null,
+          amount: remaining, reason: dto.description?.trim() || null,
+          category: dto.category, status: RefundStatus.REQUESTED,
+          initiatedBy: RefundInitiator.BUYER, requestedByUserId: userId,
+        },
+        select: {
+          id: true, paymentId: true, orderId: true, orderItemId: true,
+          amount: true, reason: true, category: true, status: true, createdAt: true,
+        },
+      });
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'REFUND_REQUESTED',
+        entityType: 'Refund', entityId: created.id,
+        afterState: { status: created.status, paymentId: payment.id,
+          orderId, amount: created.amount.toFixed(2) },
+      } });
+      return created;
     });
 
     return {
@@ -939,23 +954,22 @@ export class RefundsService {
       );
     }
 
-    const refund = await this.prisma.refund.create({
-      data: {
-        paymentId: payment.id,
-        orderId,
-        amount: remaining,
-        reason: note,
-        category,
-        status: RefundStatus.APPROVED,
-        initiatedBy: RefundInitiator.SYSTEM,
-        requestedByUserId: payment.payerUserId,
-      },
-      select: {
-        id: true,
-        paymentId: true,
-        amount: true,
-        status: true,
-      },
+    const refund = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.refund.create({
+        data: {
+          paymentId: payment.id, orderId, amount: remaining, reason: note,
+          category, status: RefundStatus.APPROVED,
+          initiatedBy: RefundInitiator.SYSTEM, requestedByUserId: payment.payerUserId,
+        },
+        select: { id: true, paymentId: true, amount: true, status: true },
+      });
+      await tx.auditRecord.create({ data: {
+        actorUserId: null, actionType: 'REFUND_REQUESTED',
+        entityType: 'Refund', entityId: created.id,
+        afterState: { status: created.status, paymentId: payment.id,
+          orderId, amount: created.amount.toFixed(2), category },
+      } });
+      return created;
     });
 
     return this.processRefund(refund.id, null);
