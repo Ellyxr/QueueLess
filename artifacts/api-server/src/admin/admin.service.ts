@@ -282,70 +282,112 @@ export class AdminService {
     }
   }
 
+  async getUser(userId: string) {
+    return this.getUserById(userId);
+  }
+
+  async getUserAudit(userId: string, page: number, limit: number) {
+    if (!Number.isSafeInteger(page) || page < 1 ||
+        !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+        !Number.isSafeInteger((page - 1) * limit)) {
+      throw new BadRequestException('page must be positive and limit must be between 1 and 100');
+    }
+    await this.assertUserExists(userId);
+    const where: Prisma.AuditRecordWhereInput = {
+      entityType: 'User',
+      entityId: userId,
+      actionType: { startsWith: 'USER_' },
+    };
+    const [total, items] = await this.prisma.$transaction([
+      this.prisma.auditRecord.count({ where }),
+      this.prisma.auditRecord.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true,
+          actorUserId: true,
+          actionType: true,
+          beforeState: true,
+          afterState: true,
+          createdAt: true,
+        },
+      }),
+    ]);
+    return { items, page, limit, total, totalPages: Math.ceil(total / limit) };
+  }
+
   async updateRoles(
     userId: string,
     dto: UpdateAdminUserRolesDto,
     actorUserId: string,
   ) {
-    await this.assertUserExists(userId);
-
-    const beforeAssignments =
-      await this.prisma.roleAssignment.findMany({
-        where: {
-          userId,
-          revokedAt: null,
-        },
-        select: {
-          role: true,
-        },
-      });
-
-    const beforeRoles = beforeAssignments.map((assignment) =>
-      this.toFrontendRole(assignment.role),
-    );
-
     const requestedRoles = [
       ...new Set(
         dto.roles.map((role) => this.toPrismaRole(role)),
       ),
     ];
 
-    await this.prisma.$transaction(async (tx) => {
-      const assignments = await tx.roleAssignment.findMany({
-        where: {
-          userId,
-        },
-        orderBy: {
-          grantedAt: 'desc',
-        },
-      });
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const target = await tx.user.findUnique({
+          where: { id: userId },
+          select: { id: true, isActive: true, archivedAt: true },
+        });
+        if (!target) throw new NotFoundException('User not found');
+        const assignments = await tx.roleAssignment.findMany({
+          where: {
+            userId,
+          },
+          orderBy: {
+            grantedAt: 'desc',
+          },
+        });
 
-      const now = new Date();
+        const before = assignments.filter((assignment) => assignment.revokedAt === null);
+        const beforeRoles = before.map((assignment) => this.toFrontendRole(assignment.role));
+        const currentRoles = new Set(before.map((assignment) => assignment.role));
+        if (requestedRoles.length === currentRoles.size &&
+            requestedRoles.every((role) => currentRoles.has(role))) return;
 
-      for (const role of Object.values(UserRole)) {
-        const roleAssignments = assignments.filter(
-          (assignment) => assignment.role === role,
-        );
+        if (currentRoles.has(UserRole.ADMIN) && !requestedRoles.includes(UserRole.ADMIN)) {
+          if (userId === actorUserId) {
+            throw new ForbiddenException('Cannot remove your own admin role');
+          }
+          if (target.isActive && target.archivedAt === null &&
+              await this.countActiveAdmins(tx) <= 1) {
+            throw new ConflictException('Cannot remove the last active administrator');
+          }
+        }
 
-        const activeAssignments = roleAssignments.filter(
-          (assignment) => assignment.revokedAt === null,
-        );
+        const now = new Date();
 
-        const shouldBeActive = requestedRoles.includes(role);
+        for (const role of Object.values(UserRole)) {
+          const roleAssignments = assignments.filter(
+            (assignment) => assignment.role === role,
+          );
 
-        if (shouldBeActive) {
-          if (activeAssignments.length === 0) {
-            await tx.roleAssignment.create({
-              data: {
-                userId,
-                role,
-              },
-            });
-          } else if (activeAssignments.length > 1) {
+          const activeAssignments = roleAssignments.filter(
+            (assignment) => assignment.revokedAt === null,
+          );
+
+          const shouldBeActive = requestedRoles.includes(role);
+
+          if (shouldBeActive) {
+            if (activeAssignments.length === 0) {
+              await tx.roleAssignment.create({
+                data: {
+                  userId,
+                  role,
+                },
+              });
+            }
+          } else if (activeAssignments.length > 0) {
             await tx.roleAssignment.updateMany({
               where: {
                 id: {
-                  in: activeAssignments.slice(1).map(
+                  in: activeAssignments.map(
                     (assignment) => assignment.id,
                   ),
                 },
@@ -355,39 +397,28 @@ export class AdminService {
               },
             });
           }
-                } else if (activeAssignments.length > 0) {
-          await tx.roleAssignment.updateMany({
-            where: {
-              id: {
-                in: activeAssignments.map(
-                  (assignment) => assignment.id,
-                ),
-              },
-            },
-            data: {
-              revokedAt: now,
-            },
-          });
         }
-      }
 
-      await tx.auditRecord.create({
-        data: {
-          actorUserId,
-          actionType: 'USER_ROLES_UPDATED',
-          entityType: 'User',
-          entityId: userId,
-          beforeState: {
-            roles: beforeRoles,
+        await tx.auditRecord.create({
+          data: {
+            actorUserId,
+            actionType: 'USER_ROLES_UPDATED',
+            entityType: 'User',
+            entityId: userId,
+            beforeState: {
+              roles: beforeRoles,
+            },
+            afterState: {
+              roles: requestedRoles.map((role) =>
+                this.toFrontendRole(role),
+              ),
+            },
           },
-          afterState: {
-            roles: requestedRoles.map((role) =>
-              this.toFrontendRole(role),
-            ),
-          },
-        },
-      });
-    });
+        });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (error) {
+      this.rethrowConcurrentAdminUpdate(error);
+    }
 
     return this.getUserById(userId);
   }
@@ -397,86 +428,96 @@ export class AdminService {
     dto: UpdateAdminUserStatusDto,
     actorUserId: string,
   ) {
-    const existingUser = await this.prisma.user.findUnique({
-      where: {
-        id: userId,
-      },
-      select: {
-        id: true,
-        isActive: true,
-        archivedAt: true,
-      },
-    });
-
-    if (!existingUser) {
-      throw new NotFoundException('User not found');
+    if (dto.isActive === undefined && dto.isArchived === undefined) {
+      throw new BadRequestException('Provide isActive or isArchived');
+    }
+    if (dto.isActive === true && dto.isArchived === true) {
+      throw new BadRequestException('An archived account cannot be active');
     }
 
-    if (
-      dto.isActive === undefined &&
-      dto.isArchived === undefined
-    ) {
-      throw new BadRequestException(
-        'Provide isActive or isArchived',
-      );
-    }
-
-    if (
-      dto.isActive === true &&
-      existingUser.archivedAt !== null &&
-      dto.isArchived !== false
-    ) {
-      throw new BadRequestException(
-        'Unarchive the user before activating the account',
-      );
-    }
-
-    const data: Prisma.UserUpdateInput = {};
-
-    if (dto.isActive !== undefined) {
-      data.isActive = dto.isActive;
-    }
-
-    if (dto.isArchived !== undefined) {
-      data.archivedAt = dto.isArchived ? new Date() : null;
-
-      // Archived accounts must not remain active.
-      if (dto.isArchived) {
-        data.isActive = false;
-      }
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      const updatedUser = await tx.user.update({
-        where: {
-          id: userId,
-        },
-        data,
-        select: {
-          isActive: true,
-          archivedAt: true,
-        },
-      });
-
-      await tx.auditRecord.create({
-        data: {
-          actorUserId,
-          actionType: 'USER_STATUS_UPDATED',
-          entityType: 'User',
-          entityId: userId,
-          beforeState: {
-            isActive: existingUser.isActive,
-            isArchived: existingUser.archivedAt !== null,
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const existingUser = await tx.user.findUnique({
+          where: { id: userId },
+          select: {
+            id: true,
+            isActive: true,
+            archivedAt: true,
+            roleAssignments: {
+              where: { role: UserRole.ADMIN, revokedAt: null },
+              select: { id: true },
+            },
           },
-          afterState: {
-            isActive: updatedUser.isActive,
-            isArchived: updatedUser.archivedAt !== null,
+        });
+        if (!existingUser) throw new NotFoundException('User not found');
+        if (dto.isActive === true && existingUser.archivedAt !== null &&
+            dto.isArchived !== false) {
+          throw new BadRequestException('Unarchive the user before activating the account');
+        }
+
+        const isArchived = dto.isArchived ?? (existingUser.archivedAt !== null);
+        const isActive = isArchived ? false : (dto.isActive ?? existingUser.isActive);
+        if (isActive === existingUser.isActive &&
+            isArchived === (existingUser.archivedAt !== null)) return;
+
+        if (existingUser.roleAssignments.length && existingUser.isActive &&
+            existingUser.archivedAt === null && !isActive) {
+          if (userId === actorUserId) {
+            throw new ForbiddenException('Cannot deactivate your own admin account');
+          }
+          if (await this.countActiveAdmins(tx) <= 1) {
+            throw new ConflictException('Cannot deactivate the last active administrator');
+          }
+        }
+
+        const updatedUser = await tx.user.update({
+          where: { id: userId },
+          data: {
+            isActive,
+            archivedAt: isArchived ? (existingUser.archivedAt ?? new Date()) : null,
           },
-        },
-      });
-    });
+          select: { isActive: true, archivedAt: true },
+        });
+        await tx.auditRecord.create({
+          data: {
+            actorUserId,
+            actionType: 'USER_STATUS_UPDATED',
+            entityType: 'User',
+            entityId: userId,
+            beforeState: {
+              isActive: existingUser.isActive,
+              isArchived: existingUser.archivedAt !== null,
+            },
+            afterState: {
+              isActive: updatedUser.isActive,
+              isArchived: updatedUser.archivedAt !== null,
+            },
+          },
+        });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (error) {
+      this.rethrowConcurrentAdminUpdate(error);
+    }
 
     return this.getUserById(userId);
+  }
+
+  private countActiveAdmins(tx: Prisma.TransactionClient) {
+    return tx.user.count({
+      where: {
+        isActive: true,
+        archivedAt: null,
+        roleAssignments: { some: { role: UserRole.ADMIN, revokedAt: null } },
+      },
+    });
+  }
+
+  private rethrowConcurrentAdminUpdate(error: unknown): never {
+    if (error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2034') {
+      throw new ConflictException('Concurrent admin update; please retry');
+    }
+    throw error;
   }
 
   async updateEmail(
