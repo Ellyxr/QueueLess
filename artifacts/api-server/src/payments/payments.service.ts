@@ -228,6 +228,12 @@ export class PaymentsService {
     const payment = await this.prisma.$transaction(
       async (tx) => {
         if (paymentShare.paymentId) {
+          const prior = await tx.payment.findUniqueOrThrow({
+            where: { id: paymentShare.paymentId }, select: { status: true },
+          });
+          if (prior.status === PaymentStatus.SUCCEEDED) {
+            throw new ConflictException('Payment has already succeeded');
+          }
           const existingPayment = await tx.payment.update({
             where: {
               id: paymentShare.paymentId,
@@ -236,6 +242,11 @@ export class PaymentsService {
               status: PaymentStatus.PENDING,
             },
           });
+          if (prior.status !== PaymentStatus.PENDING) await tx.auditRecord.create({ data: {
+            actorUserId: userId, actionType: 'PAYMENT_STATUS_UPDATED',
+            entityType: 'Payment', entityId: existingPayment.id,
+            beforeState: { status: prior.status }, afterState: { status: 'PENDING', source: 'CHECKOUT_RETRY' },
+          } });
 
           await tx.paymentIdempotencyKey.update({
             where: {
@@ -258,6 +269,12 @@ export class PaymentsService {
             status: PaymentStatus.PENDING,
           },
         });
+        await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'PAYMENT_CREATED',
+          entityType: 'Payment', entityId: createdPayment.id,
+          afterState: { status: createdPayment.status, purpose: createdPayment.purpose,
+            amount: createdPayment.amount.toFixed(2), orderId: paymentShare.order.id },
+        } });
 
         await tx.paymentShare.update({
           where: {
@@ -323,13 +340,17 @@ export class PaymentsService {
         idempotentReplay: false,
       };
     } catch (error) {
-      await this.prisma.payment.update({
-        where: {
-          id: payment.id,
-        },
-        data: {
-          status: PaymentStatus.FAILED,
-        },
+      await this.prisma.$transaction(async (tx) => {
+        const changed = await tx.payment.updateMany({
+          where: { id: payment.id, status: PaymentStatus.PENDING },
+          data: { status: PaymentStatus.FAILED },
+        });
+        if (changed.count) await tx.auditRecord.create({ data: {
+          actorUserId: null, actionType: 'PAYMENT_STATUS_UPDATED',
+          entityType: 'Payment', entityId: payment.id,
+          beforeState: { status: 'PENDING' },
+          afterState: { status: 'FAILED', source: 'CHECKOUT_CREATION_FAILED' },
+        } });
       });
 
       /*
@@ -796,6 +817,12 @@ export class PaymentsService {
             providerPaymentId: checkoutSession.id },
         });
         if (!updatedPayment.count) return { duplicate: true, autoRefund: false };
+        await tx.auditRecord.create({ data: {
+          actorUserId: null, actionType: 'PAYMENT_STATUS_UPDATED',
+          entityType: 'Payment', entityId: payment.id,
+          beforeState: { status: payment.status },
+          afterState: { status: PaymentStatus.SUCCEEDED, source: 'PAYMONGO_WEBHOOK' },
+        } });
         const now = new Date();
         const eligible = current.plan && current.vendor.status === 'ACTIVE' &&
           (!current.productId || current.product?.isAvailable);
@@ -805,6 +832,12 @@ export class PaymentsService {
             startDate: now,
             endDate: new Date(now.getTime() + current.plan!.durationDays * 86_400_000) },
         }) : { count: 0 };
+        if (activated.count) await tx.auditRecord.create({ data: {
+          actorUserId: null, actionType: 'FEATURED_LISTING_STATUS_UPDATED',
+          entityType: 'FeaturedListing', entityId: listingId,
+          beforeState: { status: FeaturedListingStatus.PENDING },
+          afterState: { status: FeaturedListingStatus.ACTIVE, paymentId: payment.id },
+        } });
         return { duplicate: false, autoRefund: !activated.count };
       });
       if (result.autoRefund) await this.refundsService.autoRefundPayment(payment.id,
@@ -850,12 +883,24 @@ export class PaymentsService {
             providerPaymentId: checkoutSession.id },
         });
         if (!updatedPayment.count) return { duplicate: true, autoRefund: false };
+        await tx.auditRecord.create({ data: {
+          actorUserId: null, actionType: 'PAYMENT_STATUS_UPDATED',
+          entityType: 'Payment', entityId: payment.id,
+          beforeState: { status: payment.status },
+          afterState: { status: PaymentStatus.SUCCEEDED, source: 'PAYMONGO_WEBHOOK' },
+        } });
         const now = new Date();
         const activated = await tx.vendorSubscription.updateMany({
           where: { id: subscriptionId, status: 'PENDING', vendor: { status: 'ACTIVE' } },
           data: { status: 'ACTIVE', startDate: now,
             endDate: new Date(now.getTime() + current.plan.durationDays * 86_400_000) },
         });
+        if (activated.count) await tx.auditRecord.create({ data: {
+          actorUserId: null, actionType: 'SUBSCRIPTION_STATUS_UPDATED',
+          entityType: 'VendorSubscription', entityId: subscriptionId,
+          beforeState: { status: 'PENDING' },
+          afterState: { status: 'ACTIVE', paymentId: payment.id },
+        } });
         return { duplicate: false, autoRefund: !activated.count };
       });
       if (result.autoRefund) await this.refundsService.autoRefundPayment(payment.id,
@@ -956,12 +1001,18 @@ export class PaymentsService {
     if (payment.paymentShares.length === 0) {
       // Payment succeeded at PayMongo but nothing was ever linked to it —
       // refund automatically rather than leaving the buyer out of pocket.
-      await this.prisma.payment.updateMany({
-        where: { id: payment.id, status: { not: PaymentStatus.SUCCEEDED } },
-        data: {
-          status: PaymentStatus.SUCCEEDED,
-          providerPaymentResourceId,
-        },
+      await this.prisma.$transaction(async (tx) => {
+        const changed = await tx.payment.updateMany({
+          where: { id: payment.id, status: { not: PaymentStatus.SUCCEEDED } },
+          data: { status: PaymentStatus.SUCCEEDED, providerPaymentResourceId },
+        });
+        if (changed.count) await tx.auditRecord.create({ data: {
+          actorUserId: null, actionType: 'PAYMENT_STATUS_UPDATED',
+          entityType: 'Payment', entityId: payment.id,
+          beforeState: { status: payment.status },
+          afterState: { status: PaymentStatus.SUCCEEDED,
+            source: 'PAYMONGO_WEBHOOK', linkedOrder: false },
+        } });
       });
 
       await this.refundsService.autoRefundPayment(
@@ -1026,6 +1077,13 @@ export class PaymentsService {
           }),
         };
       }
+
+      await tx.auditRecord.create({ data: {
+        actorUserId: null, actionType: 'PAYMENT_STATUS_UPDATED',
+        entityType: 'Payment', entityId: payment.id,
+        beforeState: { status: payment.status },
+        afterState: { status: PaymentStatus.SUCCEEDED, source: 'PAYMONGO_WEBHOOK' },
+      } });
 
       const existingOrder = await tx.order.findUnique({
         where: { id: orderId },
@@ -1095,6 +1153,12 @@ export class PaymentsService {
               note: 'Payment confirmed by PayMongo webhook',
             },
           });
+          await tx.auditRecord.create({ data: {
+            actorUserId: null, actionType: 'ORDER_STATUS_UPDATED',
+            entityType: 'Order', entityId: orderId,
+            beforeState: { status: OrderStatus.PENDING },
+            afterState: { status: OrderStatus.PAID, paymentId: payment.id },
+          } });
 
           const order = await tx.order.findUnique({
             where: { id: orderId },

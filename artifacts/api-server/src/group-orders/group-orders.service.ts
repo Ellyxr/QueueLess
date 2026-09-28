@@ -1003,6 +1003,19 @@ export class GroupOrdersService {
         },
       });
 
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'ORDER_CREATED',
+        entityType: 'Order', entityId: order.id,
+        afterState: { status: order.status, vendorId: order.vendorId,
+          groupOrderId, totalAmount: totalAmount.toFixed(2), orderType: order.orderType },
+      } });
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'FEE_ASSESSED',
+        entityType: 'Order', entityId: order.id,
+        afterState: { type: 'MARKETPLACE_MARKUP', amount: marketplaceFee.toFixed(2),
+          ruleVersion: totals.ruleVersion },
+      } });
+
       return {
         response: {
           groupOrderId: groupOrder.id,

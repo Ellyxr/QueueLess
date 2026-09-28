@@ -307,6 +307,19 @@ export class OrdersService {
             },
           });
 
+          await tx.auditRecord.create({ data: {
+            actorUserId: userId, actionType: 'ORDER_CREATED',
+            entityType: 'Order', entityId: order.id,
+            afterState: { status: order.status, vendorId: order.vendorId,
+              totalAmount: totalAmount.toFixed(2), orderType: order.orderType },
+          } });
+          await tx.auditRecord.create({ data: {
+            actorUserId: userId, actionType: 'FEE_ASSESSED',
+            entityType: 'Order', entityId: order.id,
+            afterState: { type: 'MARKETPLACE_MARKUP',
+              amount: marketplaceFee.toFixed(2), ruleVersion: totals.ruleVersion },
+          } });
+
           return order;
         },
       );
@@ -857,6 +870,13 @@ export class OrdersService {
           },
         });
 
+        await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'ORDER_STATUS_UPDATED',
+          entityType: 'Order', entityId: order.id,
+          beforeState: { status: order.status },
+          afterState: { status: dto.status },
+        } });
+
         return updated;
       },
     );
@@ -987,6 +1007,13 @@ export class OrdersService {
               : 'Order completed by group order participant',
           },
         });
+
+        await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'ORDER_STATUS_UPDATED',
+          entityType: 'Order', entityId: order.id,
+          beforeState: { status: order.status },
+          afterState: { status: OrderStatus.COMPLETED, source: 'PICKUP_CONFIRMATION' },
+        } });
 
         return tx.order.findUniqueOrThrow({
           where: {
@@ -1301,6 +1328,9 @@ export class OrdersService {
 
   private async autoCancelAndRefund(orderId: string, category: string) {
     const updatedOrder = await this.prisma.$transaction(async (tx) => {
+      const previous = await tx.order.findUniqueOrThrow({
+        where: { id: orderId }, select: { status: true },
+      });
       const updated = await tx.order.update({
         where: { id: orderId },
         data: {
@@ -1317,6 +1347,13 @@ export class OrdersService {
           note: `Auto-cancelled: ${category}`,
         },
       });
+
+      await tx.auditRecord.create({ data: {
+        actorUserId: null, actionType: 'ORDER_STATUS_UPDATED',
+        entityType: 'Order', entityId: orderId,
+        beforeState: { status: previous.status },
+        afterState: { status: OrderStatus.CANCELLED, source: category },
+      } });
 
       return updated;
     });
