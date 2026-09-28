@@ -36,3 +36,21 @@ atomically records the administrator, status, note, and timestamp in
 `ReportStatusHistory` and writes an `AuditRecord`. Conflicting transitions
 return 409; missing reports return 404. The response includes the updated
 report and its full status history.
+
+## Optional report proof
+
+`POST /api/v1/reports` accepts either the original JSON body or
+`multipart/form-data` with `targetType`, `targetId`, `category`, `description`,
+and optional `attachment` (one JPG/JPEG, PNG, or PDF, up to 5 MB). For
+`TRANSACTION` only, `targetId` may be omitted or sent as an empty string **if
+proof is attached**; a provided ID must still refer to an accessible payment.
+All other report types require an existing target ID. Reports begin `OPEN`.
+
+Uploads go to private ImageKit storage. The API stores its private file ID and
+path, and returns `attachment: { fileName, mimeType, size, adminUrl }` (or
+`null`) on report creation and admin list/detail responses. `adminUrl` is an
+API route, not a direct storage URL. Only an administrator can request
+`GET /api/v1/reports/:id/attachment`; it returns a signed `url` valid for 300
+seconds plus file metadata. Reporters never receive the private file path or
+direct storage URL. `targetType=TRANSACTION` admin filters include reports
+whose payment record was unavailable at submission time.

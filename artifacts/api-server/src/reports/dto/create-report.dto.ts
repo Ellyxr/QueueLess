@@ -1,5 +1,6 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
+import { IsEnum, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 
 export enum ReportTargetType {
   VENDOR = 'VENDOR',
@@ -15,9 +16,11 @@ export class CreateReportDto {
   @IsEnum(ReportTargetType)
   targetType!: ReportTargetType;
 
-  @ApiProperty({ format: 'uuid', description: 'The target UUID; TRANSACTION uses a Payment ID' })
+  @ApiPropertyOptional({ format: 'uuid', description: 'The target UUID; TRANSACTION uses a Payment ID. May be omitted for a transaction report with an attachment.' })
+  @Transform(({ value }: { value: unknown }) => value === '' ? undefined : value)
+  @IsOptional()
   @IsUUID()
-  targetId!: string;
+  targetId?: string;
 
   @ApiProperty({ minLength: 1, maxLength: 100, example: 'WRONG_ITEM' })
   @IsString()
