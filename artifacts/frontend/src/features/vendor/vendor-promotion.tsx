@@ -1,28 +1,67 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useReactToPrint } from 'react-to-print';
 import { QRCodeSVG } from 'qrcode.react';
 import {
+  AlertCircle,
+  CheckCircle2,
   Download,
-  Lock,
+  Loader2,
   MapPin,
   Megaphone,
   Phone,
+  Plus,
   Printer,
   Sparkles,
   Store,
+  Tag,
+  Trash2,
+  Upload,
+  Wallet,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useRequireAuth } from '@/hooks/use-require-auth';
 import {
+  createDeal,
+  createFeaturedListing,
+  deleteDeal,
+  getMyFeaturedListings,
   getMyProfile,
   getMyVendor,
+  getVendorDashboard,
   getVendorStorefront,
+  listFeaturedPlans,
+  listMyDeals,
+  updateDeal,
+  uploadPromotionImage,
+  type CreateDealInput,
+  type CreateFeaturedListingInput,
+  type Deal,
+  type DealDiscountType,
+  type DealTriggerType,
+  type FeaturedListingPaymentMethod,
+  type FeaturedListingPlan,
+  type MyFeaturedListing,
   type ProfileData,
   type VendorStorefront,
 } from '@/features/auth/api';
 import { EXTRA_CATEGORY } from '@/lib/product-extras';
+
+const DISCOUNT_LADDER_COPY = ['1st vendor: 30% off', '2nd vendor: 20% off', '3rd vendor: 10% off', '4th+: full price'];
 
 const PLACEHOLDER_PRODUCT_IMAGE =
   'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80';
@@ -36,7 +75,26 @@ export default function VendorPromotionPage() {
   const [hasError, setHasError] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
+  const [deals, setDeals] = useState<Deal[]>([]);
+  const [featuredPlans, setFeaturedPlans] = useState<FeaturedListingPlan[]>([]);
+  const [myFeaturedListings, setMyFeaturedListings] = useState<MyFeaturedListing[]>([]);
+  const [walletBalance, setWalletBalance] = useState('0.00');
+  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isDealDialogOpen, setIsDealDialogOpen] = useState(false);
+  const [isFeaturedDialogOpen, setIsFeaturedDialogOpen] = useState(false);
+
   const flyerRef = useRef<HTMLDivElement>(null);
+
+  const showToast = (text: string, type: 'success' | 'error' = 'success') => {
+    setToastMessage({ text, type });
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const refreshPromotions = () => {
+    listMyDeals().then(setDeals).catch(() => {});
+    getMyFeaturedListings().then(setMyFeaturedListings).catch(() => {});
+    getVendorDashboard().then((d) => setWalletBalance(d.ledgerBalance)).catch(() => {});
+  };
 
   useEffect(() => {
     Promise.all([getMyVendor().then((v) => getVendorStorefront(v.id)), getMyProfile()])
@@ -46,6 +104,8 @@ export default function VendorPromotionPage() {
       })
       .catch(() => setHasError(true))
       .finally(() => setIsLoading(false));
+    listFeaturedPlans().then(setFeaturedPlans).catch(() => {});
+    refreshPromotions();
   }, []);
 
   const handlePrint = useReactToPrint({
@@ -220,29 +280,436 @@ export default function VendorPromotionPage() {
         </Card>
       </section>
 
-      {/* Featured listing (paid feature) - empty state */}
-      <section>
-        <div className="mb-4">
-          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Boost visibility</p>
-          <h2 className="mt-1 text-xl font-semibold tracking-[-0.03em] text-foreground">Featured listing</h2>
+      {/* Deals */}
+      <section className="mb-10">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Drive sales</p>
+            <h2 className="mt-1 text-xl font-semibold tracking-[-0.03em] text-foreground">Deals</h2>
+          </div>
+          <Button onClick={() => setIsDealDialogOpen(true)} disabled={promotableProducts.length === 0} className="rounded-full px-4">
+            <Plus className="mr-2 h-4 w-4" />
+            Add deal
+          </Button>
         </div>
-        <Card className="border-dashed border-card-border/80 bg-card/60 shadow-none">
-          <CardContent className="flex flex-col items-center gap-3 px-6 py-12 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-              <Lock className="h-5 w-5" />
-            </div>
-            <h3 className="text-lg font-semibold text-foreground">Get featured on the marketplace</h3>
-            <p className="max-w-sm text-sm text-muted-foreground">
-              Featured listings put your store and products in front of more buyers. This is a paid add-on
-              that's coming soon.
+        <p className="mb-4 text-sm text-muted-foreground">
+          Active deals appear as a discount carousel on the marketplace, right below your section. Deals with no
+          minimum order always show first &mdash; they're the easiest for buyers to grab.
+        </p>
+        {deals.length === 0 ? (
+          <Card className="border-dashed border-card-border/80 bg-card/60 shadow-none">
+            <CardContent className="flex flex-col items-center gap-2 px-6 py-10 text-center">
+              <Tag className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                {promotableProducts.length === 0
+                  ? 'Add an available product first, then come back to create a deal.'
+                  : "You haven't created any deals yet."}
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {deals.map((deal) => (
+              <Card key={deal.id} className="border-card-border/80 bg-card/90 shadow-sm">
+                <CardContent className="flex items-center justify-between gap-4 p-4">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-foreground">{deal.product.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {deal.discountType === 'PERCENTAGE' ? `${Number(deal.discountValue)}% off` : `₱${Number(deal.discountValue).toLocaleString('en-PH')} off`}
+                      {deal.triggerType === 'NONE' && ' · No minimum'}
+                      {deal.triggerType === 'MIN_QUANTITY' && ` · Min ${deal.triggerValue} qty`}
+                      {deal.triggerType === 'MIN_ORDER_AMOUNT' && ` · Min ₱${Number(deal.triggerValue).toLocaleString('en-PH')} order`}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Switch
+                      checked={deal.isActive}
+                      onCheckedChange={(checked) =>
+                        updateDeal(deal.id, { isActive: checked })
+                          .then((updated) => setDeals((prev) => prev.map((d) => (d.id === updated.id ? updated : d))))
+                          .catch((error: unknown) => showToast(error instanceof Error ? error.message : 'Unable to update deal.', 'error'))
+                      }
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() =>
+                        deleteDeal(deal.id)
+                          .then(() => setDeals((prev) => prev.filter((d) => d.id !== deal.id)))
+                          .catch((error: unknown) => showToast(error instanceof Error ? error.message : 'Unable to delete deal.', 'error'))
+                      }
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Featured listing / marketplace promo card */}
+      <section>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Boost visibility</p>
+            <h2 className="mt-1 text-xl font-semibold tracking-[-0.03em] text-foreground">Featured listing</h2>
+          </div>
+          <Button onClick={() => setIsFeaturedDialogOpen(true)} className="rounded-full px-4">
+            <Sparkles className="mr-2 h-4 w-4" />
+            Avail featured listing
+          </Button>
+        </div>
+        <Card className="border-card-border/80 bg-card/60 shadow-none">
+          <CardContent className="flex flex-col gap-2 px-6 py-6 text-sm text-muted-foreground">
+            <p>
+              Get your store or a product featured on the marketplace's promo card. It's first come, first served
+              &mdash; the earlier you avail, the bigger your discount:
             </p>
-            <Button disabled variant="secondary" className="mt-2 rounded-full px-5">
-              <Sparkles className="mr-2 h-4 w-4" />
-              Coming soon
-            </Button>
+            <ul className="ml-4 list-disc">
+              {DISCOUNT_LADDER_COPY.map((line) => <li key={line}>{line}</li>)}
+            </ul>
+            <p>Wallet balance available for promotions: <span className="font-semibold text-foreground">₱{Number(walletBalance).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span></p>
           </CardContent>
         </Card>
+
+        {myFeaturedListings.length > 0 && (
+          <div className="mt-4 flex flex-col gap-3">
+            {myFeaturedListings.map((listing) => (
+              <Card key={listing.id} className="border-card-border/80 bg-card/90 shadow-sm">
+                <CardContent className="flex items-center justify-between gap-4 p-4">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-foreground">
+                      {listing.product?.name ?? vendor.name} &middot; {listing.plan?.name ?? listing.placement}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {listing.status === 'ACTIVE' && listing.endDate
+                        ? `Active until ${new Date(listing.endDate).toLocaleDateString()}`
+                        : listing.status}
+                      {listing.discountPercent > 0 && ` · ${listing.discountPercent}% off applied`}
+                      {listing.pricePaid && ` · ₱${Number(listing.pricePaid).toLocaleString('en-PH')} paid`}
+                    </p>
+                  </div>
+                  <Badge variant={listing.status === 'ACTIVE' ? 'default' : 'secondary'}>{listing.status}</Badge>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
       </section>
+
+      {isDealDialogOpen && (
+        <AddDealDialog
+          products={promotableProducts}
+          onClose={() => setIsDealDialogOpen(false)}
+          onCreated={(deal) => {
+            setDeals((prev) => [deal, ...prev]);
+            setIsDealDialogOpen(false);
+            showToast('Deal created.');
+          }}
+          onError={(message) => showToast(message, 'error')}
+        />
+      )}
+
+      {isFeaturedDialogOpen && (
+        <AvailFeaturedListingDialog
+          products={promotableProducts}
+          plans={featuredPlans}
+          walletBalance={walletBalance}
+          onClose={() => setIsFeaturedDialogOpen(false)}
+          onCreated={(result) => {
+            setIsFeaturedDialogOpen(false);
+            if (result.checkoutUrl) {
+              window.location.href = result.checkoutUrl;
+              return;
+            }
+            refreshPromotions();
+            showToast(
+              result.discountPercent
+                ? `Featured listing activated with ${result.discountPercent}% off!`
+                : 'Featured listing activated!',
+            );
+          }}
+          onError={(message) => showToast(message, 'error')}
+        />
+      )}
+
+      {toastMessage && (
+        <div
+          className={`fixed bottom-6 right-6 z-50 flex items-center gap-2.5 rounded-2xl px-4 py-3 shadow-xl backdrop-blur-md transition-all ${
+            toastMessage.type === 'success'
+              ? 'border border-emerald-500/30 bg-emerald-950/80 text-emerald-200'
+              : 'border border-destructive/30 bg-destructive/90 text-destructive-foreground'
+          }`}
+        >
+          {toastMessage.type === 'success' ? (
+            <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+          ) : (
+            <AlertCircle className="h-5 w-5" />
+          )}
+          <span className="text-sm font-medium">{toastMessage.text}</span>
+        </div>
+      )}
     </main>
+  );
+}
+
+interface DealFormProduct {
+  id: string;
+  name: string;
+  price: number;
+}
+
+function AddDealDialog({
+  products,
+  onClose,
+  onCreated,
+  onError,
+}: {
+  products: DealFormProduct[];
+  onClose: () => void;
+  onCreated: (deal: Deal) => void;
+  onError: (message: string) => void;
+}) {
+  const [productId, setProductId] = useState(products[0]?.id ?? '');
+  const [discountType, setDiscountType] = useState<DealDiscountType>('PERCENTAGE');
+  const [discountValue, setDiscountValue] = useState('10');
+  const [triggerType, setTriggerType] = useState<DealTriggerType>('NONE');
+  const [triggerValue, setTriggerValue] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!productId || !discountValue) return;
+    setIsSubmitting(true);
+    try {
+      const input: CreateDealInput = {
+        productId,
+        discountType,
+        discountValue: Number(discountValue),
+        triggerType,
+        ...(triggerType !== 'NONE' ? { triggerValue: Number(triggerValue) } : {}),
+      };
+      const deal = await createDeal(input);
+      onCreated(deal);
+    } catch (error: unknown) {
+      onError(error instanceof Error ? error.message : 'Unable to create deal.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add a deal</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-4 py-2">
+          <div className="flex flex-col gap-1.5">
+            <Label>Product</Label>
+            <Select value={productId} onValueChange={setProductId}>
+              <SelectTrigger><SelectValue placeholder="Choose a product" /></SelectTrigger>
+              <SelectContent>
+                {products.map((product) => (
+                  <SelectItem key={product.id} value={product.id}>
+                    {product.name} (₱{Number(product.price).toLocaleString('en-PH')})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Discount</Label>
+            <RadioGroup value={discountType} onValueChange={(v) => setDiscountType(v as DealDiscountType)} className="flex gap-4">
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="PERCENTAGE" id="discount-percentage" />
+                <Label htmlFor="discount-percentage" className="font-normal">Percentage off</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="FIXED_AMOUNT" id="discount-amount" />
+                <Label htmlFor="discount-amount" className="font-normal">Amount off</Label>
+              </div>
+            </RadioGroup>
+            <Input
+              type="number"
+              min={1}
+              value={discountValue}
+              onChange={(e) => setDiscountValue(e.target.value)}
+              placeholder={discountType === 'PERCENTAGE' ? 'e.g. 10 (%)' : 'e.g. 20 (₱)'}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Activates when</Label>
+            <RadioGroup value={triggerType} onValueChange={(v) => setTriggerType(v as DealTriggerType)} className="flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="NONE" id="trigger-none" />
+                <Label htmlFor="trigger-none" className="font-normal">No minimum &mdash; discounts immediately</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="MIN_QUANTITY" id="trigger-qty" />
+                <Label htmlFor="trigger-qty" className="font-normal">Minimum quantity of this product</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="MIN_ORDER_AMOUNT" id="trigger-amount" />
+                <Label htmlFor="trigger-amount" className="font-normal">Minimum order amount</Label>
+              </div>
+            </RadioGroup>
+            {triggerType !== 'NONE' && (
+              <Input
+                type="number"
+                min={1}
+                value={triggerValue}
+                onChange={(e) => setTriggerValue(e.target.value)}
+                placeholder={triggerType === 'MIN_QUANTITY' ? 'e.g. 3 (qty)' : 'e.g. 500 (₱)'}
+              />
+            )}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={isSubmitting || !productId || !discountValue}>
+            {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Create deal
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+interface FeaturedFormProduct {
+  id: string;
+  name: string;
+  imageUrl?: string | null;
+}
+
+function AvailFeaturedListingDialog({
+  products,
+  plans,
+  walletBalance,
+  onClose,
+  onCreated,
+  onError,
+}: {
+  products: FeaturedFormProduct[];
+  plans: FeaturedListingPlan[];
+  walletBalance: string;
+  onClose: () => void;
+  onCreated: (result: { checkoutUrl?: string; discountPercent?: number }) => void;
+  onError: (message: string) => void;
+}) {
+  const marketplacePlans = plans.filter((plan) => plan.placement === 'MARKETPLACE_HOME');
+  const [planId, setPlanId] = useState(marketplacePlans[0]?.id ?? '');
+  const [productId, setProductId] = useState<string>('none');
+  const [paymentMethod, setPaymentMethod] = useState<FeaturedListingPaymentMethod>('PAYMONGO');
+  const [customImageUrl, setCustomImageUrl] = useState<string | undefined>(undefined);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleImageChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingImage(true);
+    try {
+      const { url } = await uploadPromotionImage(file);
+      setCustomImageUrl(url);
+    } catch (error: unknown) {
+      onError(error instanceof Error ? error.message : 'Image upload failed.');
+    } finally {
+      setIsUploadingImage(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!planId) return;
+    setIsSubmitting(true);
+    try {
+      const input: CreateFeaturedListingInput = {
+        planId,
+        ...(productId !== 'none' ? { productId } : {}),
+        ...(customImageUrl ? { imageUrl: customImageUrl } : {}),
+        paymentMethod,
+      };
+      const result = await createFeaturedListing(input);
+      onCreated({ checkoutUrl: result.checkoutUrl, discountPercent: result.discountPercent });
+    } catch (error: unknown) {
+      onError(error instanceof Error ? error.message : 'Unable to avail featured listing.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Avail featured listing</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-4 py-2">
+          <div className="flex flex-col gap-1.5">
+            <Label>Plan</Label>
+            <Select value={planId} onValueChange={setPlanId}>
+              <SelectTrigger><SelectValue placeholder="Choose a plan" /></SelectTrigger>
+              <SelectContent>
+                {marketplacePlans.map((plan) => (
+                  <SelectItem key={plan.id} value={plan.id}>
+                    {plan.name} &mdash; ₱{Number(plan.price).toLocaleString('en-PH')} / {plan.durationDays}d
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Product (optional)</Label>
+            <Select value={productId} onValueChange={setProductId}>
+              <SelectTrigger><SelectValue placeholder="No specific product" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No specific product</SelectItem>
+                {products.map((product) => (
+                  <SelectItem key={product.id} value={product.id}>{product.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Custom promo image (optional)</Label>
+            <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed border-card-border/80 px-3 py-2 text-sm text-muted-foreground hover:bg-card/60">
+              <Upload className="h-4 w-4" />
+              {isUploadingImage ? 'Uploading...' : customImageUrl ? 'Image selected' : 'Defaults to the product image'}
+              <input type="file" accept="image/*" className="hidden" onChange={handleImageChange} />
+            </label>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Payment method</Label>
+            <RadioGroup value={paymentMethod} onValueChange={(v) => setPaymentMethod(v as FeaturedListingPaymentMethod)} className="flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="PAYMONGO" id="pay-paymongo" />
+                <Label htmlFor="pay-paymongo" className="font-normal">PayMongo sandbox checkout</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="WALLET" id="pay-wallet" />
+                <Label htmlFor="pay-wallet" className="flex items-center gap-1.5 font-normal">
+                  <Wallet className="h-3.5 w-3.5" />
+                  Vendor wallet balance (₱{Number(walletBalance).toLocaleString('en-PH', { minimumFractionDigits: 2 })})
+                </Label>
+              </div>
+            </RadioGroup>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={isSubmitting || !planId || isUploadingImage}>
+            {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Avail listing
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

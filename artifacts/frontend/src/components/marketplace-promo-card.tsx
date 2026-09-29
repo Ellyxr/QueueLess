@@ -4,7 +4,7 @@ interface MarketplacePromoCardProps {
   title: string;
   storeName: string;
   rating: number;
-  price: number;
+  price?: number;
   image: string;
 }
 
@@ -46,14 +46,16 @@ export function MarketplacePromoCard({
             </h3>
           </div>
 
-          <div className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-right backdrop-blur-sm flex items-center gap-2">
-            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/70 pr-1 align-middle justify-center">
-              For
-            </p>
-            <p className="text-xl font-semibold text-white">
-              ₱{price.toLocaleString("en-PH")}
-            </p>
-          </div>
+          {price !== undefined && (
+            <div className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-right backdrop-blur-sm flex items-center gap-2">
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/70 pr-1 align-middle justify-center">
+                For
+              </p>
+              <p className="text-xl font-semibold text-white">
+                ₱{price.toLocaleString("en-PH")}
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>
