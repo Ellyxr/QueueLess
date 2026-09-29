@@ -14,6 +14,18 @@ if (Number.isNaN(port) || port <= 0) {
 
 const basePath = process.env.BASE_PATH ?? '/';
 
+if (process.env.RENDER === 'true') {
+  const apiBaseUrl = process.env.VITE_API_BASE_URL;
+  if (!apiBaseUrl) {
+    throw new Error('Set VITE_API_BASE_URL to the public HTTPS API URL ending in /api/v1');
+  }
+  const apiUrl = new URL(apiBaseUrl);
+  if (apiUrl.protocol !== 'https:' || apiUrl.pathname !== '/api/v1' ||
+      apiUrl.search || apiUrl.hash || apiUrl.username || apiUrl.password) {
+    throw new Error('VITE_API_BASE_URL must be a public HTTPS URL ending in /api/v1 (no trailing slash)');
+  }
+}
+
 export default defineConfig({
   base: basePath,
   plugins: [
