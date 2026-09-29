@@ -1,12 +1,13 @@
 import { type ReactNode } from "react";
 import { useLocation } from "wouter";
-import { LayoutDashboard, ReceiptText, Users } from "lucide-react";
+import { FileText, LayoutDashboard, ReceiptText, Users } from "lucide-react";
 import { useRequireAuth } from "@/hooks/use-require-auth";
 
 const TABS = [
   { label: "Dashboard", href: "/admin", icon: LayoutDashboard },
   { label: "Refunds", href: "/admin/refunds", icon: ReceiptText },
   { label: "Users", href: "/admin/users", icon: Users },
+  { label: "Reports", href: "/admin/reports", icon: FileText },
 ];
 
 export function AdminShell({ children }: { children: ReactNode }) {
