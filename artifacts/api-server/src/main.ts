@@ -9,10 +9,22 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { rawBody: true });
-  const corsOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:5173';
+  const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => {
+      const url = new URL(value);
+      if (!['http:', 'https:'].includes(url.protocol) || url.pathname !== '/' ||
+          url.search || url.hash || url.username || url.password || value.includes('*')) {
+        throw new Error(`CORS_ORIGIN must contain HTTP(S) origins only: ${value}`);
+      }
+      return url.origin;
+    });
+  if (!corsOrigins.length) throw new Error('CORS_ORIGIN must include at least one origin');
 
   app.setGlobalPrefix('api/v1');
-  app.use(cors({ origin: corsOrigin, credentials: true }));
+  app.use(cors({ origin: corsOrigins, credentials: true }));
   app.use(cookieParser());
   app.useGlobalPipes(
     new ValidationPipe({

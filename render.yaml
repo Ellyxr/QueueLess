@@ -1,0 +1,17 @@
+services:
+  - type: web
+    runtime: static
+    name: queueless-static
+    buildCommand: pnpm install --frozen-lockfile && pnpm --dir artifacts/frontend build
+    staticPublishPath: artifacts/frontend/dist/public
+    envVars:
+      - key: NODE_VERSION
+        value: 24.19.0
+      - key: SKIP_INSTALL_DEPS
+        value: 'true'
+      - key: VITE_API_BASE_URL
+        value: https://queueless-bg1x.onrender.com/api/v1
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
