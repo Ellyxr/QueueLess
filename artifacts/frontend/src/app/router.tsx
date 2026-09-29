@@ -16,6 +16,7 @@ import AdminDashboardPage from '@/features/admin/admin-dashboard';
 import AdminRefundsPage from '@/features/admin/admin-refunds';
 import AdminReportsPage from '@/features/admin/admin-reports';
 import AdminUsersPage from '@/features/admin/admin-users';
+import AdminVendorApplicationsPage from '@/features/admin/admin-vendor-applications';
 import PasabuyPage from '@/features/pasabuy/pasabuy-page';
 import ReportsPage from "@/features/reports/reports-page";
 import { useLocation } from 'wouter';
@@ -129,6 +130,7 @@ export function AppRouter() {
             <Route path="/admin/refunds" component={AdminRefundsPage} />
             <Route path="/admin/reports" component={AdminReportsPage} />
             <Route path="/admin/users" component={AdminUsersPage} />
+            <Route path="/admin/vendor-applications" component={AdminVendorApplicationsPage} />
             <Route component={NotFound} />
           </Switch>
         </RoutedErrorBoundary>
