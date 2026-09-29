@@ -962,3 +962,135 @@ export async function createReport(
     body: formData,
   });
 }
+
+export type AdminReportStatus =
+  | "OPEN"
+  | "IN_REVIEW"
+  | "RESOLVED"
+  | "DISMISSED";
+
+export type AdminReportTargetType =
+  | "VENDOR"
+  | "USER"
+  | "ORDER"
+  | "TRANSACTION"
+  | "PRODUCT"
+  | "PASABUY";
+
+export interface AdminReportAttachment {
+  fileName: string;
+  mimeType: string | null;
+  size: number | null;
+  adminUrl: string;
+}
+
+export interface AdminReport {
+  id: string;
+  targetType: AdminReportTargetType;
+  category: string;
+  description: string;
+  attachment: AdminReportAttachment | null;
+  status: AdminReportStatus;
+  reporterUserId: string;
+  reporter: {
+    id: string;
+    fullName: string;
+    email: string | null;
+  };
+  reportedVendorId: string | null;
+  reportedUserId: string | null;
+  reportedOrderId: string | null;
+  reportedPaymentId: string | null;
+  reportedProductId: string | null;
+  reportedPasabuyId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminReportListResponse {
+  items: AdminReport[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface AdminReportDetail extends AdminReport {
+  reportedVendor: {
+    id: string;
+    name: string;
+  } | null;
+  reportedUser: {
+    id: string;
+    fullName: string;
+  } | null;
+  reportedOrder: {
+    id: string;
+    status: string;
+  } | null;
+  reportedPayment: {
+    id: string;
+    purpose: string;
+    status: string;
+  } | null;
+  reportedProduct: {
+    id: string;
+    name: string;
+    vendorId: string;
+  } | null;
+  reportedPasabuy: {
+    id: string;
+    status: string;
+  } | null;
+  statusHistory: Array<{
+    id: string;
+    status: AdminReportStatus;
+    note: string | null;
+    changedAt: string;
+    adminUserId: string;
+  }>;
+}
+
+export interface AdminReportFilters {
+  status?: AdminReportStatus;
+  category?: string;
+  targetType?: AdminReportTargetType;
+  page?: number;
+  limit?: number;
+}
+
+export function listAdminReports(
+  filters: AdminReportFilters = {},
+): Promise<AdminReportListResponse> {
+  const params = new URLSearchParams();
+
+  if (filters.status) params.set("status", filters.status);
+  if (filters.category) params.set("category", filters.category);
+  if (filters.targetType) params.set("targetType", filters.targetType);
+  if (filters.page) params.set("page", String(filters.page));
+  if (filters.limit) params.set("limit", String(filters.limit));
+
+  const query = params.toString();
+
+  return fetchWithAuth(
+    `/reports${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getAdminReport(
+  reportId: string,
+): Promise<AdminReportDetail> {
+  return fetchWithAuth(`/reports/${reportId}`);
+}
+
+export function getAdminReportAttachment(
+  reportId: string,
+): Promise<{
+  url: string;
+  expiresInSeconds: number;
+  fileName: string | null;
+  mimeType: string | null;
+  size: number | null;
+}> {
+  return fetchWithAuth(`/reports/${reportId}/attachment`);
+}
