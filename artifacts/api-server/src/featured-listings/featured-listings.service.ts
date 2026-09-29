@@ -1,9 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
-import { FeaturedListingPlacement, FeaturedListingStatus, PaymentPurpose, PaymentStatus, Prisma, VendorStatus } from '@prisma/client';
+import { FeaturedListingPlacement, FeaturedListingStatus, LedgerEntryType, PaymentProvider, PaymentPurpose, PaymentStatus, Prisma, VendorStatus } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PaymongoService } from '../payments/paymongo.service';
 import { CreateFeaturedListingDto, CreateFeaturedPlanDto } from './dto/featured-listing.dto';
+
+/** First-come-first-served pricing ladder for MARKETPLACE_HOME: entices early adopters. */
+const MARKETPLACE_HOME_DISCOUNT_LADDER = [30, 20, 10, 0];
 
 @Injectable()
 export class FeaturedListingsService {
@@ -80,12 +83,31 @@ export class FeaturedListingsService {
         ...(placement ? { placement } : {}),
       },
       select: {
-        id: true, placement: true, startDate: true, endDate: true,
+        id: true, placement: true, startDate: true, endDate: true, imageUrl: true,
         vendor: { select: { id: true, name: true, businessName: true, campusLocation: true } },
-        product: { select: { id: true, name: true, imageUrl: true } },
+        product: { select: { id: true, name: true, price: true, imageUrl: true } },
       },
       orderBy: { startDate: 'desc' }, take: 100,
     });
+  }
+
+  private async sumLedgerBalance(vendorId: string, client: PrismaService | Prisma.TransactionClient = this.prisma) {
+    const result = await client.vendorLedgerEntry.aggregate({ where: { vendorId }, _sum: { amount: true } });
+    return result._sum.amount ?? new Prisma.Decimal(0);
+  }
+
+  /** How many vendors have already paid for MARKETPLACE_HOME determines this vendor's discount tier. */
+  private async marketplaceHomeDiscountPercent(vendorId: string) {
+    const priorPayingVendors = await this.prisma.featuredListing.findMany({
+      where: {
+        placement: FeaturedListingPlacement.MARKETPLACE_HOME,
+        vendorId: { not: vendorId },
+        status: { in: [FeaturedListingStatus.ACTIVE, FeaturedListingStatus.EXPIRED] },
+      },
+      distinct: ['vendorId'], select: { vendorId: true },
+    });
+    const tier = Math.min(priorPayingVendors.length, MARKETPLACE_HOME_DISCOUNT_LADDER.length - 1);
+    return MARKETPLACE_HOME_DISCOUNT_LADDER[tier];
   }
 
   async create(userId: string, dto: CreateFeaturedListingDto) {
@@ -98,33 +120,52 @@ export class FeaturedListingsService {
     if (!plan.isActive || plan.price.lessThan(1) || plan.durationDays < 1) {
       throw new ConflictException('Featured listing plan is not available');
     }
+    let product: { id: string; imageUrl: string | null } | null = null;
     if (plan.placement === FeaturedListingPlacement.PRODUCT_SPOTLIGHT) {
       if (!dto.productId) throw new BadRequestException('Product is required for this placement');
-      const product = await this.prisma.product.findFirst({
-        where: { id: dto.productId, vendorId: vendor.id, isAvailable: true }, select: { id: true },
+      product = await this.prisma.product.findFirst({
+        where: { id: dto.productId, vendorId: vendor.id, isAvailable: true }, select: { id: true, imageUrl: true },
       });
       if (!product) throw new NotFoundException('Available vendor product not found');
     } else if (dto.productId) {
-      throw new BadRequestException('Product is only accepted for PRODUCT_SPOTLIGHT');
+      if (plan.placement !== FeaturedListingPlacement.MARKETPLACE_HOME) {
+        throw new BadRequestException('Product is only accepted for MARKETPLACE_HOME or PRODUCT_SPOTLIGHT');
+      }
+      product = await this.prisma.product.findFirst({
+        where: { id: dto.productId, vendorId: vendor.id, isAvailable: true }, select: { id: true, imageUrl: true },
+      });
+      if (!product) throw new NotFoundException('Available vendor product not found');
     }
+    const imageUrl = dto.imageUrl?.trim() || product?.imageUrl || null;
+    const discountPercent = plan.placement === FeaturedListingPlacement.MARKETPLACE_HOME
+      ? await this.marketplaceHomeDiscountPercent(vendor.id) : 0;
+    const chargeAmount = plan.price.mul(100 - discountPercent).div(100).toDecimalPlaces(2);
+    const paymentMethod = dto.paymentMethod ?? 'PAYMONGO';
+
     await this.expireVendor(vendor.id);
+
+    if (paymentMethod === 'WALLET') {
+      return this.createWithWalletPayment(userId, vendor.id, plan, dto.productId, imageUrl, discountPercent, chargeAmount);
+    }
+
     let listing: { id: string };
     try {
       listing = await this.prisma.$transaction(async (tx) => {
         const created = await tx.featuredListing.create({ data: {
           vendorId: vendor.id, planId: plan.id, placement: plan.placement,
           productId: dto.productId ?? null, status: FeaturedListingStatus.PENDING,
+          discountPercent, imageUrl,
         } });
         const payment = await tx.payment.create({ data: {
           payerUserId: userId, purpose: PaymentPurpose.FEATURED_LISTING,
-          featuredListingId: created.id, amount: plan.price,
+          featuredListingId: created.id, amount: chargeAmount,
           currency: 'PHP', status: PaymentStatus.PENDING,
         } });
         await tx.auditRecord.create({ data: {
           actorUserId: userId, actionType: 'FEATURED_LISTING_CREATED',
           entityType: 'FeaturedListing', entityId: created.id,
           afterState: { status: created.status, vendorId: vendor.id,
-            planId: plan.id, placement: plan.placement,
+            planId: plan.id, placement: plan.placement, discountPercent,
             productId: dto.productId ?? null, paymentId: payment.id },
         } });
         await tx.auditRecord.create({ data: {
@@ -142,6 +183,54 @@ export class FeaturedListingsService {
       throw error;
     }
     return this.checkout(userId, listing.id);
+  }
+
+  private async createWithWalletPayment(
+    userId: string, vendorId: string, plan: { id: string; placement: FeaturedListingPlacement; durationDays: number },
+    productId: string | undefined, imageUrl: string | null, discountPercent: number, chargeAmount: Prisma.Decimal,
+  ) {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const balance = await this.sumLedgerBalance(vendorId, tx);
+        if (balance.lessThan(chargeAmount)) {
+          throw new BadRequestException('Insufficient wallet balance for this featured listing');
+        }
+        const now = new Date();
+        const created = await tx.featuredListing.create({ data: {
+          vendorId, planId: plan.id, placement: plan.placement,
+          productId: productId ?? null, discountPercent, imageUrl,
+          status: FeaturedListingStatus.ACTIVE, startDate: now,
+          endDate: new Date(now.getTime() + plan.durationDays * 86_400_000), pricePaid: chargeAmount,
+        } });
+        const payment = await tx.payment.create({ data: {
+          payerUserId: userId, purpose: PaymentPurpose.FEATURED_LISTING,
+          featuredListingId: created.id, amount: chargeAmount, currency: 'PHP',
+          provider: PaymentProvider.WALLET, status: PaymentStatus.SUCCEEDED,
+        } });
+        await tx.vendorLedgerEntry.create({ data: {
+          vendorId, type: LedgerEntryType.PROMOTION_DEBIT, amount: chargeAmount.negated(),
+        } });
+        await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'FEATURED_LISTING_CREATED',
+          entityType: 'FeaturedListing', entityId: created.id,
+          afterState: { status: created.status, vendorId, planId: plan.id,
+            placement: created.placement, discountPercent, productId: productId ?? null, paymentId: payment.id },
+        } });
+        await tx.auditRecord.create({ data: {
+          actorUserId: userId, actionType: 'PAYMENT_STATUS_UPDATED',
+          entityType: 'Payment', entityId: payment.id,
+          afterState: { status: payment.status, purpose: payment.purpose,
+            provider: payment.provider, amount: payment.amount.toFixed(2), featuredListingId: created.id },
+        } });
+        return { listingId: created.id, paymentId: payment.id, amount: chargeAmount.toFixed(2),
+          currency: 'PHP', status: created.status, discountPercent, idempotentReplay: false };
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('Vendor already has a pending or active listing for this placement');
+      }
+      throw error;
+    }
   }
 
   async checkout(userId: string, id: string) {

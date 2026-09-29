@@ -403,6 +403,176 @@ export function payoutVendorBalance(idempotencyKey: string): Promise<PayoutRespo
   });
 }
 
+// --- Deals ---
+
+export type DealDiscountType = "PERCENTAGE" | "FIXED_AMOUNT";
+export type DealTriggerType = "NONE" | "MIN_QUANTITY" | "MIN_ORDER_AMOUNT";
+export type VendorTypeFilter = "STUDENT" | "SAMPALOC_LANE";
+
+export interface DealProduct {
+  id: string;
+  name: string;
+  price: number;
+  imageUrl: string | null;
+}
+
+export interface Deal {
+  id: string;
+  vendorId: string;
+  productId: string;
+  discountType: DealDiscountType;
+  discountValue: number;
+  triggerType: DealTriggerType;
+  triggerValue: number | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  product: DealProduct;
+}
+
+export interface ActiveDeal extends Omit<Deal, "vendorId" | "isActive" | "createdAt" | "updatedAt"> {
+  vendor: { id: string; name: string; businessName: string | null; vendorType: string };
+}
+
+export interface CreateDealInput {
+  productId: string;
+  discountType: DealDiscountType;
+  discountValue: number;
+  triggerType?: DealTriggerType;
+  triggerValue?: number;
+}
+
+export interface UpdateDealInput {
+  discountType?: DealDiscountType;
+  discountValue?: number;
+  triggerType?: DealTriggerType;
+  triggerValue?: number;
+  isActive?: boolean;
+}
+
+export function listMyDeals(): Promise<Deal[]> {
+  return fetchWithAuth("/deals/mine");
+}
+
+export function createDeal(data: CreateDealInput): Promise<Deal> {
+  return fetchWithAuth("/deals", { method: "POST", body: JSON.stringify(data) });
+}
+
+export function updateDeal(id: string, data: UpdateDealInput): Promise<Deal> {
+  return fetchWithAuth(`/deals/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+}
+
+export function deleteDeal(id: string): Promise<{ message: string }> {
+  return fetchWithAuth(`/deals/${id}`, { method: "DELETE" });
+}
+
+export function listActiveDeals(vendorType: VendorTypeFilter): Promise<ActiveDeal[]> {
+  return fetchWithAuth(`/deals/active?vendorType=${vendorType}`);
+}
+
+// --- Featured listings ---
+
+export type FeaturedListingPlacement = "MARKETPLACE_HOME" | "VENDOR_DIRECTORY" | "PRODUCT_SPOTLIGHT";
+export type FeaturedListingStatus = "PENDING" | "ACTIVE" | "EXPIRED" | "CANCELLED";
+export type FeaturedListingPaymentMethod = "PAYMONGO" | "WALLET";
+
+export interface FeaturedListingPlan {
+  id: string;
+  name: string;
+  placement: FeaturedListingPlacement;
+  price: string;
+  durationDays: number;
+  isActive: boolean;
+}
+
+export interface MyFeaturedListing {
+  id: string;
+  placement: FeaturedListingPlacement;
+  status: FeaturedListingStatus;
+  startDate: string | null;
+  endDate: string | null;
+  pricePaid: string | null;
+  discountPercent: number;
+  imageUrl: string | null;
+  plan: FeaturedListingPlan | null;
+  product: { id: string; name: string; isAvailable: boolean } | null;
+  payments: Array<{ id: string; status: string; amount: string; currency: string; createdAt: string }>;
+}
+
+export interface PublicFeaturedListing {
+  id: string;
+  placement: FeaturedListingPlacement;
+  startDate: string;
+  endDate: string;
+  imageUrl: string | null;
+  vendor: { id: string; name: string; businessName: string | null; campusLocation: string | null };
+  product: { id: string; name: string; price: number; imageUrl: string | null } | null;
+}
+
+export interface CreateFeaturedListingInput {
+  planId: string;
+  productId?: string;
+  imageUrl?: string;
+  paymentMethod?: FeaturedListingPaymentMethod;
+}
+
+export interface FeaturedListingCheckoutResponse {
+  listingId: string;
+  paymentId: string;
+  amount: string;
+  currency: string;
+  status: string;
+  checkoutUrl?: string;
+  discountPercent?: number;
+  idempotentReplay: boolean;
+}
+
+export function listFeaturedPlans(): Promise<FeaturedListingPlan[]> {
+  return fetchWithAuth("/featured-listings/plans");
+}
+
+export function getMyFeaturedListings(): Promise<MyFeaturedListing[]> {
+  return fetchWithAuth("/featured-listings/mine");
+}
+
+export function listFeaturedListings(placement: FeaturedListingPlacement): Promise<PublicFeaturedListing[]> {
+  return fetchWithAuth(`/featured-listings?placement=${placement}`);
+}
+
+export function createFeaturedListing(data: CreateFeaturedListingInput): Promise<FeaturedListingCheckoutResponse> {
+  return fetchWithAuth("/featured-listings", { method: "POST", body: JSON.stringify(data) });
+}
+
+export function checkoutFeaturedListing(id: string): Promise<FeaturedListingCheckoutResponse> {
+  return fetchWithAuth(`/featured-listings/${id}/checkout`, { method: "POST" });
+}
+
+export async function uploadPromotionImage(file: File): Promise<ImagekitUploadResult> {
+  const auth = await getImagekitAuth();
+
+  const form = new FormData();
+  form.append("file", file);
+  form.append("fileName", file.name);
+  form.append("publicKey", import.meta.env.VITE_IMAGEKIT_PUBLIC_KEY);
+  form.append("signature", auth.signature);
+  form.append("expire", String(auth.expire));
+  form.append("token", auth.token);
+  form.append("folder", "/promotions");
+
+  const response = await fetch("https://upload.imagekit.io/api/v1/files/upload", {
+    method: "POST",
+    body: form,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || "Image upload failed.");
+  }
+
+  const result = await response.json();
+  return { url: result.url, fileId: result.fileId };
+}
+
 export type RefundCategory =
   | "VENDOR_NOT_ACCEPTED"
   | "VENDOR_UNRESPONSIVE"

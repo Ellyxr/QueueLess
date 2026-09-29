@@ -36,7 +36,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { EXTRA_CATEGORY } from "@/lib/product-extras";
-import { createGroupOrder, joinGroupOrderByCode, listVendors, type VendorStorefront } from "@/features/auth/api";
+import {
+  createGroupOrder,
+  joinGroupOrderByCode,
+  listFeaturedListings,
+  listVendors,
+  type PublicFeaturedListing,
+  type VendorStorefront,
+} from "@/features/auth/api";
 import {
   GROUP_ORDER_SESSION_CHANGED_EVENT,
   getGroupOrderSession,
@@ -45,6 +52,7 @@ import {
 } from "@/features/group-orders/group-order-session";
 import { StorefrontPane } from "./storefront-pane";
 import { PasabuyBanner } from "@/features/pasabuy/pasabuy-banner";
+import { DealsBanner } from "./deals-banner";
 
 const categories = [
   "Pizza",
@@ -676,7 +684,26 @@ export default function MarketplacePage({
   const [isLoading, setIsLoading] = useState(true);
   const [marketplaceVendors, setMarketplaceVendors] = useState<MarketplaceVendor[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  
+
+  // US-042: Marketplace promo card, driven by paid MARKETPLACE_HOME featured listings
+  const [featuredListings, setFeaturedListings] = useState<PublicFeaturedListing[]>([]);
+  const [featuredIndex, setFeaturedIndex] = useState(0);
+
+  useEffect(() => {
+    listFeaturedListings("MARKETPLACE_HOME")
+      .then(setFeaturedListings)
+      .catch(() => setFeaturedListings([]));
+  }, []);
+
+  useEffect(() => {
+    if (featuredListings.length <= 1) return;
+    const timer = window.setInterval(() => {
+      setFeaturedIndex((current) => (current + 1) % featuredListings.length);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [featuredListings.length]);
+
+
   // US-011: Search and Category Filter States
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -884,13 +911,23 @@ export default function MarketplacePage({
             </div>
           </div>
 
-          <MarketplacePromoCard
-            title="Banh Mi Feast"
-            storeName="North Loop Kitchen"
-            rating={4.9}
-            price={215}
-            image="https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=1200&q=80"
-          />
+          {featuredListings.length > 0 && (() => {
+            const listing = featuredListings[featuredIndex % featuredListings.length];
+            return (
+              <MarketplacePromoCard
+                key={listing.id}
+                title={listing.product?.name ?? listing.vendor.businessName ?? listing.vendor.name}
+                storeName={listing.vendor.name}
+                rating={4.9}
+                price={listing.product?.price}
+                image={
+                  listing.imageUrl ||
+                  listing.product?.imageUrl ||
+                  "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=1200&q=80"
+                }
+              />
+            );
+          })()}
         </section>
 
         <PasabuyBanner />
@@ -1024,6 +1061,8 @@ export default function MarketplacePage({
                     <VendorCard key={vendor.name} {...vendor} onSelect={handleSelectVendor} />
                   ))}
                 </div>
+
+                <DealsBanner vendorType="SAMPALOC_LANE" />
               </div>
             )}
 
@@ -1120,6 +1159,8 @@ export default function MarketplacePage({
                     <VendorCard key={vendor.name} {...vendor} onSelect={handleSelectVendor} />
                   ))}
                 </div>
+
+                <DealsBanner vendorType="STUDENT" />
               </div>
             )}
           </section>

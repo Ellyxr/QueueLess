@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { FeaturedListingPlacement } from '@prisma/client';
-import { IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, IsUrl, Max, MaxLength, Min, MinLength } from 'class-validator';
+
+export type FeaturedListingPaymentMethod = 'PAYMONGO' | 'WALLET';
 
 export class CreateFeaturedPlanDto {
   @ApiProperty({ maxLength: 100 })
@@ -31,9 +33,17 @@ export class CreateFeaturedListingDto {
   @IsUUID()
   planId!: string;
 
-  @ApiPropertyOptional({ format: 'uuid', description: 'Required only for PRODUCT_SPOTLIGHT' })
+  @ApiPropertyOptional({ format: 'uuid', description: 'Required for PRODUCT_SPOTLIGHT, optional for MARKETPLACE_HOME' })
   @IsOptional() @IsUUID()
   productId?: string;
+
+  @ApiPropertyOptional({ description: 'Custom promo image URL; defaults to the chosen product image' })
+  @IsOptional() @IsUrl() @MaxLength(2048)
+  imageUrl?: string;
+
+  @ApiPropertyOptional({ enum: ['PAYMONGO', 'WALLET'], default: 'PAYMONGO' })
+  @IsOptional() @IsIn(['PAYMONGO', 'WALLET'])
+  paymentMethod?: FeaturedListingPaymentMethod;
 }
 
 export class ListFeaturedDto {
