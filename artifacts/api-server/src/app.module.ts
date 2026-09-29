@@ -22,6 +22,7 @@ import { FeaturedListingsModule } from './featured-listings/featured-listings.mo
 import { QrModule } from './qr/qr.module';
 import { AdminModule } from './admin/admin.module';
 import { ImagekitModule } from './imagekit/imagekit.module';
+import { DealsModule } from './deals/deals.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { ImagekitModule } from './imagekit/imagekit.module';
     FeaturedListingsModule,
     AdminModule,
     ImagekitModule,
+    DealsModule,
   ],
 })
 export class AppModule {}
