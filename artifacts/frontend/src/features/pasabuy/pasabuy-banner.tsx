@@ -7,27 +7,41 @@ import { cn } from "@/lib/utils";
 import { PasabuyStatusBadge } from "./pasabuy-status-badge";
 import { PasabuyAcceptDialog } from "./pasabuy-accept-dialog";
 import { PasabuyEligibilityGate } from "./pasabuy-eligibility-gate";
-import {
-  getCurrentUserId,
-  listOpenRequests,
-  subscribeToPasabuyChanges,
-  type PasabuyRequestRecord,
-} from "./pasabuy-mock-store";
-import { getEligibility, isEligibleToDeliver } from "./pasabuy-eligibility";
+import { listOpenRequests, PASABUY_POLL_INTERVAL_MS, type PasabuyAvailableRequest } from "./pasabuy-api";
+import { getTermsAccepted, isEligibleToDeliver } from "./pasabuy-eligibility";
+import { getPasabuyProfile } from "./pasabuy-api";
 
 export function PasabuyBanner() {
   const [, setLocation] = useLocation();
-  const [requests, setRequests] = useState<PasabuyRequestRecord[]>(() => listOpenRequests());
-  const [acceptTarget, setAcceptTarget] = useState<PasabuyRequestRecord | null>(null);
+  const [requests, setRequests] = useState<PasabuyAvailableRequest[]>([]);
+  const [acceptTarget, setAcceptTarget] = useState<PasabuyAvailableRequest | null>(null);
   const [showGateFor, setShowGateFor] = useState<string | null>(null);
   const [, forceRefresh] = useState(0);
 
-  useEffect(() => subscribeToPasabuyChanges(() => setRequests(listOpenRequests())), []);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      // A 403 here means the browsing student's profile isn't verified yet —
+      // simply keep showing no open requests rather than throwing.
+      listOpenRequests()
+        .then((data) => {
+          if (!cancelled) setRequests(data);
+        })
+        .catch(() => {
+          if (!cancelled) setRequests([]);
+        });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, PASABUY_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   if (requests.length === 0) return null;
 
   const scrollable = requests.length > 3;
-  const currentUserId = getCurrentUserId();
 
   return (
     <section className="mt-8">
@@ -64,44 +78,42 @@ export function PasabuyBanner() {
             <CardContent className="space-y-2.5 p-4">
               <div className="flex items-start justify-between gap-2">
                 <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                  Pasabuy #{request.reference}
+                  Pasabuy #{request.id.slice(0, 8).toUpperCase()}
                 </p>
                 <PasabuyStatusBadge status={request.status} />
               </div>
 
-              <p className="text-sm font-semibold text-foreground">{request.order.items}</p>
+              <p className="text-sm font-semibold text-foreground">{request.itemDescription}</p>
               <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Store className="h-3.5 w-3.5 shrink-0" /> {request.order.vendorName}
+                <Store className="h-3.5 w-3.5 shrink-0" /> {request.relatedOrder.vendor.businessName || "Vendor"}
               </p>
               <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <MapPin className="h-3.5 w-3.5 shrink-0" /> {request.deliveryLocation}
+                <MapPin className="h-3.5 w-3.5 shrink-0" /> {request.pickupLocation}
               </p>
 
               <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">Requester: {request.requesterName}</span>
+                <span className="text-muted-foreground">
+                  {request.feeTier === "OUTSIDE_CAMPUS" ? "Outside campus" : "In campus"}
+                </span>
                 <div className="text-right">
-                  <span className="font-semibold text-foreground">₱{request.fee}</span>
+                  <span className="font-semibold text-foreground">₱{request.convenienceFee}</span>
                   <p className="text-[10px] text-muted-foreground">Charged once accepted</p>
                 </div>
               </div>
 
-              {showGateFor === request.id && !isEligibleToDeliver(getEligibility()) ? (
-                <PasabuyEligibilityGate
-                  onEligible={(eligible) => {
-                    if (eligible) forceRefresh((n) => n + 1);
+              {showGateFor === request.id ? (
+                <GatedAcceptButton
+                  request={request}
+                  onEligible={() => {
+                    forceRefresh((n) => n + 1);
+                    setShowGateFor(null);
+                    setAcceptTarget(request);
                   }}
                 />
               ) : (
                 <Button
                   className="w-full rounded-full"
-                  disabled={request.requesterUserId === currentUserId}
-                  onClick={() => {
-                    if (isEligibleToDeliver(getEligibility())) {
-                      setAcceptTarget(request);
-                    } else {
-                      setShowGateFor(request.id);
-                    }
-                  }}
+                  onClick={() => setShowGateFor(request.id)}
                 >
                   Accept Pasabuy
                 </Button>
@@ -118,12 +130,50 @@ export function PasabuyBanner() {
             if (!open) setAcceptTarget(null);
           }}
           request={acceptTarget}
-          onAccepted={(updated) => {
+          onAccepted={(updatedId) => {
             setAcceptTarget(null);
-            setLocation(`/pasabuy/${updated.id}`);
+            setLocation(`/pasabuy/${updatedId}`);
           }}
         />
       )}
     </section>
   );
+}
+
+/**
+ * Checks real eligibility before letting the accept dialog open; shows the
+ * eligibility gate inline if the student isn't ready yet.
+ */
+function GatedAcceptButton({
+  request,
+  onEligible,
+}: {
+  request: PasabuyAvailableRequest;
+  onEligible: () => void;
+}) {
+  const [checked, setChecked] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPasabuyProfile()
+      .then((profile) => {
+        if (cancelled) return;
+        if (isEligibleToDeliver(profile, getTermsAccepted())) {
+          onEligible();
+        } else {
+          setChecked(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request.id]);
+
+  if (!checked) return null;
+
+  return <PasabuyEligibilityGate onEligible={(eligible) => eligible && onEligible()} />;
 }
