@@ -1,12 +1,18 @@
 /**
- * MOCK-ONLY deliverer eligibility state (student ID number + photo, and Pasabuy
- * terms acceptance). The real `PasabuyProfile` model only stores a student ID
- * string — there's no photo, verification flag, or terms-acceptance timestamp
- * on the backend yet (see artifacts/api-server/AddressMe.md). Submitting a
- * student ID here auto-verifies it instantly since there's no admin review
- * queue to simulate; swap for `getProfile` / `upsertProfile` in
- * `@/features/auth/api` once those fields exist.
+ * Deliverer eligibility = a verified Pasabuy profile (student ID number +
+ * admin-reviewed photo, both stored server-side, see `pasabuy-api.ts`) plus
+ * having accepted the Pasabuy Terms & Conditions.
+ *
+ * The backend has no endpoint for terms acceptance (it's only recorded
+ * per-request via `termsAccepted` on create — there's no standalone
+ * "deliverer terms" timestamp on `PasabuyProfile`), so that half stays a
+ * lightweight local flag, same as before. The student ID verification half
+ * now reflects whatever `GET /pasabuy/profile` returns — there is no
+ * auto-verify shortcut anymore; verification happens by admin review after
+ * a photo is uploaded.
  */
+
+import type { PasabuyProfileResponse } from "./pasabuy-api";
 
 function getCurrentUserId(): string | null {
   const stored = localStorage.getItem("user");
@@ -18,57 +24,25 @@ function getCurrentUserId(): string | null {
   }
 }
 
-function storageKey(userId: string): string {
-  return `queueless-pasabuy-eligibility:${userId}`;
+function termsStorageKey(userId: string): string {
+  return `queueless-pasabuy-terms-accepted:${userId}`;
 }
 
-export interface PasabuyEligibilityState {
-  studentIdNumber: string;
-  /** Small resized data URL — never rendered to anyone but the owning student. */
-  studentIdPhoto: string | null;
-  studentIdVerified: boolean;
-  termsAccepted: boolean;
-}
-
-const EMPTY_STATE: PasabuyEligibilityState = {
-  studentIdNumber: "",
-  studentIdPhoto: null,
-  studentIdVerified: false,
-  termsAccepted: false,
-};
-
-export function getEligibility(): PasabuyEligibilityState {
+export function getTermsAccepted(): boolean {
   const userId = getCurrentUserId();
-  if (!userId) return EMPTY_STATE;
-  const stored = localStorage.getItem(storageKey(userId));
-  if (!stored) return EMPTY_STATE;
-  try {
-    return { ...EMPTY_STATE, ...(JSON.parse(stored) as Partial<PasabuyEligibilityState>) };
-  } catch {
-    return EMPTY_STATE;
-  }
-}
-
-function setEligibility(next: PasabuyEligibilityState): void {
-  const userId = getCurrentUserId();
-  if (!userId) return;
-  localStorage.setItem(storageKey(userId), JSON.stringify(next));
-}
-
-/** Submits the student ID number + photo. Mock-verifies instantly — no admin review queue exists in this frontend-only build. */
-export function submitStudentId(studentIdNumber: string, studentIdPhoto: string): void {
-  setEligibility({
-    ...getEligibility(),
-    studentIdNumber: studentIdNumber.trim(),
-    studentIdPhoto,
-    studentIdVerified: true,
-  });
+  if (!userId) return false;
+  return localStorage.getItem(termsStorageKey(userId)) === "true";
 }
 
 export function acceptPasabuyTerms(): void {
-  setEligibility({ ...getEligibility(), termsAccepted: true });
+  const userId = getCurrentUserId();
+  if (!userId) return;
+  localStorage.setItem(termsStorageKey(userId), "true");
 }
 
-export function isEligibleToDeliver(state: PasabuyEligibilityState): boolean {
-  return state.studentIdVerified && state.termsAccepted;
+export function isEligibleToDeliver(
+  profile: PasabuyProfileResponse | null,
+  termsAccepted: boolean,
+): boolean {
+  return Boolean(profile?.studentIdVerified) && termsAccepted;
 }

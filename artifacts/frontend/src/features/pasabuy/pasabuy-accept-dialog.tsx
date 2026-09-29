@@ -8,7 +8,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { acceptRequest, type PasabuyRequestRecord } from "./pasabuy-mock-store";
+import { acceptRequest, type PasabuyAvailableRequest } from "./pasabuy-api";
+import { trackPasabuyRequest } from "./pasabuy-tracking";
 
 export function PasabuyAcceptDialog({
   open,
@@ -18,19 +19,20 @@ export function PasabuyAcceptDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  request: PasabuyRequestRecord;
-  onAccepted?: (request: PasabuyRequestRecord) => void;
+  request: PasabuyAvailableRequest;
+  onAccepted?: (requestId: string) => void;
 }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleAccept = () => {
+  const handleAccept = async () => {
     if (isSubmitting) return;
     setIsSubmitting(true);
     setError(null);
     try {
-      const updated = acceptRequest(request.id);
-      onAccepted?.(updated);
+      const updated = await acceptRequest(request.id);
+      trackPasabuyRequest(updated.id);
+      onAccepted?.(updated.id);
       onOpenChange(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not accept this request.");
@@ -50,13 +52,11 @@ export function PasabuyAcceptDialog({
         </DialogHeader>
 
         <div className="space-y-2 rounded-2xl border border-border/80 bg-secondary/30 p-3 text-sm">
-          <Row label="Order reference" value={request.reference} />
-          <Row label="Food/items" value={request.order.items} />
-          <Row label="Vendor" value={request.order.vendorName} />
-          <Row label="Pickup location" value={request.order.pickupLocation} />
-          <Row label="Delivery location" value={request.deliveryLocation} />
-          <Row label="Requester" value={request.requesterName} />
-          <Row label="Pasabuy fee" value={`₱${request.fee}`} />
+          <Row label="Order reference" value={request.id.slice(0, 8).toUpperCase()} />
+          <Row label="Food/items" value={request.itemDescription} />
+          <Row label="Vendor" value={request.relatedOrder.vendor.businessName || "Vendor"} />
+          <Row label="Pickup location" value={request.pickupLocation} />
+          <Row label="Pasabuy fee" value={`₱${request.convenienceFee}`} />
         </div>
 
         <p className="text-xs text-muted-foreground">

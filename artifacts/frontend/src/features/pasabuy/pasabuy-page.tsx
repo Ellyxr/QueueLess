@@ -4,16 +4,43 @@ import { ArrowLeft } from "lucide-react";
 import { PasabuyBanner } from "./pasabuy-banner";
 import { PasabuyFlowPanel } from "./pasabuy-flow-panel";
 import { PasabuyStatusBadge } from "./pasabuy-status-badge";
+import { getRequest, PASABUY_POLL_INTERVAL_MS, type PasabuyRequestDetail } from "./pasabuy-api";
 import {
-  listMyRequests,
-  subscribeToPasabuyChanges,
-  type PasabuyRequestRecord,
-} from "./pasabuy-mock-store";
+  getTrackedPasabuyRequestIds,
+  subscribeToPasabuyTrackingChanges,
+} from "./pasabuy-tracking";
 
+/**
+ * There's no `GET /pasabuy/requests/mine` endpoint on the backend, so this
+ * list is built from locally-tracked request ids (set when the current user
+ * creates or accepts a request — see `pasabuy-tracking.ts`), each hydrated
+ * from the real `GET /pasabuy/requests/:id`.
+ */
 function MyPasabuyList() {
-  const [requests, setRequests] = useState<PasabuyRequestRecord[]>(() => listMyRequests());
+  const [ids, setIds] = useState<string[]>(() => getTrackedPasabuyRequestIds());
+  const [requests, setRequests] = useState<PasabuyRequestDetail[]>([]);
 
-  useEffect(() => subscribeToPasabuyChanges(() => setRequests(listMyRequests())), []);
+  useEffect(() => subscribeToPasabuyTrackingChanges(() => setIds(getTrackedPasabuyRequestIds())), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      Promise.all(
+        ids.map((id) =>
+          getRequest(id).catch(() => null),
+        ),
+      ).then((results) => {
+        if (cancelled) return;
+        setRequests(results.filter((r): r is PasabuyRequestDetail => r !== null));
+      });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, PASABUY_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [ids]);
 
   if (requests.length === 0) {
     return (
@@ -32,8 +59,10 @@ function MyPasabuyList() {
           className="flex items-center justify-between gap-3 rounded-2xl border border-border/80 bg-card/90 p-4 shadow-sm transition-colors hover:bg-secondary/30"
         >
           <div>
-            <p className="text-sm font-medium text-foreground">{request.order.items}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Pasabuy #{request.reference}</p>
+            <p className="text-sm font-medium text-foreground">{request.itemDescription}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Pasabuy #{request.id.slice(0, 8).toUpperCase()}
+            </p>
           </div>
           <PasabuyStatusBadge status={request.status} />
         </Link>

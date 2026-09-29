@@ -207,11 +207,15 @@ export interface ProfileData {
 export interface CustomerOrder {
   id: string;
   status: string;
+  isPreorder: boolean;
+  isPasabuyRequest: boolean;
+  /** 8-char uppercase order-id prefix computed server-side — use instead of any client-side UUID truncation. */
+  orderReference: string;
   total: string;
   createdAt: string;
   paidAt: string | null;
   buyerContactPingAt: string | null;
-  vendor: { id: string; name: string };
+  vendor: { id: string; name: string; pickupLocation: string | null };
   items: Array<{ productId: string; name: string; quantity: number }>;
   refund: OrderRefundSummary | null;
 }
@@ -615,6 +619,9 @@ export interface OrderStatusResponse {
   orderType: "INDIVIDUAL" | "GROUP";
   status: string;
   isPasabuyRequest: boolean;
+  isPreorder: boolean;
+  /** 8-char uppercase order-id prefix computed server-side. */
+  orderReference: string;
   cancellationReason: CancellationReason | null;
   cancellationNote: string | null;
   estimatedReadyAt: string | null;
@@ -624,7 +631,7 @@ export interface OrderStatusResponse {
   buyerContactPingAt: string | null;
   refund: OrderRefundSummary | null;
   myPaymentShare: { id: string; amountDue: string; status: "PENDING" | "PAID" } | null;
-  vendor: { id: string; name: string; campusLocation: string | null };
+  vendor: { id: string; name: string; campusLocation: string | null; pickupLocation: string | null };
   items: Array<{ id: string; name: string; quantity: number }>;
   history: Array<{ status: string; note: string | null; changedAt: string }>;
   viewerRole: "OWNER" | "MEMBER" | null;

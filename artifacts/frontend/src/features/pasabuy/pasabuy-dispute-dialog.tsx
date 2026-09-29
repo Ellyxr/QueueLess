@@ -9,15 +9,16 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { reportProblem, type PasabuyRequestRecord } from "./pasabuy-mock-store";
+import { reportProblem, type PasabuyRequestDetail } from "./pasabuy-api";
 
-const REASONS = [
+const QUICK_REASONS = [
   "Order was not delivered",
   "Wrong order",
   "Missing item",
   "Other issue",
 ];
 
+/** Calls the real `POST /pasabuy/requests/:id/report` endpoint — it takes a free-text `description`, not a reason enum. The quick-pick buttons just seed the text field. */
 export function PasabuyDisputeDialog({
   open,
   onOpenChange,
@@ -26,28 +27,33 @@ export function PasabuyDisputeDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  request: PasabuyRequestRecord;
-  onReported?: (request: PasabuyRequestRecord) => void;
+  request: PasabuyRequestDetail;
+  onReported?: () => void;
 }) {
-  const [reason, setReason] = useState<string | null>(null);
+  const [description, setDescription] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const reset = () => {
-    setReason(null);
+    setDescription("");
+    setIsSubmitting(false);
     setSubmitted(false);
     setError(null);
   };
 
-  const handleSubmit = () => {
-    if (!reason) return;
+  const handleSubmit = async () => {
+    if (!description.trim() || isSubmitting) return;
     setError(null);
+    setIsSubmitting(true);
     try {
-      const updated = reportProblem(request.id, reason);
+      await reportProblem(request.id, description.trim());
       setSubmitted(true);
-      onReported?.(updated);
+      onReported?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not report this problem.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -64,36 +70,46 @@ export function PasabuyDisputeDialog({
           <>
             <DialogHeader>
               <DialogTitle>Report a problem</DialogTitle>
-              <DialogDescription>What happened with Pasabuy #{request.reference}?</DialogDescription>
+              <DialogDescription>
+                What happened with Pasabuy #{request.id.slice(0, 8).toUpperCase()}?
+              </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-2">
-              {REASONS.map((option) => (
+              {QUICK_REASONS.map((option) => (
                 <label
                   key={option}
                   className={cn(
                     "flex cursor-pointer items-start gap-2 rounded-xl border p-3 text-sm transition-colors",
-                    reason === option ? "border-primary bg-primary/5" : "border-border",
+                    description === option ? "border-primary bg-primary/5" : "border-border",
                   )}
                 >
                   <input
                     type="radio"
                     name="pasabuy-dispute-reason"
                     value={option}
-                    checked={reason === option}
-                    onChange={() => setReason(option)}
+                    checked={description === option}
+                    onChange={() => setDescription(option)}
                     className="mt-0.5"
                   />
                   <span>{option}</span>
                 </label>
               ))}
+              <textarea
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                maxLength={2000}
+                placeholder="Describe what happened..."
+                rows={3}
+                className="w-full rounded-xl border border-border bg-background p-3 text-sm outline-none"
+              />
             </div>
 
             {error && <p className="text-xs text-destructive">{error}</p>}
 
             <DialogFooter>
-              <Button onClick={handleSubmit} disabled={!reason} className="rounded-full">
-                Submit
+              <Button onClick={handleSubmit} disabled={!description.trim() || isSubmitting} className="rounded-full">
+                {isSubmitting ? "Submitting..." : "Submit"}
               </Button>
             </DialogFooter>
           </>

@@ -449,12 +449,14 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
               <PasabuyOrderEntry
                 orderStatus={order.status}
                 fullWidth
+                isPasabuyRequest={order.isPasabuyRequest}
+                isPreorder={order.isPreorder}
                 order={{
                   orderId: order.orderId,
-                  reference: order.orderId.slice(0, 8).toUpperCase(),
+                  reference: order.orderReference,
                   items: order.items.map((item) => `${item.name} x${item.quantity}`).join(", "),
                   vendorName: order.vendor.name,
-                  pickupLocation: order.vendor.campusLocation || "Vendor location",
+                  pickupLocation: order.vendor.pickupLocation || order.vendor.campusLocation || "Vendor location",
                 }}
               />
             </div>

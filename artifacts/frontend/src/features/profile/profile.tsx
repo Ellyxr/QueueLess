@@ -13,11 +13,9 @@ import {
   MoonStar,
   PencilLine,
   ShieldCheck,
-  Store,
   SunMedium,
   Trash2,
   UserRound,
-  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -44,6 +42,7 @@ import {
 import { RefundRequestDialog } from "@/features/refunds/refund-request-dialog";
 import { PasabuyOrderEntry } from "@/features/pasabuy/pasabuy-order-entry";
 import { PasabuyStudentIdCard } from "@/features/pasabuy/pasabuy-student-id-card";
+import { VendorApplicationCard } from "@/features/profile/vendor-application-card";
 
 const REFUND_HIDDEN_STATUSES = new Set(["PENDING", "CANCELLED"]);
 import { useRequireAuth } from "@/hooks/use-require-auth";
@@ -120,10 +119,6 @@ export default function ProfilePage() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<SavedPaymentMethod | null>(getSavedPaymentMethod);
   const [isEditingPaymentMethod, setIsEditingPaymentMethod] = useState(false);
-  const [showVendorApplyForm, setShowVendorApplyForm] = useState(false);
-  const [vendorApplicationSubmitted, setVendorApplicationSubmitted] = useState(false);
-  const [vendorBusinessName, setVendorBusinessName] = useState("");
-  const [vendorDescription, setVendorDescription] = useState("");
   const [showHelpCenter, setShowHelpCenter] = useState(false);
 
   useEffect(() => {
@@ -684,12 +679,14 @@ export default function ProfilePage() {
                         </div>
                         <PasabuyOrderEntry
                           orderStatus={order.status}
+                          isPasabuyRequest={order.isPasabuyRequest}
+                          isPreorder={order.isPreorder}
                           order={{
                             orderId: order.id,
-                            reference: order.id.slice(0, 8).toUpperCase(),
+                            reference: order.orderReference,
                             items: order.items.map((item) => `${item.name} x${item.quantity}`).join(", "),
                             vendorName: order.vendor.name,
-                            pickupLocation: order.vendor.name,
+                            pickupLocation: order.vendor.pickupLocation || order.vendor.name,
                           }}
                         />
                         {!REFUND_HIDDEN_STATUSES.has(order.status) && !order.refund && (
@@ -881,84 +878,7 @@ export default function ProfilePage() {
             </CardContent>
           </Card>
 
-          <Card className="border-card-border/80 bg-card/90 shadow-sm">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-2xl tracking-tighter">
-                <Store className="h-5 w-5 text-primary" />
-                Become a vendor
-              </CardTitle>
-              <CardDescription>
-                Sell food or goods on campus as a student vendor.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {vendorApplicationSubmitted ? (
-                <div className="rounded-[18px] border border-emerald-500/30 bg-emerald-500/10 p-4 text-center">
-                  <Check className="mx-auto h-5 w-5 text-emerald-600" />
-                  <p className="mt-2 text-sm font-medium text-foreground">
-                    Application submitted
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    We'll review your vendor application and get back to you.
-                  </p>
-                </div>
-              ) : showVendorApplyForm ? (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-medium">Vendor application</p>
-                    <button
-                      type="button"
-                      onClick={() => setShowVendorApplyForm(false)}
-                      className="text-muted-foreground hover:text-foreground"
-                      aria-label="Close vendor application form"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                  <div className="space-y-2">
-                    <label htmlFor="vendor-business-name" className="text-sm font-medium">
-                      Business / stall name
-                    </label>
-                    <Input
-                      id="vendor-business-name"
-                      value={vendorBusinessName}
-                      onChange={(event) => setVendorBusinessName(event.target.value)}
-                      placeholder="e.g. North Loop Kitchen"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label htmlFor="vendor-description" className="text-sm font-medium">
-                      What will you sell?
-                    </label>
-                    <Input
-                      id="vendor-description"
-                      value={vendorDescription}
-                      onChange={(event) => setVendorDescription(event.target.value)}
-                      placeholder="e.g. Rice meals and snacks"
-                    />
-                  </div>
-                  <Button
-                    type="button"
-                    className="w-full rounded-full"
-                    disabled={!vendorBusinessName.trim()}
-                    onClick={() => setVendorApplicationSubmitted(true)}
-                  >
-                    Submit application
-                  </Button>
-                </div>
-              ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full gap-2 rounded-full"
-                  onClick={() => setShowVendorApplyForm(true)}
-                >
-                  <Store className="h-4 w-4" />
-                  Apply to be a student vendor
-                </Button>
-              )}
-            </CardContent>
-          </Card>
+          <VendorApplicationCard />
 
           <Card className="border-card-border/80 bg-card/90 shadow-sm">
             <CardContent className="p-5">

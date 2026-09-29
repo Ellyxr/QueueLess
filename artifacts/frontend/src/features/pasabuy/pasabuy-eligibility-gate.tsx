@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "wouter";
-import { ShieldAlert, ShieldCheck } from "lucide-react";
+import { Loader2, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,23 +10,50 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { PasabuyTerms } from "./pasabuy-terms";
-import {
-  acceptPasabuyTerms,
-  getEligibility,
-  isEligibleToDeliver,
-} from "./pasabuy-eligibility";
+import { acceptPasabuyTerms, getTermsAccepted, isEligibleToDeliver } from "./pasabuy-eligibility";
+import { getPasabuyProfile, type PasabuyProfileResponse } from "./pasabuy-api";
 
 /**
- * Gate shown before a student can accept a Pasabuy request. Reads mock
- * eligibility state (see pasabuy-eligibility.ts) — swap for real profile data
- * once the backend exposes a verification flag and terms-acceptance timestamp.
- * The student ID itself is submitted on the profile page's "Student ID" section.
+ * Gate shown before a student can accept a Pasabuy request. Fetches the real
+ * profile from `GET /pasabuy/profile` — `studentIdVerified` only becomes true
+ * once an admin has reviewed the uploaded photo, there's no client-side
+ * shortcut anymore.
  */
 export function PasabuyEligibilityGate({ onEligible }: { onEligible: (verified: boolean) => void }) {
   const [isTermsOpen, setIsTermsOpen] = useState(false);
   const [termsChecked, setTermsChecked] = useState(false);
-  const eligibility = getEligibility();
-  const eligible = isEligibleToDeliver(eligibility);
+  const [termsAccepted, setTermsAccepted] = useState(() => getTermsAccepted());
+  const [profile, setProfile] = useState<PasabuyProfileResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPasabuyProfile()
+      .then((data) => {
+        if (!cancelled) setProfile(data);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load your Pasabuy profile.");
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 rounded-2xl border border-border/80 bg-secondary/30 p-3 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        <span>Checking your Pasabuy eligibility...</span>
+      </div>
+    );
+  }
+
+  const eligible = isEligibleToDeliver(profile, termsAccepted);
 
   if (eligible) {
     return (
@@ -43,20 +70,28 @@ export function PasabuyEligibilityGate({ onEligible }: { onEligible: (verified: 
         <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
         <div>
           <p className="font-semibold">You're not ready to deliver Pasabuy orders.</p>
-          {!eligibility.studentIdVerified && <p className="mt-1 text-xs">Student ID required.</p>}
-          {!eligibility.termsAccepted && (
+          {!profile?.studentIdVerified && (
+            <p className="mt-1 text-xs">
+              {profile?.profile?.photoSubmitted
+                ? "Your student ID is awaiting admin verification."
+                : "A verified student ID is required."}
+            </p>
+          )}
+          {!termsAccepted && (
             <p className="mt-1 text-xs">Accept the Pasabuy Terms &amp; Conditions to continue.</p>
           )}
         </div>
       </div>
 
+      {error && <p className="text-xs text-destructive">{error}</p>}
+
       <div className="flex flex-wrap gap-2">
-        {!eligibility.studentIdVerified && (
+        {!profile?.studentIdVerified && (
           <Button asChild size="sm" variant="outline" className="rounded-full">
             <Link href="/profile#student-id">Complete Profile</Link>
           </Button>
         )}
-        {!eligibility.termsAccepted && (
+        {!termsAccepted && (
           <Button
             size="sm"
             variant="outline"
@@ -80,8 +115,9 @@ export function PasabuyEligibilityGate({ onEligible }: { onEligible: (verified: 
               disabled={!termsChecked}
               onClick={() => {
                 acceptPasabuyTerms();
+                setTermsAccepted(true);
                 setIsTermsOpen(false);
-                onEligible(isEligibleToDeliver(getEligibility()));
+                onEligible(isEligibleToDeliver(profile, true));
               }}
             >
               Confirm
