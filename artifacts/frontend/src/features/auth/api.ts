@@ -1094,3 +1094,17 @@ export function getAdminReportAttachment(
 }> {
   return fetchWithAuth(`/reports/${reportId}/attachment`);
 }
+
+export async function updateAdminReportStatus(
+  reportId: string,
+  status: "IN_REVIEW" | "RESOLVED" | "DISMISSED",
+  note?: string,
+): Promise<AdminReportDetail> {
+  return fetchWithAuth(`/reports/${reportId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status,
+      ...(note?.trim() ? { note: note.trim() } : {}),
+    }),
+  });
+}

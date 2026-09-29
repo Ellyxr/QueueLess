@@ -30,11 +30,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 
 import { AdminShell } from "./admin-shell";
 import {
   getAdminReport,
   listAdminReports,
+  updateAdminReportStatus,
   type AdminReport,
   type AdminReportDetail,
   type AdminReportStatus,
@@ -61,7 +63,9 @@ function formatDate(value: string) {
   return new Date(value).toLocaleString();
 }
 
-function getTargetType(report: AdminReport) {
+function getTargetType(
+  report: AdminReport,
+): AdminReportTargetType | undefined {
   if (report.reportedVendorId) return "VENDOR";
   if (report.reportedUserId) return "USER";
   if (report.reportedOrderId) return "ORDER";
@@ -105,6 +109,13 @@ export default function AdminReportsPage() {
   const [selectedReport, setSelectedReport] =
     useState<AdminReportDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  const [resolutionStatus, setResolutionStatus] = useState<
+    "IN_REVIEW" | "RESOLVED" | "DISMISSED"
+  >("IN_REVIEW");
+  const [resolutionNote, setResolutionNote] = useState("");
+  const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -162,12 +173,62 @@ export default function AdminReportsPage() {
     try {
       const detail = await getAdminReport(reportId);
       setSelectedReport(detail);
+      setResolutionStatus(
+        detail.status === "OPEN" ? "IN_REVIEW" : "RESOLVED",
+      );
+      setResolutionNote("");
+      setStatusError(null);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to load report details.",
       );
     } finally {
       setDetailLoading(false);
+    }
+  }
+
+  async function handleUpdateStatus() {
+    if (!selectedReport) return;
+
+    if (
+      (resolutionStatus === "RESOLVED" ||
+        resolutionStatus === "DISMISSED") &&
+      !resolutionNote.trim()
+    ) {
+      setStatusError("A note is required when resolving or dismissing a report.");
+      return;
+    }
+
+    setUpdatingStatus(true);
+    setError(null);
+    setStatusError(null);
+
+    try {
+      const updatedReport = await updateAdminReportStatus(
+        selectedReport.id,
+        resolutionStatus,
+        resolutionNote,
+      );
+
+      setSelectedReport(updatedReport);
+
+      const response = await listAdminReports({
+        status: status === "ALL" ? undefined : status,
+        targetType: targetType === "ALL" ? undefined : targetType,
+        page,
+        limit: 20,
+      });
+
+      setReports(response.items);
+      setTotalPages(response.totalPages);
+      setTotal(response.total);
+      setResolutionNote("");
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to update report status.",
+      );
+    } finally {
+      setUpdatingStatus(false);
     }
   }
 
@@ -346,24 +407,17 @@ export default function AdminReportsPage() {
               Loading report details...
             </p>
           ) : selectedReport ? (
-            <div className="space-y-5">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Category
-                </p>
-                <p className="mt-1 font-medium">{selectedReport.category}</p>
-              </div>
+            <div className="space-y-6">
+              <div className="grid gap-5 sm:grid-cols-2">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Category
+                  </p>
+                  <p className="mt-1 font-medium">
+                    {selectedReport.category}
+                  </p>
+                </div>
 
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Description
-                </p>
-                <p className="mt-1 whitespace-pre-wrap text-sm">
-                  {selectedReport.description}
-                </p>
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Status
@@ -383,45 +437,135 @@ export default function AdminReportsPage() {
                     {formatTargetType(getTargetType(selectedReport))}
                   </p>
                 </div>
+
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Created
+                  </p>
+                  <p className="mt-1 text-sm">
+                    {formatDate(selectedReport.createdAt)}
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Description
+                </p>
+                <div className="mt-2 rounded-lg border border-border bg-muted/20 p-4">
+                  <p className="whitespace-pre-wrap text-sm leading-6">
+                    {selectedReport.description}
+                  </p>
+                </div>
               </div>
 
               <div>
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Reporter
                 </p>
-                <p className="mt-1 text-sm">
-                  {selectedReport.reporter.fullName}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {selectedReport.reporter.email ?? "No email"}
-                </p>
+                <div className="mt-2 rounded-lg border border-border p-4">
+                  <p className="text-sm font-medium">
+                    {selectedReport.reporter.fullName}
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {selectedReport.reporter.email ?? "No email"}
+                  </p>
+                </div>
               </div>
 
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Created
-                </p>
-                <p className="mt-1 text-sm">
-                  {formatDate(selectedReport.createdAt)}
-                </p>
-              </div>
+              {selectedReport.status !== "RESOLVED" &&
+                selectedReport.status !== "DISMISSED" && (
+                  <div className="space-y-4 rounded-lg border border-border p-4">
+                    <div>
+                      <p className="text-sm font-semibold">
+                        Update report status
+                      </p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Move this report through the review process.
+                      </p>
+                      {statusError && (
+                        <p className="text-sm text-destructive">{statusError}</p>
+                      )}
+                    </div>
+
+                    <Select
+                      value={resolutionStatus}
+                      onValueChange={(value) =>
+                        setResolutionStatus(
+                          value as
+                            | "IN_REVIEW"
+                            | "RESOLVED"
+                            | "DISMISSED",
+                        )
+                      }
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {selectedReport.status === "OPEN" && (
+                          <SelectItem value="IN_REVIEW">In review</SelectItem>
+                        )}
+
+                        {selectedReport.status === "IN_REVIEW" && (
+                          <>
+                            <SelectItem value="RESOLVED">Resolved</SelectItem>
+                            <SelectItem value="DISMISSED">Dismissed</SelectItem>
+                          </>
+                        )}
+                      </SelectContent>
+                    </Select>
+
+                    <Textarea
+                      value={resolutionNote}
+                      onChange={(event) =>
+                        setResolutionNote(event.target.value)
+                      }
+                      placeholder="Add a note about this status change..."
+                      rows={4}
+                      className="resize-none"
+                    />
+
+                    <div className="flex justify-end">
+                      <Button
+                        type="button"
+                        onClick={() => void handleUpdateStatus()}
+                        disabled={updatingStatus}
+                      >
+                        {updatingStatus
+                          ? "Updating..."
+                          : "Update status"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
               {selectedReport.attachment && (
                 <div>
                   <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Attachment
                   </p>
-                  <p className="mt-1 text-sm">
-                    {selectedReport.attachment.fileName}
-                  </p>
-                  <a
-                    href={selectedReport.attachment.adminUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-1 inline-block text-sm font-medium text-primary hover:underline"
-                  >
-                    Open attachment
-                  </a>
+
+                  <div className="mt-2 flex items-center justify-between gap-4 rounded-lg border border-border p-4">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">
+                        {selectedReport.attachment.fileName}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {selectedReport.attachment.mimeType ??
+                          "Unknown file type"}
+                      </p>
+                    </div>
+
+                    <a
+                      href={selectedReport.attachment.adminUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="shrink-0 text-sm font-medium text-primary hover:underline"
+                    >
+                      Open attachment
+                    </a>
+                  </div>
                 </div>
               )}
 
@@ -431,27 +575,32 @@ export default function AdminReportsPage() {
                 </p>
 
                 {selectedReport.statusHistory.length === 0 ? (
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    No status history.
-                  </p>
+                  <div className="mt-2 rounded-lg border border-dashed border-border p-4">
+                    <p className="text-sm text-muted-foreground">
+                      No status history.
+                    </p>
+                  </div>
                 ) : (
                   <div className="mt-2 space-y-3">
                     {selectedReport.statusHistory.map((entry) => (
                       <div
                         key={entry.id}
-                        className="rounded-lg border border-border p-3"
+                        className="rounded-lg border border-border p-4"
                       >
                         <div className="flex items-center justify-between gap-3">
                           <Badge variant={statusVariant(entry.status)}>
                             {formatStatus(entry.status)}
                           </Badge>
+
                           <span className="text-xs text-muted-foreground">
                             {formatDate(entry.changedAt)}
                           </span>
                         </div>
 
                         {entry.note && (
-                          <p className="mt-2 text-sm">{entry.note}</p>
+                          <p className="mt-3 text-sm leading-5">
+                            {entry.note}
+                          </p>
                         )}
                       </div>
                     ))}
