@@ -679,12 +679,14 @@ export default function ProfilePage() {
                         </div>
                         <PasabuyOrderEntry
                           orderStatus={order.status}
+                          isPasabuyRequest={order.isPasabuyRequest}
+                          isPreorder={order.isPreorder}
                           order={{
                             orderId: order.id,
-                            reference: order.id.slice(0, 8).toUpperCase(),
+                            reference: order.orderReference,
                             items: order.items.map((item) => `${item.name} x${item.quantity}`).join(", "),
                             vendorName: order.vendor.name,
-                            pickupLocation: order.vendor.name,
+                            pickupLocation: order.vendor.pickupLocation || order.vendor.name,
                           }}
                         />
                         {!REFUND_HIDDEN_STATUSES.has(order.status) && !order.refund && (

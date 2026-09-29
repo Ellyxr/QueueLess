@@ -1,13 +1,14 @@
 import { cn } from "@/lib/utils";
-import type { PasabuyPaymentStatus, PasabuyStatus } from "./pasabuy-mock-store";
+import type { PasabuyPaymentStatus, PasabuyStatus } from "./pasabuy-api";
 
 const STATUS_LABELS: Record<PasabuyStatus, string> = {
-  OPEN: "Waiting for deliverer",
+  PENDING: "Waiting for deliverer",
   ACCEPTED: "Deliverer assigned",
   AWAITING_PAYMENT: "Awaiting payment",
   PAID: "Paid",
   PICKUP_READY: "Ready for pickup",
   PICKED_UP: "Picked up",
+  IN_PROGRESS: "In progress",
   DELIVERED: "Delivered",
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
@@ -17,12 +18,13 @@ const STATUS_LABELS: Record<PasabuyStatus, string> = {
 };
 
 const STATUS_CLASSES: Record<PasabuyStatus, string> = {
-  OPEN: "bg-amber-500/10 text-amber-600",
+  PENDING: "bg-amber-500/10 text-amber-600",
   ACCEPTED: "bg-blue-500/10 text-blue-600",
   AWAITING_PAYMENT: "bg-orange-500/10 text-orange-600",
   PAID: "bg-emerald-500/10 text-emerald-600",
   PICKUP_READY: "bg-blue-500/10 text-blue-600",
   PICKED_UP: "bg-indigo-500/10 text-indigo-600",
+  IN_PROGRESS: "bg-indigo-500/10 text-indigo-600",
   DELIVERED: "bg-emerald-500/10 text-emerald-600",
   COMPLETED: "bg-emerald-500/10 text-emerald-600",
   CANCELLED: "bg-slate-500/10 text-slate-600",
