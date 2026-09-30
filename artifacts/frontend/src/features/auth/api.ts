@@ -1285,3 +1285,117 @@ export async function updateAdminReportStatus(
     }),
   });
 }
+
+export type AdminVendorStatus =
+  | "PENDING_APPROVAL"
+  | "ACTIVE"
+  | "SUSPENDED";
+
+export type AdminVendorType = string;
+
+export interface AdminVendorRow {
+  id: string;
+  name: string;
+  status: AdminVendorStatus;
+  createdAt: string;
+  owner: {
+    fullName: string;
+  };
+}
+
+export interface AdminVendorDetail {
+  id: string;
+  name: string;
+  businessName: string | null;
+  description: string | null;
+  campusLocation: string | null;
+  pickupLocation: string | null;
+  vendorType: AdminVendorType;
+  status: AdminVendorStatus;
+  createdAt: string;
+  updatedAt: string;
+  owner: {
+    id: string;
+    fullName: string;
+    isActive: boolean;
+    isArchived: boolean;
+    hasVendorRole: boolean;
+  };
+  productCount: number;
+  orderCount: number;
+  reportCount: number;
+}
+
+export interface AdminVendorAuditEntry {
+  id: string;
+  actorUserId: string;
+  actionType: string;
+  beforeState: unknown;
+  afterState: unknown;
+  createdAt: string;
+}
+
+export interface AdminVendorAuditResponse {
+  items: AdminVendorAuditEntry[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface AdminVendorFilters {
+  status?: AdminVendorStatus;
+  vendorType?: string;
+  search?: string;
+}
+
+export function listAdminVendors(
+  filters: AdminVendorFilters = {},
+): Promise<AdminVendorRow[]> {
+  const params = new URLSearchParams();
+
+  if (filters.status) params.set("status", filters.status);
+  if (filters.vendorType) params.set("vendorType", filters.vendorType);
+  if (filters.search?.trim()) params.set("search", filters.search.trim());
+
+  const query = params.toString();
+
+  return fetchWithAuth(
+    `/admin/vendors${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getAdminVendor(
+  vendorId: string,
+): Promise<AdminVendorDetail> {
+  return fetchWithAuth(`/admin/vendors/${vendorId}`);
+}
+
+export function getAdminVendorAudit(
+  vendorId: string,
+  page = 1,
+  limit = 20,
+): Promise<AdminVendorAuditResponse> {
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
+
+  return fetchWithAuth(
+    `/admin/vendors/${vendorId}/audit?${params.toString()}`,
+  );
+}
+
+export function updateAdminVendorStatus(
+  vendorId: string,
+  status: AdminVendorStatus,
+  reason?: string,
+): Promise<AdminVendorDetail> {
+  return fetchWithAuth(`/admin/vendors/${vendorId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status,
+      ...(reason?.trim() ? { reason: reason.trim() } : {}),
+    }),
+  });
+}

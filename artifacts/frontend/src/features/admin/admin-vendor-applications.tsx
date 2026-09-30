@@ -2,7 +2,13 @@ import { useEffect, useState } from "react";
 import { Eye, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
@@ -22,119 +29,149 @@ import {
 } from "@/components/ui/table";
 import { AdminShell } from "./admin-shell";
 import {
-  VENDOR_PLANS,
-  approveVendorApplication,
-  isContractOverdue,
-  listVendorApplications,
-  rejectSignedContract,
-  rejectVendorApplication,
-  verifyContractAndCharge,
-  type VendorApplicationState,
-  type VendorApplicationStatus,
-} from "@/features/profile/vendor-application";
+  getAdminVendor,
+  getAdminVendorAudit,
+  listAdminVendors,
+  updateAdminVendorStatus,
+  type AdminVendorDetail,
+  type AdminVendorRow,
+  type AdminVendorStatus,
+} from "@/features/auth/api";
 
-const STATUS_LABEL: Record<VendorApplicationStatus, string> = {
-  not_applied: "Not applied",
-  pending_review: "Pending review",
-  rejected: "Rejected",
-  awaiting_contract: "Awaiting contract",
-  contract_submitted: "Contract submitted",
-  contract_rejected: "Contract rejected",
-  payment_processing: "Payment processing",
-  payment_failed: "Payment failed",
-  active: "Active",
+const STATUS_LABEL: Record<AdminVendorStatus, string> = {
+  PENDING_APPROVAL: "Pending approval",
+  ACTIVE: "Active",
+  SUSPENDED: "Suspended",
 };
 
-const STATUS_BADGE_CLASS: Record<VendorApplicationStatus, string> = {
-  not_applied: "bg-slate-500/10 text-slate-600",
-  pending_review: "bg-amber-500/10 text-amber-600",
-  rejected: "bg-destructive/10 text-destructive",
-  awaiting_contract: "bg-blue-500/10 text-blue-600",
-  contract_submitted: "bg-amber-500/10 text-amber-600",
-  contract_rejected: "bg-destructive/10 text-destructive",
-  payment_processing: "bg-blue-500/10 text-blue-600",
-  payment_failed: "bg-destructive/10 text-destructive",
-  active: "bg-emerald-500/10 text-emerald-600",
+const STATUS_BADGE_CLASS: Record<AdminVendorStatus, string> = {
+  PENDING_APPROVAL: "bg-amber-500/10 text-amber-600",
+  ACTIVE: "bg-emerald-500/10 text-emerald-600",
+  SUSPENDED: "bg-destructive/10 text-destructive",
 };
 
-const FILTERS: Array<{ label: string; value: VendorApplicationStatus | "ALL" }> = [
+const FILTERS: Array<{
+  label: string;
+  value: AdminVendorStatus | "ALL";
+}> = [
   { label: "All", value: "ALL" },
-  { label: "Pending review", value: "pending_review" },
-  { label: "Awaiting contract", value: "awaiting_contract" },
-  { label: "Contract submitted", value: "contract_submitted" },
-  { label: "Payment processing", value: "payment_processing" },
-  { label: "Payment failed", value: "payment_failed" },
-  { label: "Active", value: "active" },
-  { label: "Rejected", value: "rejected" },
+  { label: "Pending approval", value: "PENDING_APPROVAL" },
+  { label: "Active", value: "ACTIVE" },
+  { label: "Suspended", value: "SUSPENDED" },
 ];
 
 export default function AdminVendorApplicationsPage() {
-  const [applications, setApplications] = useState<VendorApplicationState[]>([]);
-  const [filter, setFilter] = useState<VendorApplicationStatus | "ALL">("ALL");
-  const [detailUserId, setDetailUserId] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState("");
-  const [showRejectForm, setShowRejectForm] = useState<"application" | "contract" | null>(null);
+  const [vendors, setVendors] = useState<AdminVendorRow[]>([]);
+  const [filter, setFilter] = useState<AdminVendorStatus | "ALL">("ALL");
+  const [search, setSearch] = useState("");
+  const [detail, setDetail] = useState<AdminVendorDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showStatusForm, setShowStatusForm] = useState(false);
+  const [nextStatus, setNextStatus] = useState<AdminVendorStatus | null>(null);
+  const [reason, setReason] = useState("");
+  const [auditCount, setAuditCount] = useState(0);
 
-  const refresh = () => setApplications(listVendorApplications());
+  const refresh = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const data = await listAdminVendors({
+        search: search.trim() || undefined,
+        status: filter === "ALL" ? undefined : filter,
+      });
+
+      setVendors(data);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to load vendors.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    refresh();
-    // Mock-only: no push channel from the (nonexistent) backend, so poll for
-    // payment_processing -> active/payment_failed transitions triggered from
-    // the student side.
-    const interval = window.setInterval(refresh, 1000);
-    return () => window.clearInterval(interval);
-  }, []);
+  void refresh();
+  }, [filter, search]);
 
-  const filtered = applications.filter(
-    (application) => filter === "ALL" || application.status === filter,
-  );
+  const filtered = vendors;
 
-  const detail = applications.find((application) => application.userId === detailUserId) ?? null;
+  const openDetail = async (vendorId: string) => {
+    try {
+      setDetailLoading(true);
+      setError(null);
 
-  const openDetail = (userId: string) => {
+      const [vendor, audit] = await Promise.all([
+        getAdminVendor(vendorId),
+        getAdminVendorAudit(vendorId, 1, 20),
+      ]);
+
+      setDetail(vendor);
+      setAuditCount(audit.total);
+      setShowStatusForm(false);
+      setNextStatus(null);
+      setReason("");
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to load vendor details.",
+      );
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const openStatusChange = (status: AdminVendorStatus) => {
+    setNextStatus(status);
+    setReason("");
+    setShowStatusForm(true);
     setError(null);
-    setShowRejectForm(null);
-    setRejectReason("");
-    setDetailUserId(userId);
   };
 
-  const handleApprove = (userId: string) => {
-    approveVendorApplication(userId);
-    refresh();
-    setDetailUserId(null);
-  };
+  const handleStatusChange = async () => {
+    if (!detail || !nextStatus) return;
 
-  const handleReject = (userId: string) => {
-    if (!rejectReason.trim()) {
-      setError("Enter a reason for the student.");
-      return;
+    try {
+      setActionLoading(true);
+      setError(null);
+
+      await updateAdminVendorStatus(
+        detail.id,
+        nextStatus,
+        reason.trim() || undefined,
+      );
+
+      const refreshed = await getAdminVendor(detail.id);
+      setDetail(refreshed);
+
+      setShowStatusForm(false);
+      setNextStatus(null);
+      setReason("");
+
+      await refresh();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to update vendor status.",
+      );
+    } finally {
+      setActionLoading(false);
     }
-    rejectVendorApplication(userId, rejectReason.trim());
-    refresh();
-    setDetailUserId(null);
   };
 
-  const handleVerifyContract = (userId: string) => {
-    verifyContractAndCharge(userId);
-    refresh();
-    setDetailUserId(null);
-  };
-
-  const handleRejectContract = (userId: string) => {
-    if (!rejectReason.trim()) {
-      setError("Enter a reason for the student.");
-      return;
-    }
-    rejectSignedContract(userId, rejectReason.trim());
-    refresh();
-    setDetailUserId(null);
-  };
+  const formatDate = (value: string) =>
+    new Date(value).toLocaleDateString();
 
   return (
-    <AdminShell>
-      <div className="mb-4 flex flex-wrap gap-2">
+  <AdminShell>
+    <div className="space-y-4">
+
+      {/* Filters - OUTSIDE the card */}
+      <div className="flex flex-wrap gap-2">
         {FILTERS.map(({ label, value }) => (
           <button
             key={value}
@@ -151,265 +188,320 @@ export default function AdminVendorApplicationsPage() {
         ))}
       </div>
 
+      {/* Vendor management card */}
       <Card className="border-card-border/80 bg-card/90 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-2xl tracking-tighter">Vendor applications</CardTitle>
+          <CardTitle className="text-2xl tracking-tighter">
+            Vendor management
+          </CardTitle>
           <CardDescription>
-            Review student vendor applications, verify signed contracts, and confirm subscription
-            billing.
+            View vendors, search accounts, and manage approved vendor status changes.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          {filtered.length === 0 ? (
-            <p className="py-10 text-center text-sm text-muted-foreground">
-              No applications match this filter.
-            </p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Student</TableHead>
-                  <TableHead>Business</TableHead>
-                  <TableHead>Plan</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Submitted</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map((application) => (
-                  <TableRow key={application.userId}>
-                    <TableCell>
-                      <p className="font-medium text-foreground">{application.studentName}</p>
-                      <p className="text-xs text-muted-foreground">{application.studentEmail}</p>
-                    </TableCell>
-                    <TableCell>
-                      <p className="text-sm">{application.businessName}</p>
-                      <p className="text-xs text-muted-foreground">{application.foodCategory}</p>
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {application.planId ? VENDOR_PLANS[application.planId].label : "—"}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1.5">
-                        <Badge variant="secondary" className={STATUS_BADGE_CLASS[application.status]}>
-                          {STATUS_LABEL[application.status]}
-                        </Badge>
-                        {application.status === "payment_processing" && (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                        )}
-                        {isContractOverdue(application) && (
-                          <Badge variant="secondary" className="bg-destructive/10 text-destructive">
-                            Overdue
-                          </Badge>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {application.submittedAt
-                        ? new Date(application.submittedAt).toLocaleDateString()
-                        : "—"}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 rounded-full"
-                        onClick={() => openDetail(application.userId)}
-                      >
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
 
-      <Dialog open={detail !== null} onOpenChange={(open) => !open && setDetailUserId(null)}>
+  
+
+          <CardContent>
+
+            <div className="mb-5">
+              <Input
+                className="max-w-md"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search vendor, business, or owner..."
+              />
+            </div>
+
+            {error && (
+              <p className="mb-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                {error}
+              </p>
+            )}
+
+            {loading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : filtered.length === 0 ? (
+              <p className="py-10 text-center text-sm text-muted-foreground">
+                No vendors match this filter.
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Vendor</TableHead>
+                    <TableHead>Owner</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Created</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+
+                <TableBody>
+                  {filtered.map((vendor) => (
+                    <TableRow key={vendor.id}>
+                      <TableCell>
+                        <p className="font-medium text-foreground">
+                          {vendor.name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {vendor.id}
+                        </p>
+                      </TableCell>
+
+                      <TableCell>
+                        <p className="text-sm">{vendor.owner.fullName}</p>
+                      </TableCell>
+
+                      <TableCell>
+                        <Badge
+                          variant="secondary"
+                          className={STATUS_BADGE_CLASS[vendor.status]}
+                        >
+                          {STATUS_LABEL[vendor.status]}
+                        </Badge>
+                      </TableCell>
+
+                      <TableCell className="text-xs text-muted-foreground">
+                        {formatDate(vendor.createdAt)}
+                      </TableCell>
+
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 rounded-full"
+                          onClick={() => void openDetail(vendor.id)}
+                          disabled={detailLoading}
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Dialog
+        open={detail !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDetail(null);
+            setShowStatusForm(false);
+            setNextStatus(null);
+            setReason("");
+          }
+        }}
+      >
         <DialogContent className="max-w-lg">
           {detail && (
             <>
               <DialogHeader>
-                <DialogTitle>{detail.businessName}</DialogTitle>
+                <DialogTitle>{detail.name}</DialogTitle>
                 <DialogDescription>
-                  {detail.studentName} · {detail.studentEmail}
+                  Vendor account details and administrative controls.
                 </DialogDescription>
               </DialogHeader>
 
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <Badge variant="secondary" className={STATUS_BADGE_CLASS[detail.status]}>
+                  <Badge
+                    variant="secondary"
+                    className={STATUS_BADGE_CLASS[detail.status]}
+                  >
                     {STATUS_LABEL[detail.status]}
                   </Badge>
-                  {isContractOverdue(detail) && (
-                    <Badge variant="secondary" className="bg-destructive/10 text-destructive">
-                      Contract window overdue
-                    </Badge>
-                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div>
-                    <p className="text-xs text-muted-foreground">Sells</p>
-                    <p className="font-medium">{detail.foodCategory}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Plan</p>
+                    <p className="text-xs text-muted-foreground">
+                      Business name
+                    </p>
                     <p className="font-medium">
-                      {detail.planId
-                        ? `${VENDOR_PLANS[detail.planId].label} · ₱${VENDOR_PLANS[detail.planId].price}`
-                        : "—"}
+                      {detail.businessName ?? detail.name}
                     </p>
                   </div>
+
                   <div>
-                    <p className="text-xs text-muted-foreground">Bank account</p>
-                    <p className="font-medium">{detail.bankAccountNumber}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Vendor type
+                    </p>
+                    <p className="font-medium">{detail.vendorType}</p>
                   </div>
+
                   <div>
-                    <p className="text-xs text-muted-foreground">Account holder</p>
-                    <p className="font-medium">{detail.bankAccountHolderName}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Owner
+                    </p>
+                    <p className="font-medium">
+                      {detail.owner.fullName}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-muted-foreground">
+                      Owner account
+                    </p>
+                    <p className="font-medium">
+                      {detail.owner.isActive ? "Active" : "Inactive"}
+                      {" · "}
+                      {detail.owner.isArchived ? "Archived" : "Not archived"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-muted-foreground">
+                      Products
+                    </p>
+                    <p className="font-medium">{detail.productCount}</p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-muted-foreground">
+                      Orders
+                    </p>
+                    <p className="font-medium">{detail.orderCount}</p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-muted-foreground">
+                      Reports
+                    </p>
+                    <p className="font-medium">{detail.reportCount}</p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-muted-foreground">
+                      Audit records
+                    </p>
+                    <p className="font-medium">{auditCount}</p>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Valid ID</p>
-                    {detail.validIdPhoto ? (
-                      <img
-                        src={detail.validIdPhoto}
-                        alt="Submitted valid ID"
-                        className="h-24 w-full rounded-lg border border-border object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
-                        Not submitted
-                      </div>
-                    )}
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Holding ID selfie</p>
-                    {detail.idSelfiePhoto ? (
-                      <img
-                        src={detail.idSelfiePhoto}
-                        alt="Submitted selfie holding ID"
-                        className="h-24 w-full rounded-lg border border-border object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
-                        Not submitted
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {(detail.status === "contract_submitted" ||
-                  detail.status === "payment_processing" ||
-                  detail.status === "payment_failed" ||
-                  detail.status === "active") && (
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Signed contract scan</p>
-                    {detail.signedContractPhoto ? (
-                      <img
-                        src={detail.signedContractPhoto}
-                        alt="Signed contract scan"
-                        className="h-32 w-full rounded-lg border border-border object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
-                        Not submitted
-                      </div>
-                    )}
+                {detail.description && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">
+                      Description
+                    </p>
+                    <p className="text-sm">{detail.description}</p>
                   </div>
                 )}
 
-                {detail.status === "payment_failed" && detail.paymentFailureReason && (
-                  <p className="rounded-md bg-destructive/10 p-3 text-xs text-destructive">
-                    {detail.paymentFailureReason}
-                  </p>
+                {detail.campusLocation && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">
+                      Campus location
+                    </p>
+                    <p className="text-sm">{detail.campusLocation}</p>
+                  </div>
                 )}
 
-                {showRejectForm && (
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-muted-foreground">
-                      Reason for the student
-                    </label>
+                {detail.pickupLocation && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">
+                      Pickup location
+                    </p>
+                    <p className="text-sm">{detail.pickupLocation}</p>
+                  </div>
+                )}
+
+                {showStatusForm && nextStatus && (
+                  <div className="space-y-2 rounded-lg border border-border p-4">
+                    <p className="text-sm font-medium">
+                      Change status to{" "}
+                      <span className="font-semibold">
+                        {STATUS_LABEL[nextStatus]}
+                      </span>
+                    </p>
+
                     <Textarea
-                      value={rejectReason}
-                      onChange={(event) => setRejectReason(event.target.value)}
+                      value={reason}
+                      onChange={(event) => setReason(event.target.value)}
                       rows={3}
-                      placeholder="Explain what needs fixing or why this can't be approved."
+                      placeholder="Optional reason for this status change."
                     />
                   </div>
                 )}
-
-                {error && <p className="text-xs text-destructive">{error}</p>}
               </div>
 
               <DialogFooter className="flex-wrap gap-2">
-                {detail.status === "pending_review" && !showRejectForm && (
+                {!showStatusForm && (
+                  <>
+                    {detail.status !== "ACTIVE" && (
+                      <Button
+                        className="rounded-full"
+                        onClick={() =>
+                          openStatusChange("ACTIVE")
+                        }
+                      >
+                        Activate
+                      </Button>
+                    )}
+
+                    {detail.status !== "SUSPENDED" && (
+                      <Button
+                        variant="destructive"
+                        className="rounded-full"
+                        onClick={() =>
+                          openStatusChange("SUSPENDED")
+                        }
+                      >
+                        Suspend
+                      </Button>
+                    )}
+
+                    {detail.status !== "PENDING_APPROVAL" && (
+                      <Button
+                        variant="outline"
+                        className="rounded-full"
+                        onClick={() =>
+                          openStatusChange("PENDING_APPROVAL")
+                        }
+                      >
+                        Set pending approval
+                      </Button>
+                    )}
+                  </>
+                )}
+
+                {showStatusForm && (
                   <>
                     <Button
                       variant="outline"
-                      className="rounded-full text-destructive hover:bg-destructive/10"
-                      onClick={() => setShowRejectForm("application")}
+                      className="rounded-full"
+                      onClick={() => {
+                        setShowStatusForm(false);
+                        setNextStatus(null);
+                        setReason("");
+                      }}
                     >
-                      Reject
+                      Cancel
                     </Button>
-                    <Button className="rounded-full" onClick={() => handleApprove(detail.userId)}>
-                      Approve — start contract window
-                    </Button>
-                  </>
-                )}
 
-                {detail.status === "pending_review" && showRejectForm === "application" && (
-                  <>
-                    <Button variant="outline" className="rounded-full" onClick={() => setShowRejectForm(null)}>
-                      Back
-                    </Button>
                     <Button
                       className="rounded-full"
-                      variant="destructive"
-                      onClick={() => handleReject(detail.userId)}
+                      onClick={() => void handleStatusChange()}
+                      disabled={actionLoading}
                     >
-                      Confirm rejection
+                      {actionLoading && (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      )}
+                      Confirm status change
                     </Button>
                   </>
                 )}
 
-                {detail.status === "contract_submitted" && !showRejectForm && (
-                  <>
-                    <Button
-                      variant="outline"
-                      className="rounded-full text-destructive hover:bg-destructive/10"
-                      onClick={() => setShowRejectForm("contract")}
-                    >
-                      Reject scan
-                    </Button>
-                    <Button className="rounded-full" onClick={() => handleVerifyContract(detail.userId)}>
-                      Verify &amp; charge subscription
-                    </Button>
-                  </>
-                )}
-
-                {detail.status === "contract_submitted" && showRejectForm === "contract" && (
-                  <>
-                    <Button variant="outline" className="rounded-full" onClick={() => setShowRejectForm(null)}>
-                      Back
-                    </Button>
-                    <Button
-                      className="rounded-full"
-                      variant="destructive"
-                      onClick={() => handleRejectContract(detail.userId)}
-                    >
-                      Confirm rejection
-                    </Button>
-                  </>
-                )}
-
-                <Button variant="ghost" className="rounded-full" onClick={() => setDetailUserId(null)}>
+                <Button
+                  variant="ghost"
+                  className="rounded-full"
+                  onClick={() => setDetail(null)}
+                >
                   Close
                 </Button>
               </DialogFooter>
