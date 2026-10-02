@@ -82,7 +82,7 @@ export class VendorsService {
     const vendor = await this.prisma.vendor.findFirst({
       where: {
         id: vendorId,
-        status: VendorStatus.ACTIVE,
+        OR: [{ status: VendorStatus.ACTIVE }, { ownerUserId: userId }],
       },
       select: {
         id: true,

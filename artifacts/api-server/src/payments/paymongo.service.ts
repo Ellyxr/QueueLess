@@ -11,6 +11,7 @@ interface CreateCheckoutSessionParams {
   amount: number;
   description: string;
   referenceNumber: string;
+  walletTopupId?: string;
   orderId?: string;
   pasabuyRequestId?: string;
   vendorSubscriptionId?: string;
@@ -91,7 +92,9 @@ export class PaymongoService {
       `${secretKey}:`,
     ).toString('base64');
 
-    const redirectParam = params.pasabuyRequestId
+    const redirectParam = params.walletTopupId
+      ? `walletTopupId=${encodeURIComponent(params.walletTopupId)}`
+      : params.pasabuyRequestId
       ? `pasabuyRequestId=${encodeURIComponent(params.pasabuyRequestId)}`
       : params.vendorSubscriptionId
         ? `vendorSubscriptionId=${encodeURIComponent(params.vendorSubscriptionId)}`

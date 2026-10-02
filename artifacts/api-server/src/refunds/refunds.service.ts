@@ -1,3 +1,4 @@
+import { WalletService } from '../wallet/wallet.service';
 import {
   BadRequestException,
   ConflictException,
@@ -38,6 +39,7 @@ const REFUNDABLE_STATUSES: RefundStatus[] = [
 @Injectable()
 export class RefundsService {
   constructor(
+    private readonly wallet: WalletService,
     private readonly prisma: PrismaService,
     private readonly paymongoService: PaymongoService,
     private readonly realtimeGateway: RealtimeGateway,
@@ -85,6 +87,10 @@ export class RefundsService {
 
     if (!payment || (!isPayer && !isVendorOwner)) {
       throw new NotFoundException('Payment not found');
+    }
+
+    if (payment.purpose === PaymentPurpose.WALLET_TOPUP) {
+      throw new BadRequestException('Wallet cash-ins cannot be refunded through food payment refunds');
     }
 
     if (payment.status !== PaymentStatus.SUCCEEDED) {
@@ -524,23 +530,69 @@ export class RefundsService {
       );
     }
 
+    if (refund.payment.provider === 'WALLET') {
+      return this.wallet.refund(refund.id, actorUserId);
+    }
+
     if (!refund.payment.providerPaymentResourceId) {
       throw new ConflictException(
         'PayMongo payment resource ID is unavailable for this payment',
       );
     }
 
+    if (actorUserId === null) {
+      const lastFailure = await this.prisma.auditRecord.findFirst({
+        where: { entityType: 'Refund', entityId: refund.id,
+          actionType: 'REFUND_PROCESSING_FAILED' },
+        orderBy: { createdAt: 'desc' }, select: { afterState: true },
+      });
+      const state = lastFailure?.afterState;
+      if (state && typeof state === 'object' && !Array.isArray(state) &&
+          state.failureCode === 'REFUND_METHOD_REJECTED' && state.requiresReview === true) {
+        return { id: refund.id, paymentId: refund.paymentId,
+          amount: refund.amount.toFixed(2), status: refund.status,
+          processedAt: null, requiresReview: true, idempotentReplay: true };
+      }
+    }
+
     const amountInCentavos = Number(
       refund.amount.mul(100).toFixed(0),
     );
 
-    const providerRefund = await this.paymongoService.createRefund({
-      paymentResourceId: refund.payment.providerPaymentResourceId,
-      amount: amountInCentavos,
-      idempotencyKey: refund.id,
-      reason: 'others',
-      notes: refund.reason ?? undefined,
-    });
+    let providerRefund: Awaited<ReturnType<PaymongoService['createRefund']>>;
+    try {
+      providerRefund = await this.paymongoService.createRefund({
+        paymentResourceId: refund.payment.providerPaymentResourceId,
+        amount: amountInCentavos,
+        idempotencyKey: refund.id,
+        reason: 'others',
+        notes: refund.reason ?? undefined,
+      });
+    } catch (error) {
+      // Preserve the approved reservation and the same provider idempotency key.
+      // Do not store provider payloads, credentials, or customer details in audit.
+      const methodRejected = error instanceof Error &&
+        /refunds are not allowed for payments with source type/i.test(error.message);
+      await this.prisma.auditRecord.create({ data: {
+        actorUserId,
+        actionType: 'REFUND_PROCESSING_FAILED',
+        entityType: 'Refund', entityId: refund.id,
+        afterState: {
+          status: RefundStatus.APPROVED, provider: 'PAYMONGO',
+          failureCode: methodRejected ? 'REFUND_METHOD_REJECTED' : 'PROVIDER_REFUND_FAILED',
+          requiresReview: methodRejected,
+        },
+      } });
+      // A permanent method rejection has a durable review record. Acknowledge
+      // automatic handling without claiming the refund succeeded. Admin retries
+      // remain explicit; uncertain/network failures still propagate for retry.
+      if (methodRejected && actorUserId === null) {
+        return { id: refund.id, paymentId: refund.paymentId,
+          amount: refund.amount.toFixed(2), status: refund.status,
+          processedAt: null, requiresReview: true, idempotentReplay: false };
+      }
+      throw error;
+    }
 
     const providerStatus = providerRefund.status.toLowerCase();
 
@@ -920,48 +972,61 @@ export class RefundsService {
    * and directly by the payment webhook for anomalies with no valid order
    * (orphaned/duplicate payments).
    */
+  async retryPendingAutoRefunds(paymentId: string) {
+    const pending = await this.prisma.refund.findMany({
+      where: { paymentId, initiatedBy: RefundInitiator.SYSTEM,
+        status: RefundStatus.APPROVED, providerRefundId: null },
+      select: { id: true }, orderBy: { createdAt: 'asc' },
+    });
+    // Submitted refunds await provider confirmation; completed refunds are skipped.
+    let requiresReview = false;
+    for (const refund of pending) {
+      const result = await this.processRefund(refund.id, null);
+      if ('requiresReview' in result && result.requiresReview) requiresReview = true;
+    }
+    return { requiresReview };
+  }
+
   async autoRefundPayment(
     paymentId: string,
     category: string,
     note: string | null,
     orderId: string | null = null,
   ) {
-    const payment = await this.prisma.payment.findUnique({
-      where: { id: paymentId },
-      select: {
-        id: true,
-        amount: true,
-        payerUserId: true,
-        status: true,
-      },
-    });
-
-    if (!payment || payment.status !== PaymentStatus.SUCCEEDED) {
-      return null;
-    }
-
-    let remaining: Prisma.Decimal;
-
-    try {
-      remaining = await this.resolveRefundableAmount(payment, null);
-    } catch {
-      return null;
-    }
-
-    if (remaining.lessThan(1)) {
-      throw new ConflictException(
-        'Remaining refundable amount is below PHP 1.00',
-      );
-    }
-
     const refund = await this.prisma.$transaction(async (tx) => {
+      // Serialize automatic refund reservations for the same payment.
+      await tx.$queryRaw`SELECT id FROM payments WHERE id = ${paymentId}::uuid FOR UPDATE`;
+      const payment = await tx.payment.findUnique({
+        where: { id: paymentId },
+        select: { id: true, amount: true, payerUserId: true, status: true },
+      });
+      if (!payment || payment.status !== PaymentStatus.SUCCEEDED) return null;
+
+      const existing = await tx.refund.findFirst({
+        where: { paymentId, initiatedBy: RefundInitiator.SYSTEM,
+          status: RefundStatus.APPROVED },
+        select: { id: true, paymentId: true, amount: true, status: true,
+          providerRefundId: true }, orderBy: { createdAt: 'asc' },
+      });
+      if (existing) return existing;
+
+      const reserved = await tx.refund.aggregate({
+        where: { paymentId, status: { in: REFUNDABLE_STATUSES } },
+        _sum: { amount: true },
+      });
+      const remaining = payment.amount.minus(reserved._sum.amount ?? new Prisma.Decimal(0));
+      if (remaining.lessThanOrEqualTo(0)) return null;
+      if (remaining.lessThan(1)) {
+        throw new ConflictException('Remaining refundable amount is below PHP 1.00');
+      }
       const created = await tx.refund.create({
         data: {
           paymentId: payment.id, orderId, amount: remaining, reason: note,
           category, status: RefundStatus.APPROVED,
           initiatedBy: RefundInitiator.SYSTEM, requestedByUserId: payment.payerUserId,
         },
-        select: { id: true, paymentId: true, amount: true, status: true },
+        select: { id: true, paymentId: true, amount: true, status: true,
+          providerRefundId: true },
       });
       await tx.auditRecord.create({ data: {
         actorUserId: null, actionType: 'REFUND_REQUESTED',
@@ -970,8 +1035,12 @@ export class RefundsService {
           orderId, amount: created.amount.toFixed(2), category },
       } });
       return created;
-    });
+    }, { maxWait: 10000, timeout: 30000 });
 
+    if (!refund) return null;
+    if (refund.providerRefundId) {
+      return { ...refund, amount: refund.amount.toFixed(2), idempotentReplay: true };
+    }
     return this.processRefund(refund.id, null);
   }
 

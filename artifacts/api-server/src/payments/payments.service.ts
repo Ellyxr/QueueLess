@@ -1,3 +1,4 @@
+import { WalletService } from '../wallet/wallet.service';
 import {
   BadRequestException,
   ConflictException,
@@ -22,6 +23,7 @@ import { PasabuyPaymentsService } from '../pasabuy/pasabuy-payments.service';
 @Injectable()
 export class PaymentsService {
   constructor(
+    private readonly wallet: WalletService,
     private readonly prisma: PrismaService,
     private readonly paymongoService: PaymongoService,
     private readonly refundsService: RefundsService,
@@ -227,6 +229,12 @@ export class PaymentsService {
 
     const payment = await this.prisma.$transaction(
       async (tx) => {
+        await tx.$queryRaw`SELECT id FROM orders WHERE id = ${paymentShare.order.id}::uuid FOR UPDATE`;
+        await tx.$queryRaw`SELECT id FROM payment_shares WHERE id = ${paymentShare.id}::uuid FOR UPDATE`;
+        const currentShare = await tx.paymentShare.findUniqueOrThrow({ where: { id: paymentShare.id }, include: { order: true } });
+        if (currentShare.status !== PaymentShareStatus.PENDING || currentShare.order.status !== OrderStatus.PENDING || currentShare.paymentId !== paymentShare.paymentId) {
+          throw new ConflictException('Payment share changed; reload payment status');
+        }
         if (paymentShare.paymentId) {
           const prior = await tx.payment.findUniqueOrThrow({
             where: { id: paymentShare.paymentId }, select: { status: true },
@@ -742,7 +750,8 @@ export class PaymentsService {
     let payment = await this.prisma.payment.findFirst({
       where: {
         providerPaymentId: checkoutSession.id,
-        purpose: { in: [PaymentPurpose.ORDER_SHARE, PaymentPurpose.PASABUY, PaymentPurpose.SUBSCRIPTION, PaymentPurpose.FEATURED_LISTING] },
+        provider: 'PAYMONGO',
+        purpose: { in: [PaymentPurpose.ORDER_SHARE, PaymentPurpose.PASABUY, PaymentPurpose.SUBSCRIPTION, PaymentPurpose.FEATURED_LISTING, PaymentPurpose.WALLET_TOPUP] },
       },
       include: {
         paymentShares: true,
@@ -753,7 +762,7 @@ export class PaymentsService {
     if (!payment && typeof referenceNumber === 'string' &&
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(referenceNumber)) {
       payment = await this.prisma.payment.findFirst({
-        where: { id: referenceNumber, purpose: { in: [PaymentPurpose.PASABUY, PaymentPurpose.SUBSCRIPTION, PaymentPurpose.FEATURED_LISTING] },
+        where: { id: referenceNumber, provider: 'PAYMONGO', purpose: { in: [PaymentPurpose.PASABUY, PaymentPurpose.SUBSCRIPTION, PaymentPurpose.FEATURED_LISTING, PaymentPurpose.WALLET_TOPUP] },
           providerPaymentId: null },
         include: { paymentShares: true },
       });
@@ -777,6 +786,11 @@ export class PaymentsService {
       throw new BadRequestException(
         'PayMongo payment reference does not match',
       );
+    }
+
+    if (payment.purpose === PaymentPurpose.WALLET_TOPUP) {
+      const result = await this.wallet.confirmTopup(payment.id, checkoutSession.id);
+      return { received: true, processed: !result.duplicate, duplicate: result.duplicate, eventType, paymentId: payment.id };
     }
 
     if (payment.purpose === PaymentPurpose.FEATURED_LISTING) {
@@ -840,6 +854,7 @@ export class PaymentsService {
         } });
         return { duplicate: false, autoRefund: !activated.count };
       });
+      if (result.duplicate) await this.refundsService.retryPendingAutoRefunds(payment.id);
       if (result.autoRefund) await this.refundsService.autoRefundPayment(payment.id,
         'FEATURED_LISTING_UNAVAILABLE', 'Featured listing payment arrived after the placement became unavailable.');
       return { received: true, processed: !result.duplicate, eventType,
@@ -903,6 +918,7 @@ export class PaymentsService {
         } });
         return { duplicate: false, autoRefund: !activated.count };
       });
+      if (result.duplicate) await this.refundsService.retryPendingAutoRefunds(payment.id);
       if (result.autoRefund) await this.refundsService.autoRefundPayment(payment.id,
         'SUBSCRIPTION_CHECKOUT_EXPIRED', 'Subscription payment arrived after checkout expiry.');
       return { received: true, processed: !result.duplicate, eventType,
@@ -936,6 +952,7 @@ export class PaymentsService {
         throw new BadRequestException('Pasabuy payment is not paid or amount does not match');
       }
       const result = await this.pasabuyPayments.confirmPaid(payment.id, paidPaymentId);
+      if (result.duplicate) await this.refundsService.retryPendingAutoRefunds(payment.id);
       if (result.autoRefund) {
         await this.refundsService.autoRefundPayment(payment.id, 'PASABUY_PAYMENT_EXPIRED',
           'Pasabuy fee arrived after the assignment expired.');
@@ -989,7 +1006,18 @@ export class PaymentsService {
         });
       }
 
+      let refundRequiresReview = false;
+      if (payment.paymentShares.length === 0) {
+        const refund = await this.refundsService.autoRefundPayment(payment.id,
+          'ORPHANED_PAYMENT', 'Payment succeeded but no order was linked to it.');
+        refundRequiresReview = Boolean(refund && 'requiresReview' in refund && refund.requiresReview);
+      } else {
+        const retry = await this.refundsService.retryPendingAutoRefunds(payment.id);
+        refundRequiresReview = retry.requiresReview;
+      }
+
       return {
+        refundRequiresReview,
         received: true,
         processed: false,
         duplicate: true,
@@ -1015,7 +1043,7 @@ export class PaymentsService {
         } });
       });
 
-      await this.refundsService.autoRefundPayment(
+      const refund = await this.refundsService.autoRefundPayment(
         payment.id,
         'ORPHANED_PAYMENT',
         'Payment succeeded but no order was linked to it.',
@@ -1029,7 +1057,8 @@ export class PaymentsService {
         paymentId: payment.id,
         orderId: null,
         orderMarkedPaid: false,
-        autoRefunded: true,
+        autoRefunded: refund?.status === 'PROCESSED',
+        refundRequiresReview: Boolean(refund && 'requiresReview' in refund && refund.requiresReview),
       };
     }
 
@@ -1050,6 +1079,8 @@ export class PaymentsService {
     const orderId = orderIds[0];
 
     const result = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId}::uuid FOR UPDATE`;
+      const linkedShares = await tx.paymentShare.count({ where: { paymentId: payment.id, status: PaymentShareStatus.PENDING } });
       const paymentUpdate = await tx.payment.updateMany({
         where: {
           id: payment.id,
@@ -1091,8 +1122,8 @@ export class PaymentsService {
       });
 
       if (
-        existingOrder &&
-        existingOrder.status !== OrderStatus.PENDING
+        !linkedShares || (existingOrder &&
+        existingOrder.status !== OrderStatus.PENDING)
       ) {
         return {
           duplicate: false,
@@ -1215,13 +1246,22 @@ export class PaymentsService {
       );
     }
 
+    let refundRequiresReview = false;
+    let autoRefunded = false;
+    if (result.duplicate) {
+      const retry = await this.refundsService.retryPendingAutoRefunds(payment.id);
+      refundRequiresReview = retry.requiresReview;
+    }
+
     if (result.duplicatePayment) {
-      await this.refundsService.autoRefundPayment(
+      const refund = await this.refundsService.autoRefundPayment(
         payment.id,
         'DUPLICATE_PAYMENT',
         'This order was already paid by another payment.',
         orderId,
       );
+      autoRefunded = refund?.status === 'PROCESSED';
+      refundRequiresReview = Boolean(refund && 'requiresReview' in refund && refund.requiresReview);
     }
 
     return {
@@ -1233,7 +1273,8 @@ export class PaymentsService {
       orderId: result.orderId,
       orderMarkedPaid: result.orderMarkedPaid,
       remainingUnpaidShares: result.unpaidShares,
-      autoRefunded: result.duplicatePayment,
+      autoRefunded,
+      refundRequiresReview,
     };
   }
 }
