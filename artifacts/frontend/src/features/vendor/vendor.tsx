@@ -1623,8 +1623,8 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
       {/* US-012: Add/Edit Product Modal */}
       {isModalOpen &&
         createPortal(
-          <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 p-4 pt-10 backdrop-blur-md overflow-y-auto">
-            <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl my-8">
+          <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 p-3 sm:p-4 backdrop-blur-md">
+            <div className="w-full max-w-md max-h-[calc(100dvh-1.5rem)] overflow-y-auto overscroll-contain rounded-3xl border border-border bg-card p-4 sm:p-6 shadow-2xl">
               <div className="flex items-center justify-between border-b border-border pb-3">
                 <h3 className="text-lg font-bold text-foreground">
                   {modalKind === 'extra'

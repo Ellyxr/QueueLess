@@ -125,11 +125,7 @@ function formatDate(dateString: string) {
 }
 
 function getOrderLabel(order: CustomerOrder) {
-  const firstItem = order.items[0];
-  const itemName = firstItem?.name ?? "Order";
-  const extraItems = order.items.length > 1 ? ` +${order.items.length - 1}` : "";
-
-  return `${itemName}${extraItems} • ₱${order.total} • ${formatDate(order.createdAt)}`;
+  return `Order ${order.id} • ₱${order.total} • ${formatDate(order.createdAt)}`;
 }
 
 function getVendorLabel(vendor: VendorStorefront) {
@@ -147,7 +143,7 @@ export default function ReportSubmissionForm({
   initialDescription = "",
   lockTarget = false,
 }: ReportSubmissionFormProps) {
-  const [targetType, setTargetType] = useState(initialTargetType);
+  const [targetType, setTargetType] = useState(initialTargetType || "ORDER");
   const [targetId, setTargetId] = useState(initialTargetId);
   const [targetOptions, setTargetOptions] = useState<TargetOption[]>([]);
   const [selectedTargetLabel, setSelectedTargetLabel] = useState("");
@@ -274,7 +270,7 @@ export default function ReportSubmissionForm({
   useEffect(() => {
     if (lockTarget) {
       setSelectedTargetLabel(
-        targetType === "ORDER" ? "Selected order" : "Selected item",
+        targetType === "ORDER" ? `Order ${targetId}` : "Selected item",
       );
       return;
     }
@@ -586,7 +582,7 @@ export default function ReportSubmissionForm({
                       isLoadingTargets
                         ? "Loading..."
                         : targetType
-                          ? "Select an item"
+                          ? targetType === "ORDER" ? "Select an order ID" : "Select an item"
                           : "Choose what you are reporting first"
                     }
                   />
@@ -607,6 +603,14 @@ export default function ReportSubmissionForm({
                   ))}
                 </SelectContent>
               </Select>
+            )}
+
+            {targetType === "ORDER" && !lockTarget && (
+              <div className="space-y-2">
+                <Label htmlFor="report-order-id">Or paste your order ID</Label>
+                <input id="report-order-id" value={targetId} onChange={event => setTargetId(event.target.value.trim())} placeholder="Order UUID from your order details" className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
+                <p className="text-xs text-muted-foreground">Only orders belonging to your account can be reported.</p>
+              </div>
             )}
 
             {lockTarget ? (

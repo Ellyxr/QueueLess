@@ -119,6 +119,7 @@ export function cartItemTotal(item: CartItem) {
 const currency = (amount: number) => `₱${amount.toLocaleString("en-PH")}`;
 
 export default function CartPage() {
+  const [paymentMethod, setPaymentMethod] = useState<"PAYMONGO" | "WALLET">("PAYMONGO");
   const [items, setItems] = useState<CartItem[]>(getCartItems);
   const [delivery, setDelivery] = useState(false);
   const [promoCode, setPromoCode] = useState("");
@@ -271,7 +272,7 @@ export default function CartPage() {
         .filter((item) => (item.vendorId || "unknown") === firstVendorId)
         .map((item) => ({ productId: item.id, quantity: item.quantity }));
 
-      const { checkoutUrl } = await createOrderForVendorItems(firstGroupItems, delivery);
+      const { checkoutUrl } = await createOrderForVendorItems(firstGroupItems, delivery, paymentMethod);
 
       const remainingItems = items.filter(
         (item) => (item.vendorId || "unknown") !== firstVendorId,
@@ -279,7 +280,7 @@ export default function CartPage() {
       saveCartItems(remainingItems);
       setCheckoutQueue(
         remainingVendorIds.length > 0
-          ? { vendorIds: remainingVendorIds, isPasabuyRequest: delivery }
+          ? { vendorIds: remainingVendorIds, isPasabuyRequest: delivery, paymentMethod }
           : null,
       );
 
@@ -687,6 +688,11 @@ export default function CartPage() {
                 </span>
               </div>
 
+              <label htmlFor="checkout-method" className="mt-4 block text-sm font-medium">Pay using</label>
+              <select id="checkout-method" value={paymentMethod} onChange={event => setPaymentMethod(event.target.value as "PAYMONGO" | "WALLET")} className="mt-2 w-full rounded-xl border border-border bg-background p-3">
+                <option value="PAYMONGO">Card / GCash / QR Ph / other methods</option>
+                <option value="WALLET">QueueLess wallet (sandbox)</option>
+              </select>
               <Button
                 type="button"
                 disabled={isSubmitting || trackedOrderCount >= MAX_TRACKED_ORDERS}
@@ -699,7 +705,7 @@ export default function CartPage() {
               <p className="mt-3 text-center text-[11px] text-muted-foreground">
                 {trackedOrderCount >= MAX_TRACKED_ORDERS
                   ? `You have ${MAX_TRACKED_ORDERS} orders in progress. Complete or dismiss one to order again.`
-                  : `You'll be redirected to PayMongo Sandbox to complete payment. (${trackedOrderCount}/${MAX_TRACKED_ORDERS} active orders)`}
+                  : paymentMethod === "WALLET" ? "Continue to your wallet to confirm payment or cash in." : `You'll be redirected to PayMongo Sandbox to complete payment. (${trackedOrderCount}/${MAX_TRACKED_ORDERS} active orders)`}
               </p>
             </section>
           </div>
