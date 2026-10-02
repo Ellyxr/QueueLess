@@ -1,3 +1,4 @@
+import WalletPage from "@/features/wallet/wallet";
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,10 @@ function getOrderIdFromQuery(): string | null {
 }
 
 export default function PaymentSuccessPage() {
+  if (new URLSearchParams(window.location.search).has("walletTopupId")) return <WalletPage />;
+  return <OrderPaymentSuccessPage />;
+}
+function OrderPaymentSuccessPage() {
   const [orderId] = useState(getOrderIdFromQuery);
   const [status, setStatus] = useState<OrderPaymentStatusResponse | null>(null);
   const [timedOut, setTimedOut] = useState(false);
@@ -98,7 +103,7 @@ export default function PaymentSuccessPage() {
 
     try {
       const productItems = nextItems.map((item) => ({ productId: item.id, quantity: item.quantity }));
-      const { checkoutUrl } = await createOrderForVendorItems(productItems, queue.isPasabuyRequest);
+      const { checkoutUrl } = await createOrderForVendorItems(productItems, queue.isPasabuyRequest, queue.paymentMethod);
 
       const remainingCartItems = cartItems.filter(
         (item) => (item.vendorId || "unknown") !== nextVendorId,
