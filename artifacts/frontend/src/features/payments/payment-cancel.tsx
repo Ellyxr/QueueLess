@@ -1,3 +1,4 @@
+import WalletPage from "@/features/wallet/wallet";
 import { useState } from "react";
 import { ArrowLeft, ShieldCheck, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,10 @@ function getOrderIdFromQuery(): string | null {
 }
 
 export default function PaymentCancelPage() {
+  if (new URLSearchParams(window.location.search).has("walletTopupId")) return <WalletPage />;
+  return <OrderPaymentCancelPage />;
+}
+function OrderPaymentCancelPage() {
   const [orderId] = useState(getOrderIdFromQuery);
   const [isRetrying, setIsRetrying] = useState(false);
   const [error, setError] = useState<string | null>(null);

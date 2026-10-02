@@ -12,6 +12,7 @@ export interface CheckoutQueueState {
   /** Vendor ids still waiting to be ordered & paid for, in order. */
   vendorIds: string[];
   isPasabuyRequest: boolean;
+  paymentMethod?: "PAYMONGO" | "WALLET";
 }
 
 function getCheckoutQueueStorageKey(): string | null {
@@ -58,6 +59,7 @@ export function setCheckoutQueue(state: CheckoutQueueState | null): void {
 export async function createOrderForVendorItems(
   items: Array<{ productId: string; quantity: number }>,
   isPasabuyRequest: boolean,
+  paymentMethod: "PAYMONGO" | "WALLET" = "PAYMONGO",
 ): Promise<{ orderId: string; checkoutUrl: string }> {
   let activeCartId = "";
   for (const item of items) {
@@ -91,6 +93,10 @@ export async function createOrderForVendorItems(
   startOrderTracking(orderId);
 
   const paymentStatus = await getOrderPaymentStatus(orderId);
+  if (paymentMethod === "WALLET") {
+    // Keep the existing order/share available for retry if cash-in is needed.
+    return { orderId, checkoutUrl: `/wallet?paymentShareId=${encodeURIComponent(paymentStatus.paymentShare.id)}&orderId=${encodeURIComponent(orderId)}` };
+  }
   const checkout = await createPaymentCheckout(paymentStatus.paymentShare.id);
 
   return { orderId, checkoutUrl: checkout.checkoutUrl };

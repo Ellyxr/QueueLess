@@ -823,6 +823,7 @@ export default function ProfilePage() {
                 Payment method
               </CardTitle>
               <CardDescription>
+                <a href="/wallet" className="mb-2 block text-primary underline">QueueLess wallet · Cash in</a>
                 Optional — save a payment method here for your own reference only. You'll still
                 choose how to pay on PayMongo's checkout page when you order.
               </CardDescription>
