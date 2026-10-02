@@ -1,3 +1,4 @@
+import { getOrderHelpEligibility } from "./refund-eligibility";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { ImagePlus, X } from "lucide-react";
@@ -18,8 +19,6 @@ import {
 
 const MAX_ATTACHMENTS = 4;
 
-const FIVE_MIN_MS = 5 * 60 * 1000;
-const TWO_MIN_MS = 2 * 60 * 1000;
 
 interface CategoryOption {
   value: RefundCategory;
@@ -68,6 +67,17 @@ export function RefundRequestDialog({
   const [attachments, setAttachments] = useState<File[]>([]);
   
 
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!open) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [open]);
+  useEffect(() => {
+    setBuyerContactPingAt(order.buyerContactPingAt);
+  }, [orderId, order.buyerContactPingAt]);
+
   const attachmentPreviews = useMemo(
     () => attachments.map((file) => URL.createObjectURL(file)),
     [attachments],
@@ -79,15 +89,9 @@ export function RefundRequestDialog({
     };
   }, [attachmentPreviews]);
 
-  const vendorAcceptEligible = useMemo(() => {
-    if (order.status !== "PAID" || !order.paidAt) return false;
-    return Date.now() - new Date(order.paidAt).getTime() >= FIVE_MIN_MS;
-  }, [order.status, order.paidAt]);
-
-  const vendorUnresponsiveEligible = useMemo(() => {
-    if (!buyerContactPingAt) return false;
-    return Date.now() - new Date(buyerContactPingAt).getTime() >= TWO_MIN_MS;
-  }, [buyerContactPingAt]);
+  const eligibility = getOrderHelpEligibility({ ...order, buyerContactPingAt }, now);
+  const vendorAcceptEligible = eligibility.vendorNotAccepted;
+  const vendorUnresponsiveEligible = eligibility.vendorUnresponsive;
 
   const reset = () => {
     setCategory(null);

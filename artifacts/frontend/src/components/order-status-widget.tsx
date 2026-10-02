@@ -1,3 +1,4 @@
+import { getOrderHelpEligibility } from "@/features/refunds/refund-eligibility";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, CookingPot, Grip, LifeBuoy, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -9,6 +10,7 @@ import {
 import {
   AUTH_STATE_CHANGED_EVENT,
   confirmOrderPickup,
+  contactVendor,
   createPaymentCheckout,
   getOrderStatus,
   pingGroupOrder,
@@ -33,7 +35,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 const STATUS_SUBTEXT: Record<string, string> = {
   PENDING: "Vendor hasn't confirmed your order yet",
-  PAID: "Vendor confirmed your order",
+  PAID: "Payment received; waiting for vendor acceptance",
   COOKING: "Your order is being prepared",
   OUT_FOR_DELIVERY: "Your order is on its way",
   READY_FOR_PICKUP: "Your order is ready — come grab it",
@@ -154,6 +156,11 @@ export function OrderStatusWidget() {
 }
 
 function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [order, setOrder] = useState<OrderStatusResponse | null>(null);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isItemsExpanded, setIsItemsExpanded] = useState(false);
@@ -402,7 +409,7 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
             </div>
           )}
 
-          {order.orderType === "GROUP" &&
+          {order.status === "PENDING" &&
             order.myPaymentShare &&
             order.myPaymentShare.status === "PENDING" && (
             <div className="mt-3 space-y-1.5">
@@ -416,6 +423,7 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
                   ? "Redirecting to checkout..."
                   : `Pay my share (₱${order.myPaymentShare.amountDue})`}
               </button>
+              <a href={`/wallet?paymentShareId=${encodeURIComponent(order.myPaymentShare.id)}&orderId=${encodeURIComponent(orderId)}`} className="block rounded-full border border-border py-2 text-center text-xs font-semibold">Pay with QueueLess wallet</a>
               {payError && <p className="text-center text-[11px] text-destructive">{payError}</p>}
             </div>
           )}
@@ -431,7 +439,7 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
             </button>
           )}
 
-          {order.orderType === "GROUP" &&
+          {order.status === "PENDING" &&
             order.viewerRole === "MEMBER" &&
             !order.canComplete && (
               <button
@@ -462,6 +470,18 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
             </div>
           )}
 
+          {!order.refund && getOrderHelpEligibility(order, now).contactAvailable && (
+              <button type="button" disabled={isPinging || Boolean(order.buyerContactPingAt)} className="mt-3 w-full rounded-full border border-border py-2 text-xs font-semibold disabled:opacity-60" onClick={async () => {
+                setIsPinging(true);
+                try {
+                  await contactVendor(orderId);
+                  setOrder(await getOrderStatus(orderId));
+                  setRefundMessage("Vendor notified.");
+                } catch (err) { setRefundMessage(err instanceof Error ? err.message : "Could not contact vendor."); }
+                finally { setIsPinging(false); }
+              }}>{order.buyerContactPingAt ? "Vendor contacted" : "Contact vendor"}</button>
+            )}
+
           {!REFUND_HIDDEN_STATUSES.has(order.status) && !order.refund && (
             <button
               type="button"
@@ -469,7 +489,9 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
               className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-full border border-border py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
             >
               <LifeBuoy className="h-3.5 w-3.5" />
-              Need help with this order?
+              {getOrderHelpEligibility(order, now).contactAvailable
+                ? "Request refund"
+                : "Need help with this order?"}
             </button>
           )}
 

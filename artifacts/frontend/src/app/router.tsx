@@ -4,6 +4,7 @@ import { AppShell } from '@/components/app-shell';
 import NotFound from '@/pages/not-found';
 import LoginPage from '@/pages/login';
 import MarketplacePage from '@/features/marketplace/marketplace';
+import WalletPage from '@/features/wallet/wallet';
 import Profile from '@/features/profile/profile';
 import Vendor from '@/features/vendor/vendor';
 import VendorStorefrontPage from '@/features/vendor/vendor-storefront';
@@ -119,6 +120,7 @@ export function AppRouter() {
             <Route path="/cart" component={CartPage} />
             <Route path="/payment/success" component={PaymentSuccessPage} />
             <Route path="/payment/cancel" component={PaymentCancelPage} />
+            <Route path="/wallet" component={WalletPage} />
             <Route path="/profile" component={Profile} />
             <Route path="/reports" component={ReportsPage} />
             <Route path="/pasabuy/:id" component={PasabuyPage} />
