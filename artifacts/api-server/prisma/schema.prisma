@@ -9,6 +9,7 @@ datasource db {
 }
 
 model User {
+  wallet Wallet?
   id                              String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email                           String                  @unique
   passwordHash                    String
@@ -504,6 +505,8 @@ model PaymentShare {
 }
 
 model Payment {
+  walletKey String?
+  walletEntry WalletEntry?
   id                        String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   payerUserId               String                  @db.Uuid
   purpose                   PaymentPurpose
@@ -528,6 +531,7 @@ model Payment {
   reportsTargeting          Report[]                @relation("ReportTargetPayment")
   idempotencyKeys           PaymentIdempotencyKey[]
 
+  @@unique([payerUserId, walletKey])
   @@index([payerUserId])
   @@index([status])
   @@index([providerPaymentId])
@@ -536,6 +540,7 @@ model Payment {
 }
 
 model Refund {
+  walletEntry WalletEntry?
   id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   paymentId         String          @db.Uuid
   orderId           String?         @db.Uuid
@@ -923,6 +928,7 @@ enum PaymentShareStatus {
 }
 
 enum PaymentPurpose {
+  WALLET_TOPUP
   ORDER_SHARE
   PASABUY
   SUBSCRIPTION
@@ -1048,4 +1054,29 @@ enum CartStatus {
 
 enum EmailVerificationPurpose {
   SIGNUP
+}
+
+model Wallet {
+  userId String @id @db.Uuid
+  balance Decimal @default(0) @db.Decimal(10, 2)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  entries WalletEntry[]
+  @@map("wallets")
+}
+
+model WalletEntry {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String @db.Uuid
+  type String
+  amount Decimal @db.Decimal(10, 2)
+  balanceAfter Decimal @db.Decimal(10, 2)
+  paymentId String? @unique @db.Uuid
+  refundId String? @unique @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  wallet Wallet @relation(fields: [userId], references: [userId], onDelete: Restrict)
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  refund Refund? @relation(fields: [refundId], references: [id], onDelete: Restrict)
+  @@index([userId, createdAt])
+  @@map("wallet_entries")
 }

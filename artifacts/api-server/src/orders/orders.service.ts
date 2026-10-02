@@ -322,6 +322,7 @@ export class OrdersService {
 
           return order;
         },
+        { maxWait: 10000, timeout: 30000 },
       );
 
       this.realtimeGateway.emitNewOrder(
@@ -1266,7 +1267,7 @@ export class OrdersService {
         order.vendor.ownerUserId,
         'ORDER_BUYER_CONTACT',
         'Buyer needs an update',
-        'A buyer is asking about their order — please update its status soon.',
+        'A buyer is asking about their order â€” please update its status soon.',
         'Order',
         orderId,
       );
