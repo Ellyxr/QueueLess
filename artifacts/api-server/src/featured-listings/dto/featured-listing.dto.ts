@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { FeaturedListingPlacement } from '@prisma/client';
-import { IsBoolean, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, IsUrl, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, ValidateIf, IsUUID, IsUrl, Max, MaxLength, Min, MinLength } from 'class-validator';
+
+const provided = (_: object, value: unknown) => value !== undefined;
 
 export type FeaturedListingPaymentMethod = 'PAYMONGO' | 'WALLET';
 
@@ -23,12 +25,20 @@ export class CreateFeaturedPlanDto {
 }
 
 export class UpdateFeaturedPlanDto {
-  @ApiProperty()
-  @IsBoolean()
-  isActive!: boolean;
+  @ValidateIf(provided) @IsBoolean()
+  isActive?: boolean;
+  @ValidateIf(provided) @IsString() @MinLength(1) @MaxLength(100)
+  name?: string;
+  @ValidateIf(provided) @IsNumber({ maxDecimalPlaces: 2 }) @Min(1) @Max(100000)
+  price?: number;
+  @ValidateIf(provided) @IsInt() @Min(1) @Max(365)
+  durationDays?: number;
 }
 
 export class CreateFeaturedListingDto {
+  @ValidateIf(provided) @IsString() @Matches(/^\d{1,8}(?:\.\d{1,2})?$/)
+  expectedAmount?: string;
+
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
   planId!: string;
@@ -50,4 +60,19 @@ export class ListFeaturedDto {
   @ApiPropertyOptional({ enum: FeaturedListingPlacement })
   @IsOptional() @IsEnum(FeaturedListingPlacement)
   placement?: FeaturedListingPlacement;
+}
+
+export class UpdateFeaturedSettingsDto {
+  @IsNumber({ maxDecimalPlaces: 2 }) @Min(1) @Max(100000)
+  monthlyPrice!: number;
+  @IsInt() @Min(0) @Max(99)
+  firstVendorDiscount!: number;
+  @IsInt() @Min(0) @Max(99)
+  secondVendorDiscount!: number;
+  @IsInt() @Min(0) @Max(99)
+  thirdVendorDiscount!: number;
+  @IsBoolean()
+  discountOnRenewals!: boolean;
+  @IsInt() @Min(1)
+  version!: number;
 }

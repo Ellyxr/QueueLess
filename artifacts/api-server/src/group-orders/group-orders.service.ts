@@ -170,8 +170,28 @@ export class GroupOrdersService {
     throw lastError ?? new Error('Failed to generate a unique group order code');
   }
 
+  async removeMember(actorUserId: string, groupOrderId: string, memberUserId: string, kick: boolean) {
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM group_orders WHERE id = ${groupOrderId}::uuid FOR UPDATE`;
+      const group = await tx.groupOrder.findUnique({ where: { id: groupOrderId } });
+      if (!group) throw new NotFoundException('Group order not found');
+      if (kick && group.initiatorUserId !== actorUserId) throw new ForbiddenException('Only the owner can remove members');
+      if (!kick && actorUserId !== memberUserId) throw new ForbiddenException('You can only leave your own membership');
+      if (group.initiatorUserId === memberUserId) throw new ConflictException('The owner must cancel the group instead of leaving');
+      if (group.status !== 'OPEN') throw new ConflictException('Members can only leave or be removed before the group is locked');
+      const member = await tx.groupOrderParticipant.findUnique({ where: { groupOrderId_userId: { groupOrderId, userId: memberUserId } } });
+      if (!member || member.status !== 'JOINED') throw new NotFoundException('Joined member not found');
+      await tx.cart.deleteMany({ where: { groupOrderId, userId: memberUserId, status: 'ACTIVE', orderId: null } });
+      await tx.groupOrderParticipant.update({ where: { id: member.id }, data: { status: 'LEFT' } });
+      await tx.auditRecord.create({ data: { actorUserId, actionType: kick ? 'GROUP_MEMBER_REMOVED' : 'GROUP_MEMBER_LEFT',
+        entityType: 'GroupOrder', entityId: groupOrderId, beforeState: { memberUserId, status: 'JOINED' }, afterState: { memberUserId, status: 'LEFT' } } });
+      return { groupOrderId, userId: memberUserId, status: 'LEFT' };
+    }, { maxWait: 10000, timeout: 30000 });
+  }
+
   async joinGroupOrder(userId: string, groupOrderId: string) {
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM group_orders WHERE id = ${groupOrderId}::uuid FOR UPDATE`;
       const groupOrder = await tx.groupOrder.findUnique({
         where: {
           id: groupOrderId,
@@ -279,6 +299,7 @@ export class GroupOrdersService {
 
   async lockGroupOrder(userId: string, groupOrderId: string) {
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM group_orders WHERE id = ${groupOrderId}::uuid FOR UPDATE`;
       const groupOrder = await tx.groupOrder.findUnique({
         where: {
           id: groupOrderId,
@@ -343,6 +364,7 @@ export class GroupOrdersService {
     dto: AddGroupOrderItemDto,
   ) {
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM group_orders WHERE id = ${groupOrderId}::uuid FOR UPDATE`;
       let groupOrder = await tx.groupOrder.findUnique({
         where: {
           id: groupOrderId,
@@ -528,6 +550,7 @@ export class GroupOrdersService {
     itemId: string,
   ) {
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM group_orders WHERE id = ${groupOrderId}::uuid FOR UPDATE`;
       const groupOrder = await tx.groupOrder.findUnique({
         where: {
           id: groupOrderId,
@@ -612,6 +635,7 @@ export class GroupOrdersService {
 
   async cancelGroupOrder(userId: string, groupOrderId: string) {
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM group_orders WHERE id = ${groupOrderId}::uuid FOR UPDATE`;
       const groupOrder = await tx.groupOrder.findUnique({
         where: {
           id: groupOrderId,
@@ -790,6 +814,7 @@ export class GroupOrdersService {
 
   async finalizeGroupOrder(userId: string, groupOrderId: string) {
     const result = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM group_orders WHERE id = ${groupOrderId}::uuid FOR UPDATE`;
       const groupOrder = await tx.groupOrder.findUnique({
         where: {
           id: groupOrderId,

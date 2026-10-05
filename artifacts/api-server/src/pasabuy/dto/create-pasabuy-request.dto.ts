@@ -1,26 +1,38 @@
+import { Transform } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
-import { IsBoolean, IsNotEmpty, IsNumber, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 
-export class CreatePasabuyRequestDto {
+const coordinate = ({ value }: { value: unknown }) =>
+  typeof value === 'string' && value.trim() ? Number(value) : value;
+
+export class PreviewPasabuyRequestDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
   orderId!: string;
 
   @ApiProperty({ maxLength: 250 })
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   @MaxLength(250)
-  dropoffLocation!: string;
+  dropoffLocation?: string;
 
-  @IsNumber()
+  @Transform(coordinate)
+  @IsNumber({ allowNaN: false, allowInfinity: false })
   @Min(-90)
   @Max(90)
   dropoffLatitude!: number;
 
-  @IsNumber()
+  @Transform(coordinate)
+  @IsNumber({ allowNaN: false, allowInfinity: false })
   @Min(-180)
   @Max(180)
   dropoffLongitude!: number;
+
+}
+
+export class CreatePasabuyRequestDto extends PreviewPasabuyRequestDto {
+  @IsOptional() @IsBoolean()
+  outsideRadiusConfirmed?: boolean;
 
   @ApiProperty({ description: 'The requester accepted the Pasabuy terms.' })
   @IsBoolean()
