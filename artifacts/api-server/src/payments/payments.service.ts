@@ -1,3 +1,5 @@
+import { FeaturedListingPlacement } from '@prisma/client';
+import { listingEndDate, lockFeaturedPricing } from '../featured-listings/featured-pricing.policy';
 import { activateStudentApplication } from '../vendor-applications/activate-student-application';
 import { subscriptionEnd } from '../vendor-applications/vendor-application.policy';
 import { WalletService } from '../wallet/wallet.service';
@@ -818,6 +820,7 @@ export class PaymentsService {
       if (!paidPaymentId) throw new BadRequestException('Featured listing payment is not paid or amount does not match');
       const listingId = payment.featuredListingId;
       const result = await this.prisma.$transaction(async (tx) => {
+        await lockFeaturedPricing(tx);
         const current = await tx.featuredListing.findUnique({
           where: { id: listingId }, include: { plan: true,
             vendor: { select: { status: true } },
@@ -846,8 +849,11 @@ export class PaymentsService {
           where: { id: listingId, status: FeaturedListingStatus.PENDING },
           data: { status: FeaturedListingStatus.ACTIVE, pricePaid: payment.amount,
             startDate: now,
-            endDate: new Date(now.getTime() + current.plan!.durationDays * 86_400_000) },
+            endDate: listingEndDate(now, current.durationDaysSnapshot ?? current.plan!.durationDays, current.durationMonthsSnapshot) },
         }) : { count: 0 };
+        if (activated.count && current.placement === FeaturedListingPlacement.MARKETPLACE_HOME) await tx.featuredIntroClaim.updateMany({
+          where: { vendorId: current.vendorId, consumedAt: null }, data: { consumedAt: now },
+        });
         if (activated.count) await tx.auditRecord.create({ data: {
           actorUserId: null, actionType: 'FEATURED_LISTING_STATUS_UPDATED',
           entityType: 'FeaturedListing', entityId: listingId,
@@ -855,7 +861,7 @@ export class PaymentsService {
           afterState: { status: FeaturedListingStatus.ACTIVE, paymentId: payment.id },
         } });
         return { duplicate: false, autoRefund: !activated.count };
-      });
+      }, { maxWait: 10000, timeout: 30000 });
       if (result.duplicate) await this.refundsService.retryPendingAutoRefunds(payment.id);
       if (result.autoRefund) await this.refundsService.autoRefundPayment(payment.id,
         'FEATURED_LISTING_UNAVAILABLE', 'Featured listing payment arrived after the placement became unavailable.');

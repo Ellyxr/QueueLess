@@ -1,3 +1,5 @@
+import { VendorReportsService } from './vendor-reports.service';
+import { ReviewVendorResponseDto, VendorReportNoticeDto, VendorReportResponseDto } from './dto/vendor-report.dto';
 import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
@@ -16,7 +18,38 @@ import { ReportsService } from './reports.service';
 @UseGuards(JwtAuthGuard)
 @Controller('reports')
 export class ReportsController {
-  constructor(private readonly reports: ReportsService) {}
+  constructor(private readonly reports: ReportsService, private readonly vendorReports: VendorReportsService) {}
+
+  @Get('vendor/mine')
+  @UseGuards(RolesGuard) @Roles('VENDOR_OWNER')
+  vendorMine(@CurrentUser() user: JwtPayload, @Query() query: ListReportsDto) {
+    return this.vendorReports.mine(user.sub, query.page ?? 1, query.limit ?? 20);
+  }
+
+  @Get('vendor/:id')
+  @UseGuards(RolesGuard) @Roles('VENDOR_OWNER')
+  vendorDetail(@CurrentUser() user: JwtPayload, @Param('id', ParseUUIDPipe) id: string) {
+    return this.vendorReports.detail(user.sub, id);
+  }
+
+  @Post('vendor/:id/responses')
+  @UseGuards(RolesGuard) @Roles('VENDOR_OWNER')
+  vendorRespond(@CurrentUser() user: JwtPayload, @Param('id', ParseUUIDPipe) id: string, @Body() dto: VendorReportResponseDto) {
+    return this.vendorReports.respond(user.sub, id, dto);
+  }
+
+  @Patch(':id/vendor-notice')
+  @UseGuards(RolesGuard) @Roles('ADMIN')
+  publishVendorNotice(@CurrentUser() user: JwtPayload, @Param('id', ParseUUIDPipe) id: string, @Body() dto: VendorReportNoticeDto) {
+    return this.vendorReports.publishNotice(user.sub, id, dto.notice);
+  }
+
+  @Patch(':id/vendor-responses/:responseId')
+  @UseGuards(RolesGuard) @Roles('ADMIN')
+  reviewVendorResponse(@CurrentUser() user: JwtPayload, @Param('id', ParseUUIDPipe) id: string,
+    @Param('responseId', ParseUUIDPipe) responseId: string, @Body() dto: ReviewVendorResponseDto) {
+    return this.vendorReports.review(user.sub, id, responseId, dto);
+  }
 
   @Get()
   @UseGuards(RolesGuard)

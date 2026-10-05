@@ -3,10 +3,10 @@ import { Interval } from '@nestjs/schedule';
 import { FeaturedListingPlacement, FeaturedListingStatus, LedgerEntryType, PaymentProvider, PaymentPurpose, PaymentStatus, Prisma, VendorStatus } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PaymongoService } from '../payments/paymongo.service';
-import { CreateFeaturedListingDto, CreateFeaturedPlanDto } from './dto/featured-listing.dto';
+import { CreateFeaturedListingDto, CreateFeaturedPlanDto, UpdateFeaturedSettingsDto, UpdateFeaturedPlanDto } from './dto/featured-listing.dto';
 
-/** First-come-first-served pricing ladder for MARKETPLACE_HOME: entices early adopters. */
-const MARKETPLACE_HOME_DISCOUNT_LADDER = [30, 20, 10, 0];
+import { discountedPrice, listingEndDate, lockFeaturedPricing, lockVendorWallet } from './featured-pricing.policy';
+import { createHash } from 'crypto';
 
 @Injectable()
 export class FeaturedListingsService {
@@ -18,6 +18,32 @@ export class FeaturedListingsService {
     return this.prisma.featuredListingPlan.findMany({
       where: { isActive: true }, orderBy: [{ placement: 'asc' }, { price: 'asc' }],
     });
+  }
+
+  allPlans() { return this.prisma.featuredListingPlan.findMany({ orderBy: [{ placement: 'asc' }, { durationMonths: 'asc' }, { price: 'asc' }] }); }
+
+  settings() { return this.prisma.featuredListingSettings.findUniqueOrThrow({ where: { id: 1 } }); }
+
+  async updateSettings(dto: UpdateFeaturedSettingsDto, actorUserId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      await lockFeaturedPricing(tx);
+      const before = await tx.featuredListingSettings.findUniqueOrThrow({ where: { id: 1 } });
+      if (before.version !== dto.version) throw new ConflictException('Settings changed; reload before saving');
+      const after = await tx.featuredListingSettings.update({ where: { id: 1 }, data: {
+        monthlyPrice: dto.monthlyPrice, firstVendorDiscount: dto.firstVendorDiscount,
+        secondVendorDiscount: dto.secondVendorDiscount, thirdVendorDiscount: dto.thirdVendorDiscount,
+        discountOnRenewals: dto.discountOnRenewals, version: { increment: 1 },
+      } });
+      const plans = await tx.featuredListingPlan.findMany({ where: { managedMonthly: true } });
+      for (const plan of plans) await tx.featuredListingPlan.update({ where: { id: plan.id },
+        data: { price: after.monthlyPrice.mul(plan.durationMonths!) } });
+      const audit = (value: typeof before) => ({ monthlyPrice: value.monthlyPrice.toFixed(2),
+        firstVendorDiscount: value.firstVendorDiscount, secondVendorDiscount: value.secondVendorDiscount,
+        thirdVendorDiscount: value.thirdVendorDiscount, discountOnRenewals: value.discountOnRenewals, version: value.version });
+      await tx.auditRecord.create({ data: { actorUserId, actionType: 'FEATURED_SETTINGS_UPDATED',
+        entityType: 'FeaturedListingSettings', entityId: '1', beforeState: audit(before), afterState: audit(after) } });
+      return after;
+    }, { maxWait: 10000, timeout: 30000 });
   }
 
   async createPlan(dto: CreateFeaturedPlanDto, actorUserId: string) {
@@ -44,22 +70,27 @@ export class FeaturedListingsService {
     }
   }
 
-  async updatePlan(id: string, isActive: boolean, actorUserId: string) {
-    return this.prisma.$transaction(async (tx) => {
-      const plan = await tx.featuredListingPlan.findUnique({ where: { id } });
-      if (!plan) throw new NotFoundException('Featured listing plan not found');
-      if (plan.isActive === isActive) return plan;
-      const updated = await tx.featuredListingPlan.updateMany({
-        where: { id, isActive: plan.isActive }, data: { isActive },
-      });
-      if (!updated.count) throw new ConflictException('Plan status changed; please retry');
-      await tx.auditRecord.create({ data: {
-        actorUserId, actionType: 'FEATURED_PLAN_STATUS_UPDATED',
-        entityType: 'FeaturedListingPlan', entityId: id,
-        beforeState: { isActive: plan.isActive }, afterState: { isActive },
-      } });
-      return tx.featuredListingPlan.findUniqueOrThrow({ where: { id } });
-    });
+  async updatePlan(id: string, dto: UpdateFeaturedPlanDto, actorUserId: string) {
+    if ([dto.name, dto.price, dto.durationDays, dto.isActive].every(value => value === undefined)) throw new BadRequestException('At least one plan field is required');
+    const name = dto.name?.trim();
+    if (dto.name !== undefined && !name) throw new BadRequestException('Plan name is required');
+    try {
+      return await this.prisma.$transaction(async tx => {
+        await lockFeaturedPricing(tx);
+        const before = await tx.featuredListingPlan.findUnique({ where: { id } });
+        if (!before) throw new NotFoundException('Featured listing plan not found');
+        if (before.managedMonthly && (dto.price !== undefined || dto.durationDays !== undefined))
+          throw new BadRequestException('Monthly plan pricing is managed through featured listing settings');
+        const after = await tx.featuredListingPlan.update({ where: { id }, data: { ...dto, ...(name ? { name } : {}) } });
+        const audit = (plan: typeof before) => ({ name: plan.name, price: plan.price.toFixed(2), durationDays: plan.durationDays, isActive: plan.isActive });
+        await tx.auditRecord.create({ data: { actorUserId, actionType: 'FEATURED_PLAN_UPDATED', entityType: 'FeaturedListingPlan', entityId: id,
+          beforeState: audit(before), afterState: audit(after) } });
+        return after;
+      }, { maxWait: 10000, timeout: 30000 });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('Plan name already exists');
+      throw error;
+    }
   }
 
   async mine(userId: string) {
@@ -96,141 +127,112 @@ export class FeaturedListingsService {
     return result._sum.amount ?? new Prisma.Decimal(0);
   }
 
-  /** How many vendors have already paid for MARKETPLACE_HOME determines this vendor's discount tier. */
-  private async marketplaceHomeDiscountPercent(vendorId: string) {
-    const priorPayingVendors = await this.prisma.featuredListing.findMany({
-      where: {
-        placement: FeaturedListingPlacement.MARKETPLACE_HOME,
-        vendorId: { not: vendorId },
-        status: { in: [FeaturedListingStatus.ACTIVE, FeaturedListingStatus.EXPIRED] },
-      },
-      distinct: ['vendorId'], select: { vendorId: true },
-    });
-    const tier = Math.min(priorPayingVendors.length, MARKETPLACE_HOME_DISCOUNT_LADDER.length - 1);
-    return MARKETPLACE_HOME_DISCOUNT_LADDER[tier];
-  }
-
-  async create(userId: string, dto: CreateFeaturedListingDto) {
-    const vendor = await this.ownedVendor(userId);
-    if (vendor.status !== VendorStatus.ACTIVE) {
-      throw new ConflictException('Only active vendors can buy featured listings');
-    }
-    const plan = await this.prisma.featuredListingPlan.findUnique({ where: { id: dto.planId } });
+  private async price(tx: Prisma.TransactionClient, vendorId: string, dto: CreateFeaturedListingDto, reserve: boolean) {
+    const vendor = await tx.vendor.findUnique({ where: { id: vendorId } });
+    if (!vendor || vendor.status !== VendorStatus.ACTIVE) throw new ConflictException('Vendor is not active');
+    const plan = await tx.featuredListingPlan.findUnique({ where: { id: dto.planId } });
     if (!plan) throw new NotFoundException('Featured listing plan not found');
-    if (!plan.isActive || plan.price.lessThan(1) || plan.durationDays < 1) {
-      throw new ConflictException('Featured listing plan is not available');
-    }
-    let product: { id: string; imageUrl: string | null } | null = null;
-    if (plan.placement === FeaturedListingPlacement.PRODUCT_SPOTLIGHT) {
-      if (!dto.productId) throw new BadRequestException('Product is required for this placement');
-      product = await this.prisma.product.findFirst({
-        where: { id: dto.productId, vendorId: vendor.id, isAvailable: true }, select: { id: true, imageUrl: true },
-      });
-      if (!product) throw new NotFoundException('Available vendor product not found');
-    } else if (dto.productId) {
-      if (plan.placement !== FeaturedListingPlacement.MARKETPLACE_HOME) {
-        throw new BadRequestException('Product is only accepted for MARKETPLACE_HOME or PRODUCT_SPOTLIGHT');
+    if (!plan.isActive || plan.price.lessThan(1)) throw new ConflictException('Plan is unavailable');
+    if (plan.placement === FeaturedListingPlacement.PRODUCT_SPOTLIGHT && !dto.productId)
+      throw new BadRequestException('Product is required for this placement');
+    const product = dto.productId ? await tx.product.findFirst({ where: {
+      id: dto.productId, vendorId, isAvailable: true }, select: { imageUrl: true } }) : null;
+    if (dto.productId && !product) throw new NotFoundException('Available vendor product not found');
+    if (dto.productId && !['PRODUCT_SPOTLIGHT', 'MARKETPLACE_HOME'].includes(plan.placement))
+      throw new BadRequestException('Product is not accepted for this placement');
+    const settings = await tx.featuredListingSettings.findUniqueOrThrow({ where: { id: 1 } });
+    let rank: number | null = null;
+    let percent = 0;
+    if (plan.placement === FeaturedListingPlacement.MARKETPLACE_HOME) {
+      let claim = await tx.featuredIntroClaim.findUnique({ where: { vendorId } });
+      const paidBefore = await tx.payment.count({ where: { status: PaymentStatus.SUCCEEDED,
+        featuredListing: { vendorId, placement: FeaturedListingPlacement.MARKETPLACE_HOME } } });
+      if (!claim && !paidBefore) {
+        const claims = await tx.featuredIntroClaim.findMany({ select: { rank: true } });
+        const available = [1, 2, 3].find(value => !claims.some(item => item.rank === value));
+        if (available) claim = reserve ? await tx.featuredIntroClaim.create({ data: { vendorId, rank: available } })
+          : { vendorId, rank: available, consumedAt: null, createdAt: new Date() };
       }
-      product = await this.prisma.product.findFirst({
-        where: { id: dto.productId, vendorId: vendor.id, isAvailable: true }, select: { id: true, imageUrl: true },
-      });
-      if (!product) throw new NotFoundException('Available vendor product not found');
+      rank = claim?.rank ?? null;
+      if (rank && (!paidBefore || settings.discountOnRenewals))
+        percent = [settings.firstVendorDiscount, settings.secondVendorDiscount, settings.thirdVendorDiscount][rank - 1];
     }
-    const imageUrl = dto.imageUrl?.trim() || product?.imageUrl || null;
-    const discountPercent = plan.placement === FeaturedListingPlacement.MARKETPLACE_HOME
-      ? await this.marketplaceHomeDiscountPercent(vendor.id) : 0;
-    const chargeAmount = plan.price.mul(100 - discountPercent).div(100).toDecimalPlaces(2);
-    const paymentMethod = dto.paymentMethod ?? 'PAYMONGO';
-
-    await this.expireVendor(vendor.id);
-
-    if (paymentMethod === 'WALLET') {
-      return this.createWithWalletPayment(userId, vendor.id, plan, dto.productId, imageUrl, discountPercent, chargeAmount);
-    }
-
-    let listing: { id: string };
-    try {
-      listing = await this.prisma.$transaction(async (tx) => {
-        const created = await tx.featuredListing.create({ data: {
-          vendorId: vendor.id, planId: plan.id, placement: plan.placement,
-          productId: dto.productId ?? null, status: FeaturedListingStatus.PENDING,
-          discountPercent, imageUrl,
-        } });
-        const payment = await tx.payment.create({ data: {
-          payerUserId: userId, purpose: PaymentPurpose.FEATURED_LISTING,
-          featuredListingId: created.id, amount: chargeAmount,
-          currency: 'PHP', status: PaymentStatus.PENDING,
-        } });
-        await tx.auditRecord.create({ data: {
-          actorUserId: userId, actionType: 'FEATURED_LISTING_CREATED',
-          entityType: 'FeaturedListing', entityId: created.id,
-          afterState: { status: created.status, vendorId: vendor.id,
-            planId: plan.id, placement: plan.placement, discountPercent,
-            productId: dto.productId ?? null, paymentId: payment.id },
-        } });
-        await tx.auditRecord.create({ data: {
-          actorUserId: userId, actionType: 'PAYMENT_CREATED',
-          entityType: 'Payment', entityId: payment.id,
-          afterState: { status: payment.status, purpose: payment.purpose,
-            amount: payment.amount.toFixed(2), featuredListingId: created.id },
-        } });
-        return created;
-      });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new ConflictException('Vendor already has a pending or active listing for this placement');
-      }
-      throw error;
-    }
-    return this.checkout(userId, listing.id);
+    const base = plan.managedMonthly ? settings.monthlyPrice.mul(plan.durationMonths!) : plan.price;
+    const amount = discountedPrice(base, percent);
+    const balance = await this.sumLedgerBalance(vendorId, tx);
+    return { plan, settings, rank, percent, base, amount, balance, imageUrl: dto.imageUrl?.trim() || product?.imageUrl || null };
   }
 
-  private async createWithWalletPayment(
-    userId: string, vendorId: string, plan: { id: string; placement: FeaturedListingPlacement; durationDays: number },
-    productId: string | undefined, imageUrl: string | null, discountPercent: number, chargeAmount: Prisma.Decimal,
-  ) {
+  async quote(userId: string, dto: CreateFeaturedListingDto) {
+    const vendor = await this.ownedVendor(userId);
+    return this.prisma.$transaction(async tx => {
+      await lockFeaturedPricing(tx);
+      const price = await this.price(tx, vendor.id, dto, false);
+      return { planId: price.plan.id, durationMonths: price.plan.durationMonths, durationDays: price.plan.durationDays,
+        baseAmount: price.base.toFixed(2), discountPercent: price.percent, introductoryRank: price.rank, discountEligible: price.percent > 0, discountAmount: price.base.sub(price.amount).toFixed(2),
+        amount: price.amount.toFixed(2), currency: 'PHP', walletBalance: price.balance.toFixed(2),
+        canPayWithWallet: price.balance.greaterThanOrEqualTo(price.amount), settingsVersion: price.settings.version,
+        discountOnRenewals: price.settings.discountOnRenewals, reservation: false };
+    }, { maxWait: 10000, timeout: 30000 });
+  }
+
+  async create(userId: string, dto: CreateFeaturedListingDto, key?: string) {
+    const purchaseKey = key?.trim();
+    if (!purchaseKey || purchaseKey.length > 255) throw new BadRequestException('Idempotency-Key header is required (maximum 255 characters)');
+    const fingerprint = createHash('sha256').update(JSON.stringify([dto.planId, dto.productId ?? null,
+      dto.imageUrl?.trim() || null, dto.paymentMethod ?? 'PAYMONGO'])).digest('hex');
+    const vendor = await this.ownedVendor(userId);
+    await this.expireVendor(vendor.id);
+    let result;
     try {
-      return await this.prisma.$transaction(async (tx) => {
-        const balance = await this.sumLedgerBalance(vendorId, tx);
-        if (balance.lessThan(chargeAmount)) {
-          throw new BadRequestException('Insufficient wallet balance for this featured listing');
+      result = await this.prisma.$transaction(async tx => {
+        await lockFeaturedPricing(tx);
+        await lockVendorWallet(tx, vendor.id);
+        const existing = await tx.featuredListing.findUnique({ where: { vendorId_purchaseKey: { vendorId: vendor.id, purchaseKey } }, include: { payments: true } });
+        if (existing) {
+          if (existing.purchaseFingerprint !== fingerprint) throw new ConflictException('Idempotency-Key belongs to another listing');
+          return { listing: existing, payment: existing.payments[0], replay: true, balance: await this.sumLedgerBalance(vendor.id, tx) };
         }
+        const price = await this.price(tx, vendor.id, dto, true);
+        if (dto.expectedAmount !== undefined && !price.amount.equals(new Prisma.Decimal(dto.expectedAmount)))
+          throw new ConflictException('Price changed; reload the quote before confirming');
+        const wallet = dto.paymentMethod === 'WALLET';
+        if (wallet && price.balance.lessThan(price.amount)) throw new ConflictException('Insufficient vendor wallet balance');
         const now = new Date();
-        const created = await tx.featuredListing.create({ data: {
-          vendorId, planId: plan.id, placement: plan.placement,
-          productId: productId ?? null, discountPercent, imageUrl,
-          status: FeaturedListingStatus.ACTIVE, startDate: now,
-          endDate: new Date(now.getTime() + plan.durationDays * 86_400_000), pricePaid: chargeAmount,
+        const listing = await tx.featuredListing.create({ data: {
+          vendorId: vendor.id, planId: price.plan.id, placement: price.plan.placement,
+          productId: dto.productId ?? null, imageUrl: price.imageUrl, discountPercent: price.percent,
+          durationDaysSnapshot: price.plan.durationDays, durationMonthsSnapshot: price.plan.durationMonths,
+          settingsVersion: price.settings.version, purchaseKey, purchaseFingerprint: fingerprint,
+          status: wallet ? FeaturedListingStatus.ACTIVE : FeaturedListingStatus.PENDING,
+          ...(wallet ? { startDate: now, endDate: listingEndDate(now, price.plan.durationDays, price.plan.durationMonths), pricePaid: price.amount } : {}),
         } });
         const payment = await tx.payment.create({ data: {
-          payerUserId: userId, purpose: PaymentPurpose.FEATURED_LISTING,
-          featuredListingId: created.id, amount: chargeAmount, currency: 'PHP',
-          provider: PaymentProvider.WALLET, status: PaymentStatus.SUCCEEDED,
+          payerUserId: userId, purpose: PaymentPurpose.FEATURED_LISTING, featuredListingId: listing.id,
+          amount: price.amount, currency: 'PHP', provider: wallet ? PaymentProvider.WALLET : PaymentProvider.PAYMONGO,
+          status: wallet ? PaymentStatus.SUCCEEDED : PaymentStatus.PENDING,
         } });
-        await tx.vendorLedgerEntry.create({ data: {
-          vendorId, type: LedgerEntryType.PROMOTION_DEBIT, amount: chargeAmount.negated(),
-        } });
-        await tx.auditRecord.create({ data: {
-          actorUserId: userId, actionType: 'FEATURED_LISTING_CREATED',
-          entityType: 'FeaturedListing', entityId: created.id,
-          afterState: { status: created.status, vendorId, planId: plan.id,
-            placement: created.placement, discountPercent, productId: productId ?? null, paymentId: payment.id },
-        } });
-        await tx.auditRecord.create({ data: {
-          actorUserId: userId, actionType: 'PAYMENT_STATUS_UPDATED',
-          entityType: 'Payment', entityId: payment.id,
-          afterState: { status: payment.status, purpose: payment.purpose,
-            provider: payment.provider, amount: payment.amount.toFixed(2), featuredListingId: created.id },
-        } });
-        return { listingId: created.id, paymentId: payment.id, amount: chargeAmount.toFixed(2),
-          currency: 'PHP', status: created.status, discountPercent, idempotentReplay: false };
-      });
+        if (wallet) {
+          await tx.vendorLedgerEntry.create({ data: { vendorId: vendor.id, featuredListingId: listing.id,
+            type: LedgerEntryType.PROMOTION_DEBIT, amount: price.amount.negated() } });
+          if (price.plan.placement === FeaturedListingPlacement.MARKETPLACE_HOME) await tx.featuredIntroClaim.updateMany({ where: { vendorId: vendor.id, consumedAt: null }, data: { consumedAt: now } });
+        }
+        await tx.auditRecord.create({ data: { actorUserId: userId, actionType: 'FEATURED_LISTING_CREATED', entityType: 'FeaturedListing', entityId: listing.id,
+          afterState: { status: listing.status, planId: price.plan.id, paymentId: payment.id, amount: price.amount.toFixed(2), discountPercent: price.percent, introductoryRank: price.rank, settingsVersion: price.settings.version } } });
+        await tx.auditRecord.create({ data: { actorUserId: userId, actionType: 'PAYMENT_CREATED', entityType: 'Payment', entityId: payment.id,
+          afterState: { status: payment.status, provider: payment.provider, amount: payment.amount.toFixed(2), purpose: payment.purpose } } });
+        return { listing, payment, replay: false, balance: wallet ? price.balance.sub(price.amount) : price.balance };
+      }, { maxWait: 10000, timeout: 30000 });
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
         throw new ConflictException('Vendor already has a pending or active listing for this placement');
-      }
       throw error;
     }
+    if (result.payment.provider === PaymentProvider.PAYMONGO && result.listing.status === FeaturedListingStatus.PENDING)
+      return this.checkout(userId, result.listing.id);
+    return { listingId: result.listing.id, paymentId: result.payment.id, amount: result.payment.amount.toFixed(2),
+      currency: 'PHP', status: result.listing.status, discountPercent: result.listing.discountPercent,
+      walletBalance: result.balance.toFixed(2), idempotentReplay: result.replay };
   }
 
   async checkout(userId: string, id: string) {
@@ -251,12 +253,17 @@ export class FeaturedListingsService {
       throw new ConflictException('Featured listing payment is not pending');
     }
     if (payment.checkoutUrl && payment.providerPaymentId) {
-      return this.checkoutResponse(listing.id, payment.id, payment.amount, payment.checkoutUrl, true);
+      return this.checkoutResponse(listing.id, payment.id, payment.amount, payment.checkoutUrl, true, vendor.id);
     }
-    const reserved = await this.prisma.payment.updateMany({
-      where: { id: payment.id, providerPaymentId: null, checkoutUrl: null },
-      data: { checkoutUrl: 'CREATING' },
-    });
+    const reserved = await this.prisma.$transaction(async tx => {
+      await lockFeaturedPricing(tx);
+      const current = await tx.featuredListing.findUnique({ where: { id: listing.id } });
+      if (!current || current.status !== FeaturedListingStatus.PENDING) throw new ConflictException('Listing is no longer awaiting payment');
+      return tx.payment.updateMany({
+        where: { id: payment.id, status: PaymentStatus.PENDING, providerPaymentId: null, checkoutUrl: null },
+        data: { checkoutUrl: 'CREATING' },
+      });
+    }, { maxWait: 10000, timeout: 30000 });
     if (!reserved.count) throw new ConflictException('Checkout is being created');
     try {
       const result = await this.paymongo.createCheckoutSession({
@@ -268,19 +275,16 @@ export class FeaturedListingsService {
       await this.prisma.payment.update({ where: { id: payment.id }, data: {
         providerPaymentId: result.checkoutSessionId, checkoutUrl: result.checkoutUrl,
       } });
-      return this.checkoutResponse(listing.id, payment.id, payment.amount, result.checkoutUrl, false);
+      return this.checkoutResponse(listing.id, payment.id, payment.amount, result.checkoutUrl, false, vendor.id);
     } catch (error) {
-      await this.prisma.payment.updateMany({
-        where: { id: payment.id, checkoutUrl: 'CREATING', providerPaymentId: null },
-        data: { checkoutUrl: null },
-      });
+      this.logger.warn(`Checkout creation uncertain for payment ${payment.id}; reservation retained for reconciliation`);
       throw error;
     }
   }
 
-  private checkoutResponse(listingId: string, paymentId: string, amount: Prisma.Decimal, checkoutUrl: string, idempotentReplay: boolean) {
+  private async checkoutResponse(listingId: string, paymentId: string, amount: Prisma.Decimal, checkoutUrl: string, idempotentReplay: boolean, vendorId: string) {
     return { listingId, paymentId, amount: amount.toFixed(2), currency: 'PHP',
-      checkoutUrl, status: 'PENDING', idempotentReplay };
+      checkoutUrl, status: 'PENDING', idempotentReplay, walletBalance: (await this.sumLedgerBalance(vendorId)).toFixed(2) };
   }
 
   private async ownedVendor(userId: string) {
@@ -323,21 +327,25 @@ export class FeaturedListingsService {
     const stale = await this.prisma.featuredListing.findMany({
       where: { status: FeaturedListingStatus.PENDING,
         createdAt: { lte: new Date(Date.now() - 30 * 60_000) } },
-      select: { id: true, payments: { select: { id: true, providerPaymentId: true, status: true } } },
+      select: { id: true, vendorId: true, payments: { select: { id: true, providerPaymentId: true, status: true, checkoutUrl: true } } },
       take: 50,
     });
     for (const listing of stale) {
       try {
         const payment = listing.payments[0];
-        if (!payment || payment.status === PaymentStatus.SUCCEEDED) continue;
+        if (!payment || payment.status === PaymentStatus.SUCCEEDED || payment.checkoutUrl === 'CREATING') continue;
         if (payment.providerPaymentId &&
           !(await this.paymongo.expireCheckoutSession(payment.providerPaymentId))) continue;
         await this.prisma.$transaction(async (tx) => {
+          await lockFeaturedPricing(tx);
           const changed = await tx.featuredListing.updateMany({
             where: { id: listing.id, status: FeaturedListingStatus.PENDING },
             data: { status: FeaturedListingStatus.CANCELLED },
           });
           if (changed.count) {
+            const remaining = await tx.featuredListing.count({ where: { vendorId: listing.vendorId,
+              placement: FeaturedListingPlacement.MARKETPLACE_HOME, status: { in: ['PENDING', 'ACTIVE'] } } });
+            if (!remaining) await tx.featuredIntroClaim.deleteMany({ where: { vendorId: listing.vendorId, consumedAt: null } });
             const failed = await tx.payment.findMany({
               where: { featuredListingId: listing.id, status: PaymentStatus.PENDING },
               select: { id: true },

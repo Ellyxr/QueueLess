@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   UseGuards,
@@ -32,6 +33,19 @@ export class GroupOrdersController {
   constructor(
     private readonly groupOrdersService: GroupOrdersService,
   ) {}
+
+  @Post(':groupOrderId/leave')
+  @Roles('BUYER')
+  leave(@CurrentUser() user: { sub: string }, @Param('groupOrderId', ParseUUIDPipe) id: string) {
+    return this.groupOrdersService.removeMember(user.sub, id, user.sub, false);
+  }
+
+  @Delete(':groupOrderId/members/:userId')
+  @Roles('BUYER')
+  kick(@CurrentUser() user: { sub: string }, @Param('groupOrderId', ParseUUIDPipe) id: string,
+    @Param('userId', ParseUUIDPipe) memberId: string) {
+    return this.groupOrdersService.removeMember(user.sub, id, memberId, true);
+  }
 
   @Post()
   @Roles('BUYER')

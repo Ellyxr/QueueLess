@@ -9,6 +9,8 @@ datasource db {
 }
 
 model User {
+  vendorReportResponses ReportVendorResponse[] @relation("VendorReportAuthor")
+  vendorReportReviews ReportVendorResponse[] @relation("VendorReportReviewer")
   vendorApplications VendorApplication[]
   vendorApplicationDocuments VendorApplicationDocument[]
   wallet Wallet?
@@ -107,6 +109,8 @@ model RefreshToken {
 }
 
 model Vendor {
+  featuredIntroClaim FeaturedIntroClaim?
+  reportResponses ReportVendorResponse[]
   applications VendorApplication[]
   id                       String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   ownerUserId              String                       @unique @db.Uuid
@@ -569,6 +573,8 @@ model Refund {
 }
 
 model VendorLedgerEntry {
+  featuredListingId String? @unique @db.Uuid
+  featuredListing FeaturedListing? @relation(fields: [featuredListingId], references: [id], onDelete: Restrict)
   id        String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   vendorId  String          @db.Uuid
   orderId   String?         @unique @db.Uuid
@@ -676,6 +682,8 @@ model FeeAssessment {
 }
 
 model Report {
+  vendorNotice String?
+  vendorResponses ReportVendorResponse[]
   id                 String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   reporterUserId     String                @db.Uuid
   targetType         String?               @db.VarChar(20)
@@ -758,7 +766,34 @@ model VendorSubscription {
   @@map("vendor_subscriptions")
 }
 
+model FeaturedListingSettings {
+  id Int @id @default(1)
+  monthlyPrice Decimal @default(100) @db.Decimal(10, 2)
+  firstVendorDiscount Int @default(30)
+  secondVendorDiscount Int @default(20)
+  thirdVendorDiscount Int @default(10)
+  discountOnRenewals Boolean @default(true)
+  version Int @default(1)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  @@map("featured_listing_settings")
+}
+
+model FeaturedIntroClaim {
+  vendorId String @id @db.Uuid
+  rank Int @unique
+  consumedAt DateTime? @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  @@map("featured_intro_claims")
+}
+
 model FeaturedListing {
+  durationDaysSnapshot Int?
+  durationMonthsSnapshot Int?
+  settingsVersion Int?
+  purchaseKey String? @db.VarChar(255)
+  purchaseFingerprint String?
+  ledgerEntry VendorLedgerEntry?
   id              String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   vendorId        String                   @db.Uuid
   productId       String?                  @db.Uuid
@@ -779,6 +814,7 @@ model FeaturedListing {
   @@index([vendorId])
   @@index([productId])
   @@index([placement, status, endDate])
+  @@unique([vendorId, purchaseKey])
   @@map("featured_listings")
 }
 
@@ -814,6 +850,8 @@ model Deal {
 }
 
 model FeaturedListingPlan {
+  durationMonths Int?
+  managedMonthly Boolean @default(false)
   id           String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name         String                   @unique
   placement    FeaturedListingPlacement
@@ -1158,4 +1196,25 @@ model VendorApplication {
   @@index([studentUserId, createdAt])
   @@index([status, createdAt])
   @@map("vendor_applications")
+}
+
+model ReportVendorResponse {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reportId String @db.Uuid
+  vendorId String @db.Uuid
+  authorUserId String @db.Uuid
+  kind String @db.VarChar(10)
+  body String @db.VarChar(2000)
+  status String @default("PENDING") @db.VarChar(10)
+  reviewedByUserId String? @db.Uuid
+  reviewNote String? @db.VarChar(2000)
+  reviewedAt DateTime? @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  author User @relation("VendorReportAuthor", fields: [authorUserId], references: [id], onDelete: NoAction)
+  reviewer User? @relation("VendorReportReviewer", fields: [reviewedByUserId], references: [id], onDelete: NoAction)
+  report Report @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  @@unique([reportId, vendorId, kind])
+  @@index([vendorId, createdAt])
+  @@map("report_vendor_responses")
 }

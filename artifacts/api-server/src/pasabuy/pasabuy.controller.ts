@@ -27,7 +27,7 @@ import { UpsertPasabuyProfileDto } from './dto/upsert-pasabuy-profile.dto';
 import { PasabuyService } from './pasabuy.service';
 import { PasabuyCreationService } from './pasabuy-creation.service';
 import { PasabuyPaymentsService } from './pasabuy-payments.service';
-import { CreatePasabuyRequestDto } from './dto/create-pasabuy-request.dto';
+import { CreatePasabuyRequestDto, PreviewPasabuyRequestDto } from './dto/create-pasabuy-request.dto';
 import { PasabuyWorkflowsService } from './pasabuy-workflows.service';
 import { CancelPasabuyDto, ReportPasabuyDto, VerifyPasabuyPickupDto } from './dto/pasabuy-workflow.dto';
 import { PasabuyIdentityService } from './pasabuy-identity.service';
@@ -45,6 +45,12 @@ export class PasabuyController {
     private readonly workflows: PasabuyWorkflowsService,
     private readonly identity: PasabuyIdentityService,
   ) {}
+
+  @Post('requests/preview')
+  @ApiOperation({ summary: 'Preview distance, fee and the 270 metre caution for your paid order' })
+  previewRequest(@CurrentUser() user: JwtPayload, @Body() dto: PreviewPasabuyRequestDto) {
+    return this.creation.preview(user.sub, dto);
+  }
 
   @Post('requests')
   @ApiOperation({ summary: 'Create a Pasabuy request for an eligible paid order' })
