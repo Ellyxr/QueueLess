@@ -110,6 +110,7 @@ export class OrdersService {
               id: dto.cartId,
               userId,
               status: 'ACTIVE',
+              groupOrderId: null,
             },
             include: {
               vendor: true,

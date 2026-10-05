@@ -80,6 +80,8 @@ export class ReportsService {
       where: { id },
       select: {
         ...reportSummary,
+        vendorNotice: true,
+        vendorResponses: { orderBy: { createdAt: 'asc' } },
         reportedVendor: { select: { id: true, name: true } },
         reportedUser: { select: { id: true, fullName: true } },
         reportedOrder: { select: { id: true, status: true } },
@@ -110,15 +112,12 @@ export class ReportsService {
     if (dto.status !== ReportStatus.IN_REVIEW && !note) {
       throw new BadRequestException('A resolution or dismissal note is required');
     }
-    const current = await this.prisma.report.findUnique({
-      where: { id }, select: { status: true },
-    });
-    if (!current) throw new NotFoundException('Report not found');
-    if (!allowedTransitions[current.status].includes(dto.status)) {
-      throw new ConflictException(`Report cannot transition from ${current.status} to ${dto.status}`);
-    }
-
     await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM reports WHERE id = ${id}::uuid FOR UPDATE`;
+      const current = await tx.report.findUnique({ where: { id }, select: { status: true } });
+      if (!current) throw new NotFoundException('Report not found');
+      if (!allowedTransitions[current.status].includes(dto.status))
+        throw new ConflictException(`Report cannot transition from ${current.status} to ${dto.status}`);
       const updated = await tx.report.updateMany({
         where: { id, status: current.status },
         data: { status: dto.status },

@@ -41,6 +41,7 @@ export class CartsService {
         userId,
         vendorId: product.vendorId,
         status: 'ACTIVE',
+        groupOrderId: null,
       },
     });
 
