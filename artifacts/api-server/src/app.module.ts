@@ -1,3 +1,4 @@
+import { VendorApplicationsModule } from './vendor-applications/vendor-applications.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -34,6 +35,7 @@ import { DealsModule } from './deals/deals.module';
     PaymentsModule,
     RealtimeModule,
     UsersModule,
+    VendorApplicationsModule,
     VendorsModule,
     ProductsModule,
     EventsModule,

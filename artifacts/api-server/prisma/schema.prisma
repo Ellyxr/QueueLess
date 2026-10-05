@@ -9,6 +9,8 @@ datasource db {
 }
 
 model User {
+  vendorApplications VendorApplication[]
+  vendorApplicationDocuments VendorApplicationDocument[]
   wallet Wallet?
   id                              String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email                           String                  @unique
@@ -105,6 +107,7 @@ model RefreshToken {
 }
 
 model Vendor {
+  applications VendorApplication[]
   id                       String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   ownerUserId              String                       @unique @db.Uuid
   name                     String
@@ -722,6 +725,9 @@ model ReportStatusHistory {
 }
 
 model SubscriptionPlan {
+  studentApplicationEnabled Boolean @default(false)
+  durationMonths Int?
+  applications VendorApplication[]
   id                  String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name                String               @unique
   price               Decimal              @db.Decimal(10, 2)
@@ -734,6 +740,7 @@ model SubscriptionPlan {
 }
 
 model VendorSubscription {
+  application VendorApplication?
   id        String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   vendorId  String                   @db.Uuid
   planId    String                   @db.Uuid
@@ -1079,4 +1086,76 @@ model WalletEntry {
   refund Refund? @relation(fields: [refundId], references: [id], onDelete: Restrict)
   @@index([userId, createdAt])
   @@map("wallet_entries")
+}
+
+
+enum VendorApplicationStatus {
+  PENDING_REVIEW
+  REJECTED
+  AWAITING_CONTRACT
+  CONTRACT_SUBMITTED
+  CONTRACT_REJECTED
+  CONTRACT_EXPIRED
+  PAYMENT_PROCESSING
+  PAYMENT_FAILED
+  ACTIVE
+}
+
+enum VendorApplicationDocumentKind {
+  VALID_ID
+  ID_SELFIE
+  SIGNED_CONTRACT
+}
+
+model VendorApplicationDocument {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerUserId String @db.Uuid
+  kind VendorApplicationDocumentKind
+  fileId String @unique
+  privatePath String
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  owner User @relation(fields: [ownerUserId], references: [id])
+  validIdFor VendorApplication? @relation("ApplicationValidId")
+  selfieFor VendorApplication? @relation("ApplicationSelfie")
+  contractFor VendorApplication? @relation("ApplicationContract")
+  @@index([ownerUserId, createdAt])
+  @@map("vendor_application_documents")
+}
+
+model VendorApplication {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  studentUserId String @db.Uuid
+  businessName String @db.VarChar(100)
+  foodCategory String @db.VarChar(100)
+  validIdDocumentId String @unique @db.Uuid
+  idSelfieDocumentId String @unique @db.Uuid
+  signedContractDocumentId String? @unique @db.Uuid
+  bankDetailsEncrypted String
+  bankAccountLast4 String @db.VarChar(4)
+  planId String @db.Uuid
+  quotedPrice Decimal @db.Decimal(10,2)
+  quotedDurationDays Int
+  quotedDurationMonths Int?
+  termsVersion String
+  termsAcceptedAt DateTime @db.Timestamptz(6)
+  status VendorApplicationStatus @default(PENDING_REVIEW)
+  rejectionReason String?
+  contractRejectionReason String?
+  paymentFailureReason String?
+  contractDueAt DateTime? @db.Timestamptz(6)
+  contractVerifiedAt DateTime? @db.Timestamptz(6)
+  vendorId String? @db.Uuid
+  subscriptionId String? @unique @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  student User @relation(fields: [studentUserId], references: [id])
+  plan SubscriptionPlan @relation(fields: [planId], references: [id])
+  vendor Vendor? @relation(fields: [vendorId], references: [id])
+  subscription VendorSubscription? @relation(fields: [subscriptionId], references: [id])
+  validIdDocument VendorApplicationDocument @relation("ApplicationValidId", fields: [validIdDocumentId], references: [id])
+  idSelfieDocument VendorApplicationDocument @relation("ApplicationSelfie", fields: [idSelfieDocumentId], references: [id])
+  signedContractDocument VendorApplicationDocument? @relation("ApplicationContract", fields: [signedContractDocumentId], references: [id])
+  @@index([studentUserId, createdAt])
+  @@index([status, createdAt])
+  @@map("vendor_applications")
 }
