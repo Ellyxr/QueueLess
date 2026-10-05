@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { FeaturedListingPlacement } from '@prisma/client';
+import { FeaturedListingPlacement, FeaturedListingStatus } from '@prisma/client';
+import { Type } from 'class-transformer';
 import { IsBoolean, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, ValidateIf, IsUUID, IsUrl, Max, MaxLength, Min, MinLength } from 'class-validator';
 
 const provided = (_: object, value: unknown) => value !== undefined;
@@ -60,6 +61,32 @@ export class ListFeaturedDto {
   @ApiPropertyOptional({ enum: FeaturedListingPlacement })
   @IsOptional() @IsEnum(FeaturedListingPlacement)
   placement?: FeaturedListingPlacement;
+}
+
+export class ListAdminFeaturedListingsDto {
+  @ApiPropertyOptional({ default: 1, minimum: 1 })
+  @Type(() => Number) @IsInt() @Min(1) @Max(Number.MAX_SAFE_INTEGER)
+  page: number = 1;
+
+  @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 100 })
+  @Type(() => Number) @IsInt() @Min(1) @Max(100)
+  limit: number = 20;
+
+  @ApiPropertyOptional({ enum: FeaturedListingStatus })
+  @ValidateIf(provided) @IsEnum(FeaturedListingStatus)
+  status?: FeaturedListingStatus;
+
+  @ApiPropertyOptional({ enum: FeaturedListingPlacement })
+  @ValidateIf(provided) @IsEnum(FeaturedListingPlacement)
+  placement?: FeaturedListingPlacement;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @ValidateIf(provided) @IsUUID()
+  vendorId?: string;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @ValidateIf(provided) @IsUUID()
+  planId?: string;
 }
 
 export class UpdateFeaturedSettingsDto {
