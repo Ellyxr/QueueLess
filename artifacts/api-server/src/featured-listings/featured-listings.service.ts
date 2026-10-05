@@ -3,7 +3,7 @@ import { Interval } from '@nestjs/schedule';
 import { FeaturedListingPlacement, FeaturedListingStatus, LedgerEntryType, PaymentProvider, PaymentPurpose, PaymentStatus, Prisma, VendorStatus } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PaymongoService } from '../payments/paymongo.service';
-import { CreateFeaturedListingDto, CreateFeaturedPlanDto, UpdateFeaturedSettingsDto, UpdateFeaturedPlanDto } from './dto/featured-listing.dto';
+import { CreateFeaturedListingDto, CreateFeaturedPlanDto, ListAdminFeaturedListingsDto, UpdateFeaturedSettingsDto, UpdateFeaturedPlanDto } from './dto/featured-listing.dto';
 
 import { discountedPrice, listingEndDate, lockFeaturedPricing, lockVendorWallet } from './featured-pricing.policy';
 import { createHash } from 'crypto';
@@ -21,6 +21,38 @@ export class FeaturedListingsService {
   }
 
   allPlans() { return this.prisma.featuredListingPlan.findMany({ orderBy: [{ placement: 'asc' }, { durationMonths: 'asc' }, { price: 'asc' }] }); }
+
+  async adminListings(query: ListAdminFeaturedListingsDto) {
+    const { page, limit, status, placement, vendorId, planId } = query;
+    const skip = (page - 1) * limit;
+    if (!Number.isSafeInteger(skip) || skip > 2147483647) throw new BadRequestException('Page is too large');
+    const where: Prisma.FeaturedListingWhereInput = {
+      ...(status !== undefined ? { status } : {}),
+      ...(placement !== undefined ? { placement } : {}),
+      ...(vendorId !== undefined ? { vendorId } : {}),
+      ...(planId !== undefined ? { planId } : {}),
+    };
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.featuredListing.findMany({
+        where, skip, take: limit, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: {
+          id: true, vendorId: true, productId: true, planId: true, placement: true,
+          status: true, createdAt: true, startDate: true, endDate: true,
+          pricePaid: true, discountPercent: true, imageUrl: true,
+          durationDaysSnapshot: true, durationMonthsSnapshot: true, settingsVersion: true,
+          vendor: { select: { id: true, name: true, status: true, vendorType: true } },
+          product: { select: { id: true, name: true, isAvailable: true } },
+          plan: { select: { id: true, name: true, isActive: true, managedMonthly: true,
+            price: true, durationDays: true, durationMonths: true } },
+          payments: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], select: {
+            id: true, provider: true, status: true, amount: true, currency: true, createdAt: true,
+          } },
+        },
+      }),
+      this.prisma.featuredListing.count({ where }),
+    ], { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+    return { items, total, page, limit };
+  }
 
   settings() { return this.prisma.featuredListingSettings.findUniqueOrThrow({ where: { id: 1 } }); }
 
@@ -233,6 +265,57 @@ export class FeaturedListingsService {
     return { listingId: result.listing.id, paymentId: result.payment.id, amount: result.payment.amount.toFixed(2),
       currency: 'PHP', status: result.listing.status, discountPercent: result.listing.discountPercent,
       walletBalance: result.balance.toFixed(2), idempotentReplay: result.replay };
+  }
+
+  async cancel(userId: string, id: string) {
+    const vendor = await this.ownedVendor(userId);
+    const result = await this.prisma.$transaction(async tx => {
+      await lockFeaturedPricing(tx);
+      const listing = await tx.featuredListing.findFirst({
+        where: { id, vendorId: vendor.id },
+        include: { payments: { select: { provider: true, providerPaymentId: true, checkoutUrl: true } } },
+      });
+      if (!listing) throw new NotFoundException('Featured listing not found');
+      if (listing.status === FeaturedListingStatus.CANCELLED)
+        return { listing, replay: true };
+      if (listing.status !== FeaturedListingStatus.PENDING && listing.status !== FeaturedListingStatus.ACTIVE)
+        throw new ConflictException('Only pending or active featured listings can be cancelled');
+      if (listing.status === FeaturedListingStatus.PENDING && listing.payments.some(payment => payment.checkoutUrl === 'CREATING'))
+        throw new ConflictException('Checkout creation is unresolved; reconcile it before cancelling');
+      const changed = await tx.featuredListing.updateMany({
+        where: { id, vendorId: vendor.id, status: listing.status },
+        data: { status: FeaturedListingStatus.CANCELLED },
+      });
+      if (!changed.count) throw new ConflictException('Listing changed; reload before cancelling');
+      const remaining = await tx.featuredListing.count({ where: {
+        vendorId: vendor.id, placement: FeaturedListingPlacement.MARKETPLACE_HOME,
+        status: { in: [FeaturedListingStatus.PENDING, FeaturedListingStatus.ACTIVE] },
+      } });
+      if (!remaining) await tx.featuredIntroClaim.deleteMany({ where: { vendorId: vendor.id, consumedAt: null } });
+      // Keep pending payments pending: a late verified payment must reach the automatic refund path.
+      // Paid payments and vendor ledger entries are retained; cancellation is not a refund.
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'FEATURED_LISTING_CANCELLED',
+        entityType: 'FeaturedListing', entityId: id,
+        beforeState: { status: listing.status },
+        afterState: { status: FeaturedListingStatus.CANCELLED, source: 'VENDOR', automaticRefund: false },
+      } });
+      return { listing, replay: false };
+    }, { maxWait: 10000, timeout: 30000 });
+    // Provider I/O happens after committing cancellation, outside the database lock.
+    if (result.listing.status === FeaturedListingStatus.PENDING) {
+      for (const payment of result.listing.payments) {
+        if (payment.provider !== PaymentProvider.PAYMONGO || !payment.providerPaymentId) continue;
+        try {
+          if (!(await this.paymongo.expireCheckoutSession(payment.providerPaymentId)))
+            this.logger.warn(`Cancelled listing ${id}: checkout may already be paid; awaiting reconciliation`);
+        } catch {
+          this.logger.warn(`Cancelled listing ${id}: provider checkout expiry failed; awaiting reconciliation`);
+        }
+      }
+    }
+    return { listingId: id, status: FeaturedListingStatus.CANCELLED,
+      idempotentReplay: result.replay, automaticRefund: false };
   }
 
   async checkout(userId: string, id: string) {
