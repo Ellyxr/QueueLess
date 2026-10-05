@@ -1,3 +1,5 @@
+import { activateStudentApplication } from '../vendor-applications/activate-student-application';
+import { subscriptionEnd } from '../vendor-applications/vendor-application.policy';
 import { WalletService } from '../wallet/wallet.service';
 import {
   BadRequestException,
@@ -885,8 +887,8 @@ export class PaymentsService {
       const subscriptionId = payment.vendorSubscriptionId;
       const result = await this.prisma.$transaction(async (tx) => {
         const current = await tx.vendorSubscription.findUnique({
-          where: { id: subscriptionId }, include: { plan: true,
-            vendor: { select: { status: true } } },
+          where: { id: subscriptionId }, include: { plan: true, application: true,
+            vendor: { select: { status: true, ownerUserId: true } } },
         });
         if (!current) throw new NotFoundException('Vendor subscription not found');
         if (payment.status === PaymentStatus.SUCCEEDED && current.status === 'ACTIVE') {
@@ -905,11 +907,15 @@ export class PaymentsService {
           afterState: { status: PaymentStatus.SUCCEEDED, source: 'PAYMONGO_WEBHOOK' },
         } });
         const now = new Date();
-        const activated = await tx.vendorSubscription.updateMany({
+        const application = current.application;
+        const applicationActivated = await activateStudentApplication(tx, current, payment.id);
+        const activated = (!application || applicationActivated) ? await tx.vendorSubscription.updateMany({
           where: { id: subscriptionId, status: 'PENDING', vendor: { status: 'ACTIVE' } },
           data: { status: 'ACTIVE', startDate: now,
-            endDate: new Date(now.getTime() + current.plan.durationDays * 86_400_000) },
-        });
+            endDate: subscriptionEnd(now, application?.quotedDurationDays ?? current.plan.durationDays,
+              application?.quotedDurationMonths ?? current.plan.durationMonths) },
+        }) : { count: 0 };
+        if (applicationActivated && !activated.count) throw new ConflictException('Subscription changed during activation');
         if (activated.count) await tx.auditRecord.create({ data: {
           actorUserId: null, actionType: 'SUBSCRIPTION_STATUS_UPDATED',
           entityType: 'VendorSubscription', entityId: subscriptionId,
@@ -917,7 +923,7 @@ export class PaymentsService {
           afterState: { status: 'ACTIVE', paymentId: payment.id },
         } });
         return { duplicate: false, autoRefund: !activated.count };
-      });
+      }, { maxWait: 10_000, timeout: 30_000 });
       if (result.duplicate) await this.refundsService.retryPendingAutoRefunds(payment.id);
       if (result.autoRefund) await this.refundsService.autoRefundPayment(payment.id,
         'SUBSCRIPTION_CHECKOUT_EXPIRED', 'Subscription payment arrived after checkout expiry.');
