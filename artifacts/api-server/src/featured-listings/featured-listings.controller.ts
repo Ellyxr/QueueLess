@@ -4,7 +4,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { CreateFeaturedListingDto, CreateFeaturedPlanDto, ListFeaturedDto, UpdateFeaturedSettingsDto, UpdateFeaturedPlanDto } from './dto/featured-listing.dto';
+import { CreateFeaturedListingDto, CreateFeaturedPlanDto, ListFeaturedDto, ListAdminFeaturedListingsDto, UpdateFeaturedSettingsDto, UpdateFeaturedPlanDto } from './dto/featured-listing.dto';
 import { FeaturedListingsService } from './featured-listings.service';
 
 @ApiTags('featured-listings')
@@ -19,6 +19,13 @@ export class FeaturedListingsController {
   @Get('plans/all')
   @UseGuards(JwtAuthGuard, RolesGuard) @Roles('ADMIN') @ApiBearerAuth()
   allPlans() { return this.featured.allPlans(); }
+
+  @Get('all')
+  @UseGuards(JwtAuthGuard, RolesGuard) @Roles('ADMIN') @ApiBearerAuth()
+  @ApiOperation({ summary: 'List all vendors featured listing purchases, including pending and expired listings' })
+  all(@Query() query: ListAdminFeaturedListingsDto) {
+    return this.featured.adminListings(query);
+  }
 
   @Get('settings')
   @UseGuards(JwtAuthGuard, RolesGuard) @Roles('ADMIN') @ApiBearerAuth()
@@ -66,6 +73,13 @@ export class FeaturedListingsController {
   create(@CurrentUser() user: { sub: string }, @Body() dto: CreateFeaturedListingDto,
     @Headers('idempotency-key') key?: string) {
     return this.featured.create(user.sub, dto, key);
+  }
+
+  @Post(':id/cancel')
+  @UseGuards(JwtAuthGuard, RolesGuard) @Roles('VENDOR_OWNER') @ApiBearerAuth()
+  @ApiOperation({ summary: 'Cancel your pending or active featured listing; no automatic refund of a paid promotion' })
+  cancel(@CurrentUser() user: { sub: string }, @Param('id', ParseUUIDPipe) id: string) {
+    return this.featured.cancel(user.sub, id);
   }
 
   @Post(':id/checkout')
