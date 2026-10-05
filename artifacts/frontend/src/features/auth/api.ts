@@ -1564,3 +1564,116 @@ export function getAdminTransactionSummary(
     `/admin/transactions/summary${query ? `?${query}` : ""}`,
   );
 }
+
+export interface AdminOperationalReportPeriod {
+  from: string;
+  to: string;
+  timezone: string;
+}
+
+export interface AdminOperationalVendorStatus {
+  currentStatus: string;
+  count: number;
+}
+
+export interface AdminOperationalOrderStatus {
+  currentStatus: string;
+  count: number;
+  recordedOrderAmount: string;
+  recordedMarketplaceFee: string;
+}
+
+export interface AdminOperationalPaymentGroup {
+  purpose: string;
+  currentStatus: string;
+  currency: string;
+  count: number;
+  amount: string;
+}
+
+export interface AdminOperationalReportStatus {
+  currentStatus: string;
+  count: number;
+}
+
+export interface AdminOperationalRefundStatus {
+  currentStatus: string;
+  count: number;
+  requestedAmount: string;
+}
+
+export interface AdminOperationalAssessedFee {
+  type: string;
+  ruleVersion: string;
+  count: number;
+  amount: string;
+}
+
+export interface AdminOperationalSummary {
+  period: AdminOperationalReportPeriod;
+  newUsers: number;
+  newVendors: AdminOperationalVendorStatus[];
+  orders: AdminOperationalOrderStatus[];
+  payments: AdminOperationalPaymentGroup[];
+  reports: AdminOperationalReportStatus[];
+  refunds: AdminOperationalRefundStatus[];
+  assessedFees: AdminOperationalAssessedFee[];
+}
+
+export interface AdminOperationalDailyItem {
+  day: string;
+  users: number;
+  vendors: number;
+  orders: number;
+  payments: number;
+  reports: number;
+  refunds: number;
+}
+
+export interface AdminOperationalDailyResponse {
+  period: AdminOperationalReportPeriod;
+  items: AdminOperationalDailyItem[];
+}
+
+export interface AdminOperationalReportFilters {
+  from?: string;
+  to?: string;
+}
+
+function buildOperationalReportQuery(
+  filters: AdminOperationalReportFilters = {},
+): string {
+  const params = new URLSearchParams();
+
+  if (filters.from) {
+    params.set("from", filters.from);
+  }
+
+  if (filters.to) {
+    params.set("to", filters.to);
+  }
+
+  const query = params.toString();
+
+  return query ? `?${query}` : "";
+}
+
+export function getAdminOperationalSummary(
+  filters: AdminOperationalReportFilters = {},
+): Promise<AdminOperationalSummary> {
+  const query = buildOperationalReportQuery(filters);
+
+  return fetchWithAuth(
+    `/admin/operational-reports/summary${query}`,
+  );
+}
+
+export function getAdminOperationalDaily(
+  filters: AdminOperationalReportFilters = {},
+): Promise<AdminOperationalDailyResponse> {
+  const query = buildOperationalReportQuery(filters);
+
+  return fetchWithAuth(
+    `/admin/operational-reports/daily${query}`,
+  );
+}
