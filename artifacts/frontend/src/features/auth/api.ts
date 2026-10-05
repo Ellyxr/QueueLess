@@ -1399,3 +1399,168 @@ export function updateAdminVendorStatus(
     }),
   });
 }
+
+export type AdminTransactionStatus =
+  | "PENDING"
+  | "SUCCEEDED"
+  | "FAILED";
+
+export type AdminTransactionPurpose =
+  | "WALLET_TOPUP"
+  | "ORDER_SHARE"
+  | "PASABUY"
+  | "SUBSCRIPTION"
+  | "FEATURED_LISTING";
+
+export type AdminTransactionProvider =
+  | "PAYMONGO"
+  | "WALLET";
+
+export interface AdminTransactionRow {
+  id: string;
+  purpose: AdminTransactionPurpose;
+  status: AdminTransactionStatus;
+  amount: number | string;
+  currency: string;
+  provider: AdminTransactionProvider;
+  createdAt: string;
+  updatedAt: string;
+
+  payer: {
+    id: string;
+    fullName: string;
+  };
+
+  paymentShares: Array<{
+    id: string;
+    status: string;
+    amountDue: number | string;
+    order: {
+      id: string;
+      status: string;
+      vendor: {
+        id: string;
+        name: string;
+      };
+    };
+  }>;
+
+  pasabuyRequest: {
+    id: string;
+    status: string;
+    relatedOrderId: string | null;
+    relatedOrder: {
+      vendor: {
+        id: string;
+        name: string;
+      };
+    } | null;
+  } | null;
+
+  vendorSubscription: {
+    id: string;
+    status: string;
+    vendor: {
+      id: string;
+      name: string;
+    };
+  } | null;
+
+  featuredListing: {
+    id: string;
+    status: string;
+    placement: string;
+    vendor: {
+      id: string;
+      name: string;
+    };
+  } | null;
+}
+
+export interface AdminTransactionListResponse {
+  items: AdminTransactionRow[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface AdminTransactionFilters {
+  status?: AdminTransactionStatus;
+  purpose?: AdminTransactionPurpose;
+  provider?: AdminTransactionProvider;
+  orderId?: string;
+  vendorId?: string;
+  payerUserId?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface AdminTransactionSummaryGroup {
+  purpose: AdminTransactionPurpose;
+  status: AdminTransactionStatus;
+  currency: string;
+  count: number;
+  amount: number | string;
+}
+
+export interface AdminTransactionSummary {
+  total: number;
+  groups: AdminTransactionSummaryGroup[];
+}
+
+export interface AdminTransactionDetail extends AdminTransactionRow {
+  [key: string]: unknown;
+}
+
+export function listAdminTransactions(
+  filters: AdminTransactionFilters = {},
+): Promise<AdminTransactionListResponse> {
+  const params = new URLSearchParams();
+
+  if (filters.status) params.set("status", filters.status);
+  if (filters.purpose) params.set("purpose", filters.purpose);
+  if (filters.provider) params.set("provider", filters.provider);
+  if (filters.orderId) params.set("orderId", filters.orderId);
+  if (filters.vendorId) params.set("vendorId", filters.vendorId);
+  if (filters.payerUserId) params.set("payerUserId", filters.payerUserId);
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
+  if (filters.page) params.set("page", String(filters.page));
+  if (filters.limit) params.set("limit", String(filters.limit));
+
+  const query = params.toString();
+
+  return fetchWithAuth(
+    `/admin/transactions${query ? `?${query}` : ""}`,
+  );
+}
+
+export function getAdminTransaction(
+  transactionId: string,
+): Promise<AdminTransactionDetail> {
+  return fetchWithAuth(`/admin/transactions/${transactionId}`);
+}
+
+export function getAdminTransactionSummary(
+  filters: Omit<AdminTransactionFilters, "page" | "limit"> = {},
+): Promise<AdminTransactionSummary> {
+  const params = new URLSearchParams();
+
+  if (filters.status) params.set("status", filters.status);
+  if (filters.purpose) params.set("purpose", filters.purpose);
+  if (filters.provider) params.set("provider", filters.provider);
+  if (filters.orderId) params.set("orderId", filters.orderId);
+  if (filters.vendorId) params.set("vendorId", filters.vendorId);
+  if (filters.payerUserId) params.set("payerUserId", filters.payerUserId);
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
+
+  const query = params.toString();
+
+  return fetchWithAuth(
+    `/admin/transactions/summary${query ? `?${query}` : ""}`,
+  );
+}
