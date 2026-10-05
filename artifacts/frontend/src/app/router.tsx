@@ -17,6 +17,7 @@ import AdminDashboardPage from '@/features/admin/admin-dashboard';
 import AdminRefundsPage from '@/features/admin/admin-refunds';
 import AdminReportsPage from '@/features/admin/admin-reports';
 import AdminUsersPage from '@/features/admin/admin-users';
+import AdminTransactionsPage from "@/features/admin/admin-transactions";
 import AdminVendorApplicationsPage from '@/features/admin/admin-vendor-applications';
 import PasabuyPage from '@/features/pasabuy/pasabuy-page';
 import ReportsPage from "@/features/reports/reports-page";
@@ -130,6 +131,7 @@ export function AppRouter() {
             <Route path="/vendor/promotion" component={VendorPromotionPage} />
             <Route path="/admin" component={AdminDashboardPage} />
             <Route path="/admin/refunds" component={AdminRefundsPage} />
+            <Route path="/admin/transactions" component={AdminTransactionsPage} />
             <Route path="/admin/reports" component={AdminReportsPage} />
             <Route path="/admin/users" component={AdminUsersPage} />
             <Route path="/admin/vendor-applications" component={AdminVendorApplicationsPage} />
