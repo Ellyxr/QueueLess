@@ -47,6 +47,16 @@ export class ImagekitService {
     return this.imagekit.url({ path, signed: true, expireSeconds: 300 });
   }
 
+  async uploadPrivateVendorDocument(id: string, file: Buffer, extension: string) {
+    const result = await this.imagekit.upload({ file, fileName: `${id}.${extension}`,
+      folder: '/vendor-application-documents', useUniqueFileName: true, isPrivateFile: true });
+    return { fileId: result.fileId, path: result.filePath };
+  }
+
+  signedVendorDocumentUrl(path: string) {
+    return this.imagekit.url({ path, signed: true, expireSeconds: 300 });
+  }
+
   async deletePrivateFile(fileId: string) {
     await this.imagekit.deleteFile(fileId);
   }

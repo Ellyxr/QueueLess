@@ -100,7 +100,11 @@ export class SubscriptionsService {
 
   async checkout(userId: string, id: string) {
     const vendor = await this.ownedVendor(userId);
-    if (vendor.status !== VendorStatus.ACTIVE) throw new ConflictException('Vendor is not active');
+    const application = await this.prisma.vendorApplication.findUnique({ where: { subscriptionId: id } });
+    const applicationCheckout = application && application.studentUserId === userId &&
+      application.contractVerifiedAt && application.status === 'PAYMENT_PROCESSING' &&
+      vendor.status === VendorStatus.PENDING_APPROVAL;
+    if (vendor.status !== VendorStatus.ACTIVE && !applicationCheckout) throw new ConflictException('Vendor is not eligible for checkout');
     const subscription = await this.prisma.vendorSubscription.findFirst({
       where: { id, vendorId: vendor.id }, include: { plan: true, payments: true },
     });
@@ -134,7 +138,7 @@ export class SubscriptionsService {
       } });
       return this.checkoutResponse(subscription.id, payment.id, payment.amount, result.checkoutUrl, false);
     } catch (error) {
-      await this.prisma.payment.updateMany({
+      if (!application) await this.prisma.payment.updateMany({
         where: { id: payment.id, checkoutUrl: 'CREATING', providerPaymentId: null },
         data: { checkoutUrl: null },
       });
@@ -187,21 +191,31 @@ export class SubscriptionsService {
     const stale = await this.prisma.vendorSubscription.findMany({
       where: { status: VendorSubscriptionStatus.PENDING,
         createdAt: { lte: new Date(Date.now() - 30 * 60_000) } },
-      select: { id: true, payments: { select: { id: true, providerPaymentId: true, status: true } } },
+      select: { id: true, payments: { select: { id: true, providerPaymentId: true, status: true, checkoutUrl: true } } },
       take: 50,
     });
     for (const subscription of stale) {
       try {
         const payment = subscription.payments[0];
-        if (!payment || payment.status === PaymentStatus.SUCCEEDED) continue;
+        if (!payment || payment.status === PaymentStatus.SUCCEEDED || payment.checkoutUrl === 'CREATING') continue;
         if (payment.providerPaymentId &&
           !(await this.paymongo.expireCheckoutSession(payment.providerPaymentId))) continue;
         await this.prisma.$transaction(async (tx) => {
+          const linkedApplication = await tx.vendorApplication.findUnique({ where: { subscriptionId: subscription.id } });
+          if (linkedApplication) await tx.$queryRaw`SELECT id FROM vendor_applications WHERE id = ${linkedApplication.id}::uuid FOR UPDATE`;
           const changed = await tx.vendorSubscription.updateMany({
             where: { id: subscription.id, status: VendorSubscriptionStatus.PENDING },
             data: { status: VendorSubscriptionStatus.CANCELLED },
           });
           if (changed.count) {
+            const application = await tx.vendorApplication.findUnique({ where: { subscriptionId: subscription.id } });
+            if (application && ['PAYMENT_PROCESSING', 'PAYMENT_FAILED'].includes(application.status)) {
+              await tx.vendorApplication.update({ where: { id: application.id }, data: {
+                status: 'PAYMENT_FAILED', paymentFailureReason: 'Checkout expired. Retry payment.' } });
+              await tx.auditRecord.create({ data: { actorUserId: null, actionType: 'VENDOR_APPLICATION_PAYMENT_FAILED',
+                entityType: 'VendorApplication', entityId: application.id, beforeState: { status: application.status },
+                afterState: { status: 'PAYMENT_FAILED', source: 'CHECKOUT_EXPIRED' } } });
+            }
             const failed = await tx.payment.findMany({
               where: { vendorSubscriptionId: subscription.id, status: PaymentStatus.PENDING },
               select: { id: true },

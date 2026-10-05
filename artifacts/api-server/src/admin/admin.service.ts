@@ -163,6 +163,14 @@ export class AdminService {
         throw new ConflictException('Vendor owner needs an active account and vendor role');
       }
 
+      if (status === VendorStatus.ACTIVE) {
+        const application = await tx.vendorApplication.findFirst({ where: { vendorId }, orderBy: { createdAt: 'desc' } });
+        if (application && (application.status !== 'ACTIVE' || !application.contractVerifiedAt ||
+            !application.subscriptionId || !(await tx.vendorSubscription.count({ where: {
+              id: application.subscriptionId, status: 'ACTIVE', endDate: { gt: new Date() } } })))) {
+          throw new ConflictException('Application requires verified contract and paid subscription');
+        }
+      }
       const updated = await tx.vendor.updateMany({
         where: { id: vendorId, status: vendor.status },
         data: { status },
