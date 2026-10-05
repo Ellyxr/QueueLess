@@ -1,3 +1,4 @@
+import { lockVendorWallet } from '../featured-listings/featured-pricing.policy';
 import {
   BadRequestException,
   ConflictException,
@@ -544,6 +545,12 @@ export class VendorsService {
 
     try {
       const payout = await this.prisma.$transaction(async (tx) => {
+        await lockVendorWallet(tx, vendor.id);
+        const replay = await tx.payout.findUnique({ where: { idempotencyKey: normalizedKey } });
+        if (replay) {
+          if (replay.vendorId !== vendor.id) throw new ConflictException('Idempotency-Key belongs to another vendor');
+          return replay;
+        }
         const balance = await this.sumLedgerBalance(vendor.id, tx);
 
         if (balance.lessThanOrEqualTo(0)) {
@@ -567,8 +574,10 @@ export class VendorsService {
           },
         });
 
+        await tx.auditRecord.create({ data: { actorUserId: ownerUserId, actionType: 'VENDOR_PAYOUT_RESERVED',
+          entityType: 'Payout', entityId: created.id, afterState: { vendorId: vendor.id, amount: balance.toFixed(2) } } });
         return created;
-      });
+      }, { maxWait: 10000, timeout: 30000 });
 
       return { id: payout.id, amount: payout.amount.toFixed(2), status: payout.status };
     } catch (error) {
@@ -581,6 +590,7 @@ export class VendorsService {
         });
 
         if (replay) {
+          if (replay.vendorId !== vendor.id) throw new ConflictException('Idempotency-Key belongs to another vendor');
           return { id: replay.id, amount: replay.amount.toFixed(2), status: replay.status };
         }
 
