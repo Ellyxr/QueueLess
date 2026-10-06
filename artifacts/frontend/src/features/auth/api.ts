@@ -535,25 +535,111 @@ export function getMyFeaturedListings(): Promise<MyFeaturedListing[]> {
   return fetchWithAuth("/featured-listings/mine");
 }
 
+export interface AdminFeaturedListing {
+  id: string;
+  vendorId: string;
+  productId: string | null;
+  planId: string;
+  placement: FeaturedListingPlacement;
+  status: FeaturedListingStatus;
+  createdAt: string;
+  startDate: string | null;
+  endDate: string | null;
+  pricePaid: string | number | null;
+  discountPercent: number;
+  imageUrl: string | null;
+  durationDaysSnapshot: number | null;
+  durationMonthsSnapshot: number | null;
+  settingsVersion: number;
+
+  vendor: {
+    id: string;
+    name: string;
+    status: string;
+    vendorType: string;
+  };
+
+  product: {
+    id: string;
+    name: string;
+    isAvailable: boolean;
+  } | null;
+
+  plan: {
+    id: string;
+    name: string;
+    isActive: boolean;
+    managedMonthly: boolean;
+    price: string | number;
+    durationDays: number | null;
+    durationMonths: number | null;
+  };
+
+  payments: {
+    id: string;
+    provider: string;
+    status: string;
+    amount: string | number;
+    currency: string;
+    createdAt: string;
+  }[];
+}
+
+export interface AdminFeaturedListingsResponse {
+  items: AdminFeaturedListing[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export function listAdminFeaturedListings(
+  page = 1,
+  limit = 20,
+): Promise<AdminFeaturedListingsResponse> {
+  return fetchWithAuth(
+    `/featured-listings/all?page=${page}&limit=${limit}`,
+  );
+}
+
 export function listFeaturedListings(placement: FeaturedListingPlacement): Promise<PublicFeaturedListing[]> {
   return fetchWithAuth(`/featured-listings?placement=${placement}`);
 }
 
 export function createFeaturedListing(data: CreateFeaturedListingInput): Promise<FeaturedListingCheckoutResponse> {
-  return fetchWithAuth("/featured-listings", { method: "POST", body: JSON.stringify(data) });
+  return fetchWithAuth("/featured-listings", {
+    method: "POST",
+    headers: {
+      "Idempotency-Key": crypto.randomUUID(),
+    },
+    body: JSON.stringify(data),
+  });
 }
 
 export function checkoutFeaturedListing(id: string): Promise<FeaturedListingCheckoutResponse> {
   return fetchWithAuth(`/featured-listings/${id}/checkout`, { method: "POST" });
 }
 
+export function cancelFeaturedListing(
+  id: string,
+): Promise<{ listingId: string; status: string }> {
+  return fetchWithAuth(`/featured-listings/${id}/cancel`, {
+    method: "POST",
+  });
+}
+
 export async function uploadPromotionImage(file: File): Promise<ImagekitUploadResult> {
   const auth = await getImagekitAuth();
+
+  const publicKey = import.meta.env.VITE_IMAGEKIT_PUBLIC_KEY;
+
+  if (!publicKey) {
+    throw new Error("ImageKit public key is missing.");
+  }
 
   const form = new FormData();
   form.append("file", file);
   form.append("fileName", file.name);
-  form.append("publicKey", import.meta.env.VITE_IMAGEKIT_PUBLIC_KEY);
+  form.append("publicKey", publicKey);
   form.append("signature", auth.signature);
   form.append("expire", String(auth.expire));
   form.append("token", auth.token);
@@ -564,13 +650,20 @@ export async function uploadPromotionImage(file: File): Promise<ImagekitUploadRe
     body: form,
   });
 
+  const result = await response.json().catch(() => ({}));
+
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.message || "Image upload failed.");
+    throw new Error(
+      result.message ||
+      result.help ||
+      `Image upload failed (${response.status}).`,
+    );
   }
 
-  const result = await response.json();
-  return { url: result.url, fileId: result.fileId };
+  return {
+    url: result.url,
+    fileId: result.fileId,
+  };
 }
 
 export type RefundCategory =
@@ -1676,4 +1769,73 @@ export function getAdminOperationalDaily(
   return fetchWithAuth(
     `/admin/operational-reports/daily${query}`,
   );
+}
+
+
+export interface CreateFeaturedListingPlanInput {
+  name: string;
+  placement: FeaturedListingPlacement;
+  price: number;
+  durationDays: number;
+}
+
+export interface UpdateFeaturedListingPlanInput {
+  isActive?: boolean;
+  name?: string;
+  price?: number;
+  durationDays?: number;
+}
+
+export function listFeaturedListingPlans(): Promise<FeaturedListingPlan[]> {
+  return fetchWithAuth("/featured-listings/plans");
+}
+
+export function createFeaturedListingPlan(
+  input: CreateFeaturedListingPlanInput,
+): Promise<FeaturedListingPlan> {
+  return fetchWithAuth("/featured-listings/plans", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateFeaturedListingPlan(
+  planId: string,
+  input: UpdateFeaturedListingPlanInput,
+): Promise<FeaturedListingPlan> {
+  return fetchWithAuth(`/featured-listings/plans/${planId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export interface FeaturedListingSettings {
+  monthlyPrice: number | string;
+  firstVendorDiscount: number | string;
+  secondVendorDiscount: number | string;
+  thirdVendorDiscount: number | string;
+  discountOnRenewals: number | string;
+  version: number;
+}
+
+export interface UpdateFeaturedListingSettingsInput {
+  monthlyPrice: number;
+  firstVendorDiscount: number;
+  secondVendorDiscount: number;
+  thirdVendorDiscount: number;
+  discountOnRenewals: boolean;
+  version: number;
+}
+
+export function getFeaturedListingSettings(): Promise<FeaturedListingSettings> {
+  return fetchWithAuth("/featured-listings/settings");
+}
+
+export function updateFeaturedListingSettings(
+  input: UpdateFeaturedListingSettingsInput,
+): Promise<FeaturedListingSettings> {
+  return fetchWithAuth("/featured-listings/settings", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
 }
