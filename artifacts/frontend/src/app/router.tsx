@@ -19,6 +19,7 @@ import AdminReportsPage from '@/features/admin/admin-reports';
 import AdminUsersPage from '@/features/admin/admin-users';
 import AdminTransactionsPage from "@/features/admin/admin-transactions";
 import AdminVendorApplicationsPage from '@/features/admin/admin-vendor-applications';
+import AdminFeaturedListingsPage from '@/features/admin/admin-featured-listings';
 import PasabuyPage from '@/features/pasabuy/pasabuy-page';
 import ReportsPage from "@/features/reports/reports-page";
 import { useLocation } from 'wouter';
@@ -135,6 +136,7 @@ export function AppRouter() {
             <Route path="/admin/reports" component={AdminReportsPage} />
             <Route path="/admin/users" component={AdminUsersPage} />
             <Route path="/admin/vendor-applications" component={AdminVendorApplicationsPage} />
+            <Route path="/admin/featured-listings" component={AdminFeaturedListingsPage} />
             <Route component={NotFound} />
           </Switch>
         </RoutedErrorBoundary>

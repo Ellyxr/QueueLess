@@ -38,6 +38,7 @@ import { useRequireAuth } from '@/hooks/use-require-auth';
 import {
   createDeal,
   createFeaturedListing,
+  cancelFeaturedListing,
   deleteDeal,
   getMyFeaturedListings,
   getMyProfile,
@@ -94,6 +95,29 @@ export default function VendorPromotionPage() {
     listMyDeals().then(setDeals).catch(() => {});
     getMyFeaturedListings().then(setMyFeaturedListings).catch(() => {});
     getVendorDashboard().then((d) => setWalletBalance(d.ledgerBalance)).catch(() => {});
+  };
+
+  const handleCancelFeaturedListing = async (listingId: string) => {
+    try {
+      await cancelFeaturedListing(listingId);
+
+      setMyFeaturedListings((prev) =>
+        prev.map((listing) =>
+          listing.id === listingId
+            ? { ...listing, status: "CANCELLED" }
+            : listing,
+        ),
+      );
+
+      showToast("Featured listing cancelled.");
+    } catch (error: unknown) {
+      showToast(
+        error instanceof Error
+          ? error.message
+          : "Unable to cancel featured listing.",
+        "error",
+      );
+    }
   };
 
   useEffect(() => {
@@ -391,7 +415,23 @@ export default function VendorPromotionPage() {
                       {listing.pricePaid && ` · ₱${Number(listing.pricePaid).toLocaleString('en-PH')} paid`}
                     </p>
                   </div>
-                  <Badge variant={listing.status === 'ACTIVE' ? 'default' : 'secondary'}>{listing.status}</Badge>
+                  
+                  <div className="flex items-center gap-2">
+                    <Badge variant={listing.status === 'ACTIVE' ? 'default' : 'secondary'}>
+                      {listing.status}
+                    </Badge>
+
+                    {(listing.status === 'ACTIVE' || listing.status === 'PENDING') && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleCancelFeaturedListing(listing.id)}
+                      >
+                        Cancel
+                      </Button>
+                    )}
+                  </div>
+                  
                 </CardContent>
               </Card>
             ))}
