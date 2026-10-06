@@ -1,6 +1,6 @@
 import { type ReactNode } from "react";
 import { useLocation } from "wouter";
-import { FileText, LayoutDashboard, ReceiptText, Store, Users, CreditCard } from "lucide-react";
+import { FileText, LayoutDashboard, ReceiptText, Store, Users, CreditCard, Megaphone } from "lucide-react";
 import { useRequireAuth } from "@/hooks/use-require-auth";
 
 
@@ -10,6 +10,7 @@ const TABS = [
   { label: "Transactions", href: "/admin/transactions", icon: CreditCard },
   { label: "Users", href: "/admin/users", icon: Users },
   { label: "Vendor applications", href: "/admin/vendor-applications", icon: Store },
+  { label: "Featured Listings", href: "/admin/featured-listings", icon: Megaphone },
   { label: "Reports", href: "/admin/reports", icon: FileText },
 ];
 
