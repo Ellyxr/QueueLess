@@ -121,6 +121,7 @@ test('reschedule: new pickup, ready time and queue release; history and audit re
   const order = h.state().order;
   assert.equal(result.rescheduled, true);
   assert.deepEqual([order.scheduledPickupAt, order.estimatedReadyAt, order.queueReleaseAt], [TUE('13:30'), TUE('13:30'), TUE('13:00')]);
+  assert.deepEqual(order.pickupWindowEndsAt, TUE('16:00'), 'US-062: the new window closes at 16:00');
   assert.equal(order.status, 'SCHEDULED');
   assert.deepEqual(h.state().history, [{ orderId: 'order-1', status: 'SCHEDULED', changedByUserId: 'student',
     note: 'Pickup rescheduled by the student from 2026-10-13T00:00:00.000Z to 2026-10-13T05:30:00.000Z' }]);
