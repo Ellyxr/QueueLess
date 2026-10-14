@@ -13,6 +13,7 @@ model User {
   vendorReportReviews ReportVendorResponse[] @relation("VendorReportReviewer")
   vendorApplications VendorApplication[]
   vendorApplicationDocuments VendorApplicationDocument[]
+  orderReviews OrderReview[]
   wallet Wallet?
   id                              String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email                           String                  @unique
@@ -112,6 +113,7 @@ model Vendor {
   featuredIntroClaim FeaturedIntroClaim?
   reportResponses ReportVendorResponse[]
   applications VendorApplication[]
+  orderReviews OrderReview[]
   id                       String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   ownerUserId              String                       @unique @db.Uuid
   name                     String
@@ -372,6 +374,7 @@ model Order {
   idempotencyKeys    OrderIdempotencyKey[]
   items              OrderItem[]
   statusHistory      OrderStatusHistory[]
+  review             OrderReview?
   carts              Cart[]
   customer           User                  @relation("OrderCustomer", fields: [customerId], references: [id])
   event              Event?                @relation(fields: [eventId], references: [id])
@@ -1233,4 +1236,25 @@ model ReportVendorResponse {
   @@unique([reportId, vendorId, kind])
   @@index([vendorId, createdAt])
   @@map("report_vendor_responses")
+}
+
+/// US-063: a student's review of a picked-up order. One per order; the rating
+/// is also checked 1-5 by a database constraint (see the migration).
+model OrderReview {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId        String   @unique @db.Uuid
+  reviewerUserId String   @db.Uuid
+  vendorId       String   @db.Uuid
+  rating         Int      @db.SmallInt
+  comment        String?  @db.VarChar(1000)
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(6)
+
+  order    Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  reviewer User   @relation(fields: [reviewerUserId], references: [id])
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId, createdAt])
+  @@index([reviewerUserId])
+  @@map("order_reviews")
 }
