@@ -272,3 +272,110 @@ export function preorderPickupStatus(
   );
   return { ...status, hasPickupWindows: true };
 }
+
+// ------------------------------------------------------------------ US-056
+
+export interface UpcomingWindow {
+  dayOfWeek: Weekday;
+  /** Manila calendar date, YYYY-MM-DD. */
+  date: string;
+  openTime: string;
+  closeTime: string;
+  /** Exact instants (UTC ISO when serialized) of the window's start and end. */
+  opensAt: Date;
+  closesAt: Date;
+  isOpenNow: boolean;
+  label: string;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function manilaDate(now: Date): string {
+  // en-CA formats as YYYY-MM-DD.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: MANILA_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(now);
+}
+
+function dayLabel(offset: number, date: string, dayOfWeek: Weekday): string {
+  if (offset === 0) return 'Today';
+  if (offset === 1) return 'Tomorrow';
+  const [, month, day] = date.split('-').map(Number);
+  const monthName = new Date(Date.UTC(2000, month - 1, 1)).toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+  return `${capitalize(dayOfWeek)}, ${monthName} ${day}`;
+}
+
+/**
+ * The next `limit` concrete windows (Asia/Manila) that have not ended yet,
+ * starting with one in progress, looking up to a week ahead. Manila has no
+ * DST, so each window maps to exact instants with a fixed +08:00 offset.
+ */
+export function upcomingWindows(
+  windows: PreorderWindow[],
+  now: Date = new Date(),
+  limit = 3,
+): UpcomingWindow[] {
+  const enabled = windows.filter((w) => w.isEnabled && w.openTime && w.closeTime);
+  if (!enabled.length) return [];
+
+  const today = manilaDate(now);
+  const todayMidnight = new Date(`${today}T00:00:00+08:00`).getTime();
+  const { dayOfWeek: todayName } = getManilaClock(now);
+  const todayIndex = FULL_WEEK.indexOf(todayName);
+  const result: UpcomingWindow[] = [];
+
+  for (let offset = 0; offset <= 7 && result.length < limit; offset += 1) {
+    const name = FULL_WEEK[(todayIndex + offset) % 7];
+    if (name === 'SUNDAY') continue;
+    const date = manilaDate(new Date(todayMidnight + offset * DAY_MS + 12 * 60 * 60 * 1000));
+
+    for (const window of sortWindows(enabled.filter((w) => w.dayOfWeek === name))) {
+      const opensAt = new Date(`${date}T${window.openTime}:00+08:00`);
+      const closesAt = new Date(`${date}T${window.closeTime}:00+08:00`);
+      if (closesAt <= now) continue;
+      result.push({
+        dayOfWeek: name,
+        date,
+        openTime: window.openTime!,
+        closeTime: window.closeTime!,
+        opensAt,
+        closesAt,
+        isOpenNow: opensAt <= now,
+        label: `${dayLabel(offset, date, name)}, ${formatTimeLabel(window.openTime!)} - ${formatTimeLabel(window.closeTime!)}`,
+      });
+      if (result.length === limit) break;
+    }
+  }
+  return result;
+}
+
+/**
+ * US-056: what a student sees on a storefront about reserving. A vendor
+ * accepts preorders whenever preorders are on and pickup hours exist, even
+ * while the store itself is closed.
+ */
+export function storefrontPreorderInfo(
+  vendor: PreorderScheduleSource & { preorderEnabled: boolean },
+  now: Date = new Date(),
+) {
+  const windows = resolvePreorderWindows(vendor);
+  const acceptingPreorders = vendor.preorderEnabled && hasPickupWindows(windows);
+  const nextPickupWindows = acceptingPreorders ? upcomingWindows(windows, now) : [];
+  return {
+    enabled: vendor.preorderEnabled,
+    acceptingPreorders,
+    pickupOpenNow: nextPickupWindows[0]?.isOpenNow ?? false,
+    nextPickupLabel: nextPickupWindows[0]?.label ?? null,
+    nextPickupWindows,
+  };
+}
+
+/** When the store next opens (null while open, or with no hours set). */
+export function nextStoreOpening(days: AvailabilityDay[], now: Date = new Date()): Date | null {
+  const [next] = upcomingWindows(
+    days.map((d) => ({ dayOfWeek: d.dayOfWeek, isEnabled: d.isOpen, openTime: d.openTime, closeTime: d.closeTime })),
+    now,
+    1,
+  );
+  return next && !next.isOpenNow ? next.opensAt : null;
+}
