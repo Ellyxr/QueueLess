@@ -139,6 +139,21 @@ export class OrdersController {
     return this.ordersService.getCustomerOrders(user.sub);
   }
 
+  @Get('ready-for-pickup')
+  @UseGuards(RolesGuard)
+  @Roles('BUYER')
+  @ApiOperation({
+    summary:
+      'Orders ready for the authenticated student to collect (own, group member, or Pasabuy fulfiller), for buzzer recovery after reconnect',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Ready orders with the same eventId/readyAt as the order.ready socket event',
+  })
+  async getReadyForPickup(@CurrentUser() user: JwtPayload) {
+    return this.ordersService.getReadyForPickup(user.sub);
+  }
+
   @Get(':orderId/status')
   @UseGuards(RolesGuard)
   @Roles('BUYER')
