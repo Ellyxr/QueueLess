@@ -12,6 +12,7 @@ import type { UserRole } from '../auth/roles';
 import { UpdateVendorDto } from './dto/update-vendor.dto';
 import { UpdateVendorPreorderAvailabilityDto } from './dto/update-vendor-preorder-availability.dto';
 import { UpdateVendorAvailabilityDto } from './dto/update-vendor-availability.dto';
+import { summarizeRatings } from '../reviews/review-summary';
 import {
   MANILA_TZ,
   computeAvailabilityStatus,
@@ -157,6 +158,14 @@ export class VendorsService {
     const { isOpenNow, nextAvailableLabel } = computeAvailabilityStatus(availability, now);
     const schedule = { preorderSameAsStoreHours, preorderAvailability, availability };
 
+    // US-064: rating summary for the Reviews tab header.
+    const ratingGroups = await this.prisma.orderReview.groupBy({
+      by: ['rating'],
+      where: { vendorId: vendor.id },
+      _count: { _all: true },
+    });
+    const { averageRating, totalReviews } = summarizeRatings(ratingGroups);
+
     return {
       ...rest,
       favoritesCount: _count.favoritedBy,
@@ -171,6 +180,7 @@ export class VendorsService {
       timezone: MANILA_TZ,
       nextOpenAt: isOpenNow ? null : nextStoreOpening(availability, now),
       preorder: storefrontPreorderInfo({ ...schedule, preorderEnabled: vendor.preorderEnabled }, now),
+      reviewSummary: { averageRating, totalReviews },
     };
   }
 
