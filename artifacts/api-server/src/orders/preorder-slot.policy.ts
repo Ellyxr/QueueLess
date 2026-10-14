@@ -111,21 +111,52 @@ export function isReservationExpired(
  * prep lead time needs it (slot - leadMinutes). E.g. window 07:00-10:00,
  * slot 08:00, lead 30 -> 07:00; window 07:00-10:00, slot 07:15, lead 30 -> 06:45.
  */
-export function queueReleaseAt(slot: Date, windows: PreorderWindow[], leadMinutes: number): Date {
+// The pickup window (Asia/Manila) a slot falls in, as exact start/end instants.
+function containingWindow(slot: Date, windows: PreorderWindow[]): { start: Date; end: Date } | null {
   const { dayOfWeek, timeMinutes } = getManilaClock(slot);
-  const containing = windows.find(
-    (window) =>
-      window.isEnabled &&
-      window.dayOfWeek === dayOfWeek &&
-      window.openTime &&
-      window.closeTime &&
-      timeMinutes >= toMinutes(window.openTime) &&
-      timeMinutes < toMinutes(window.closeTime),
+  const window = windows.find(
+    (w) =>
+      w.isEnabled &&
+      w.dayOfWeek === dayOfWeek &&
+      w.openTime &&
+      w.closeTime &&
+      timeMinutes >= toMinutes(w.openTime) &&
+      timeMinutes < toMinutes(w.closeTime),
   );
+  if (!window) return null;
+  return {
+    start: new Date(slot.getTime() - (timeMinutes - toMinutes(window.openTime!)) * MINUTE_MS),
+    end: new Date(slot.getTime() + (toMinutes(window.closeTime!) - timeMinutes) * MINUTE_MS),
+  };
+}
+
+export function queueReleaseAt(slot: Date, windows: PreorderWindow[], leadMinutes: number): Date {
   const leadStart = slot.getTime() - leadMinutes * MINUTE_MS;
-  if (!containing) return new Date(leadStart);
-  const windowStart = slot.getTime() - (timeMinutes - toMinutes(containing.openTime!)) * MINUTE_MS;
-  return new Date(Math.min(windowStart, leadStart));
+  const window = containingWindow(slot, windows);
+  return new Date(window ? Math.min(window.start.getTime(), leadStart) : leadStart);
+}
+
+/** US-062: close of the pickup window a slot was booked into (the slot if none). */
+export function pickupWindowEndsAt(slot: Date, windows: PreorderWindow[]): Date {
+  return containingWindow(slot, windows)?.end ?? slot;
+}
+
+// US-062: how long after the pickup window closes a ready preorder may still
+// be collected before it is flagged UNCOLLECTED.
+export const DEFAULT_PREORDER_PICKUP_GRACE_MINUTES = 30;
+
+export function preorderPickupGraceMinutes(env: NodeJS.ProcessEnv = process.env): number {
+  const configured = Number(env.PREORDER_PICKUP_GRACE_MINUTES);
+  return Number.isInteger(configured) && configured >= 0 ? configured : DEFAULT_PREORDER_PICKUP_GRACE_MINUTES;
+}
+
+/** US-062: when an uncollected ready preorder is flagged. */
+export function uncollectedAfter(
+  order: { pickupWindowEndsAt: Date | null; scheduledPickupAt: Date | null },
+  graceMinutes = preorderPickupGraceMinutes(),
+): Date | null {
+  const end = order.pickupWindowEndsAt ?? order.scheduledPickupAt;
+  return end ? new Date(end.getTime() + graceMinutes * MINUTE_MS) : null;
 }
 
 /**

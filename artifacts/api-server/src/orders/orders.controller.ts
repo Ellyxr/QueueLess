@@ -147,6 +147,16 @@ export class OrdersController {
     return this.ordersService.getVendorScheduledOrders(user.sub);
   }
 
+  @Get('vendor/uncollected')
+  @UseGuards(RolesGuard)
+  @Roles('VENDOR_OWNER')
+  @ApiOperation({
+    summary: 'Preorders flagged UNCOLLECTED after the pickup grace period (US-062)',
+  })
+  async getVendorUncollectedOrders(@CurrentUser() user: JwtPayload) {
+    return this.ordersService.getVendorUncollectedOrders(user.sub);
+  }
+
   @Patch('vendor/:orderId/status')
   @UseGuards(RolesGuard)
   @Roles('VENDOR_OWNER')
