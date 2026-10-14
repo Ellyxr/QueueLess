@@ -80,6 +80,21 @@ export class RealtimeGateway implements OnGatewayConnection {
       updatedAt: Date;
     },
   ) {
+    try {
+      await this.publishOrderStatusUpdated(userId, payload);
+    } catch (error) {
+      // Callers publish after their transaction commits; a publish failure must
+      // not turn a committed status change into an error response.
+      this.logger.warn(
+        `Could not publish order.status.updated for ${payload.orderId}: ${String(error)}`,
+      );
+    }
+  }
+
+  private async publishOrderStatusUpdated(
+    userId: string,
+    payload: { orderId: string; status: string; updatedAt: Date },
+  ) {
     const order = await this.prisma.order.findUnique({
       where: {
         id: payload.orderId,
@@ -115,6 +130,80 @@ export class RealtimeGateway implements OnGatewayConnection {
       this.server
         .to(this.userRoom(recipientId))
         .emit('order.status.updated', payload);
+    }
+  }
+
+  // US-067: buzzer event for the student who collects the order. Called after
+  // the READY_FOR_PICKUP transaction commits. Re-reads the order so nothing is
+  // published if it has already moved on (completed/cancelled) or rolled back.
+  //   - normal order: the customer and joined group-order participants
+  //   - Pasabuy order: only the assigned fulfiller (the requester does not
+  //     collect it; they still receive order.status.updated)
+  // The vendor never receives it. eventId is the status-history id, so clients
+  // can ring once per event across tabs and reconnects.
+  async emitOrderReady(
+    orderId: string,
+    event: { eventId: string; readyAt: Date },
+  ) {
+    try {
+      const order = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: {
+          id: true,
+          status: true,
+          customerId: true,
+          isPasabuyRequest: true,
+          vendor: {
+            select: { id: true, name: true, pickupLocation: true },
+          },
+          groupOrder: {
+            select: {
+              participants: {
+                where: { status: 'JOINED' },
+                select: { userId: true },
+              },
+            },
+          },
+          pasabuyRequests: {
+            where: {
+              fulfillerUserId: { not: null },
+              status: { in: ['ACCEPTED', 'AWAITING_PAYMENT', 'PAID'] },
+            },
+            select: { fulfillerUserId: true },
+          },
+        },
+      });
+
+      if (!order || order.status !== 'READY_FOR_PICKUP') return;
+
+      const recipientIds = new Set<string>();
+      if (order.isPasabuyRequest) {
+        for (const request of order.pasabuyRequests) {
+          if (request.fulfillerUserId) recipientIds.add(request.fulfillerUserId);
+        }
+      } else {
+        recipientIds.add(order.customerId);
+        for (const participant of order.groupOrder?.participants ?? []) {
+          recipientIds.add(participant.userId);
+        }
+      }
+
+      const payload = {
+        eventId: event.eventId,
+        orderId: order.id,
+        // Same short reference the order API returns.
+        orderReference: order.id.slice(0, 8).toUpperCase(),
+        status: order.status,
+        readyAt: event.readyAt,
+        vendor: order.vendor,
+      };
+      for (const recipientId of recipientIds) {
+        this.server.to(this.userRoom(recipientId)).emit('order.ready', payload);
+      }
+    } catch (error) {
+      // The status change is already committed; the client recovers through
+      // realtime.ready + GET /orders/mine.
+      this.logger.warn(`Could not publish order.ready for ${orderId}: ${String(error)}`);
     }
   }
 
