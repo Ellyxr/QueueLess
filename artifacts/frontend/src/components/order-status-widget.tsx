@@ -129,7 +129,34 @@ const CARD_STACK_GAP = 16;
 const CARD_HEIGHT_ESTIMATE = 230;
 const MINIMIZED_TOP_OFFSET = 96;
 const MINIMIZED_STACK_GAP = 12;
-const MINIMIZED_HEIGHT_ESTIMATE = 112;
+const MINIMIZED_HEIGHT_ESTIMATE = 44;
+const DRAG_CLICK_THRESHOLD_PX = 4;
+const WIDGET_STATE_KEY = "queueless.orderWidget.state";
+
+type WidgetUiState = { minimized: boolean; x: number; y: number };
+
+// Per-session UI state (closed + dragged position) so the widget keeps its
+// place while navigating between pages.
+function readWidgetState(orderId: string): WidgetUiState {
+  try {
+    const all = JSON.parse(sessionStorage.getItem(WIDGET_STATE_KEY) || "{}");
+    const saved = all[orderId];
+    if (saved) return { minimized: Boolean(saved.minimized), x: Number(saved.x) || 0, y: Number(saved.y) || 0 };
+  } catch {
+    // storage unavailable or corrupt; fall through to defaults
+  }
+  return { minimized: false, x: 0, y: 0 };
+}
+
+function writeWidgetState(orderId: string, state: WidgetUiState) {
+  try {
+    const all = JSON.parse(sessionStorage.getItem(WIDGET_STATE_KEY) || "{}");
+    all[orderId] = state;
+    sessionStorage.setItem(WIDGET_STATE_KEY, JSON.stringify(all));
+  } catch {
+    // ignore
+  }
+}
 
 export function OrderStatusWidget() {
   const [orderIds, setOrderIds] = useState<string[]>(getTrackedOrderIds);
@@ -162,7 +189,8 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
     return () => window.clearInterval(timer);
   }, []);
   const [order, setOrder] = useState<OrderStatusResponse | null>(null);
-  const [isMinimized, setIsMinimized] = useState(false);
+  const [initialUi] = useState(() => readWidgetState(orderId));
+  const [isMinimized, setIsMinimized] = useState(initialUi.minimized);
   const [isItemsExpanded, setIsItemsExpanded] = useState(false);
   const [isCompleting, setIsCompleting] = useState(false);
   const [isPinging, setIsPinging] = useState(false);
@@ -171,9 +199,21 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
   const [refundMessage, setRefundMessage] = useState<string | null>(null);
   const [isPaying, setIsPaying] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
-  const [dragOffset2d, setDragOffset2d] = useState({ x: 0, y: 0 });
-  const dragOffset = useRef({ x: 0, y: 0 });
-  const isDragging = useRef(false);
+  const [dragOffset2d, setDragOffset2d] = useState({ x: initialUi.x, y: initialUi.y });
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const drag = useRef<{
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    rect: DOMRect;
+    moved: boolean;
+  } | null>(null);
+  const suppressClick = useRef(false);
+
+  useEffect(() => {
+    writeWidgetState(orderId, { minimized: isMinimized, x: dragOffset2d.x, y: dragOffset2d.y });
+  }, [orderId, isMinimized, dragOffset2d]);
 
   useEffect(() => {
     let cancelled = false;
@@ -204,23 +244,49 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
-      if (!isDragging.current) return;
-      setDragOffset2d({
-        x: event.clientX - dragOffset.current.x,
-        y: event.clientY - dragOffset.current.y,
-      });
+      const d = drag.current;
+      if (!d) return;
+      const dx = event.clientX - d.startX;
+      const dy = event.clientY - d.startY;
+      if (!d.moved && Math.hypot(dx, dy) < DRAG_CLICK_THRESHOLD_PX) return;
+      d.moved = true;
+      // Keep the widget fully inside the viewport.
+      const clampedDx = Math.min(Math.max(dx, -d.rect.left), window.innerWidth - d.rect.right);
+      const clampedDy = Math.min(Math.max(dy, -d.rect.top), window.innerHeight - d.rect.bottom);
+      setDragOffset2d({ x: d.originX + clampedDx, y: d.originY + clampedDy });
     };
     const stopDragging = () => {
-      isDragging.current = false;
+      if (drag.current?.moved) {
+        // The click that follows a drag must not toggle the widget.
+        suppressClick.current = true;
+        window.setTimeout(() => {
+          suppressClick.current = false;
+        }, 0);
+      }
+      drag.current = null;
     };
 
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", stopDragging);
+    window.addEventListener("pointercancel", stopDragging);
     return () => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", stopDragging);
+      window.removeEventListener("pointercancel", stopDragging);
     };
   }, []);
+
+  const startDrag = (event: React.PointerEvent) => {
+    if (!wrapperRef.current) return;
+    drag.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: dragOffset2d.x,
+      originY: dragOffset2d.y,
+      rect: wrapperRef.current.getBoundingClientRect(),
+      moved: false,
+    };
+  };
 
   const handleCompleteOrder = async () => {
     if (isCompleting) return;
@@ -276,14 +342,21 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
     : CARD_TOP_OFFSET + stackIndex * (CARD_HEIGHT_ESTIMATE + CARD_STACK_GAP);
 
   return (
+    <div
+      ref={wrapperRef}
+      className="pointer-events-none fixed right-0 z-40 touch-none"
+      style={{ top: baseTop, transform: `translate(${dragOffset2d.x}px, ${dragOffset2d.y}px)` }}
+    >
     <AnimatePresence mode="wait" initial={false}>
       {isMinimized ? (
         <motion.button
           key="minimized"
           type="button"
-          className="group pointer-events-auto fixed right-0 z-40 flex h-28 w-14 items-center justify-center overflow-hidden rounded-l-2xl border border-r-0 border-border/80 bg-card/95 shadow-xl backdrop-blur-md transition-all duration-300 hover:w-24"
-          style={{ top: baseTop, transform: `translate(${dragOffset2d.x}px, ${dragOffset2d.y}px)` }}
-          onClick={() => setIsMinimized(false)}
+          className="group pointer-events-auto relative flex h-11 w-12 cursor-grab items-center justify-center overflow-hidden rounded-l-2xl border border-r-0 border-border/80 bg-card/95 shadow-xl backdrop-blur-md transition-[width] duration-300 hover:w-24 active:cursor-grabbing"
+          onPointerDown={startDrag}
+          onClick={() => {
+            if (!suppressClick.current) setIsMinimized(false);
+          }}
           aria-label="Expand order status"
           variants={tabVariants}
           initial="hidden"
@@ -291,7 +364,7 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
           exit="exit"
         >
           <span
-            className={`absolute left-2 top-3 h-2.5 w-2.5 rounded-full transition-all duration-300 group-hover:left-3 ${dotClass}`}
+            className={`absolute left-2 top-1.5 h-2 w-2.5 rounded-full transition-all duration-300 group-hover:left-3 ${dotClass}`}
           />
           <CookingPot className="h-5 w-5 text-muted-foreground transition-opacity duration-200 group-hover:opacity-0" />
           <span className="absolute left-8 whitespace-nowrap font-mono text-[11px] font-semibold text-foreground opacity-0 transition-opacity duration-200 group-hover:opacity-100">
@@ -301,8 +374,8 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
       ) : (
         <motion.aside
           key="expanded"
-          className="pointer-events-auto fixed right-4 z-40 w-[230px] select-none rounded-[24px] border border-border/80 bg-card/95 p-4 shadow-2xl backdrop-blur-md"
-          style={{ top: baseTop, transform: `translate(${dragOffset2d.x}px, ${dragOffset2d.y}px)` }}
+          className="pointer-events-auto mr-4 w-[230px] select-none overflow-y-auto rounded-[24px] border border-border/80 bg-card/95 p-4 shadow-2xl backdrop-blur-md"
+          style={{ maxHeight: `calc(100vh - ${baseTop + 16}px)` }}
           aria-label="Order status"
           variants={widgetVariants}
           initial="hidden"
@@ -311,14 +384,7 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
         >
           <div
             className="flex cursor-grab items-center justify-between active:cursor-grabbing"
-            onPointerDown={(event) => {
-              isDragging.current = true;
-              dragOffset.current = {
-                x: event.clientX - dragOffset2d.x,
-                y: event.clientY - dragOffset2d.y,
-              };
-              event.currentTarget.setPointerCapture?.(event.pointerId);
-            }}
+            onPointerDown={startDrag}
           >
             <span className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
               <Grip className="h-3.5 w-3.5" /> Order status
@@ -326,14 +392,7 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
             <button
               type="button"
               className="rounded-full p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-              onPointerDown={(event) => {
-                event.stopPropagation();
-                if (isTerminal) {
-                  stopTrackingOrder(orderId);
-                } else {
-                  setIsMinimized(true);
-                }
-              }}
+              onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.stopPropagation();
                 if (isTerminal) {
@@ -525,5 +584,6 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
         </motion.aside>
       )}
     </AnimatePresence>
+    </div>
   );
 }
