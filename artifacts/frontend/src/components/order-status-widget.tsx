@@ -1,3 +1,4 @@
+import { io } from "socket.io-client";
 import { getOrderHelpEligibility } from "@/features/refunds/refund-eligibility";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, CookingPot, Grip, LifeBuoy, X } from "lucide-react";
@@ -12,6 +13,7 @@ import {
   confirmOrderPickup,
   contactVendor,
   createPaymentCheckout,
+  fetchWithAuth,
   getOrderStatus,
   pingGroupOrder,
   type OrderStatusResponse,
@@ -20,7 +22,6 @@ import { RefundRequestDialog } from "@/features/refunds/refund-request-dialog";
 import { PasabuyOrderEntry } from "@/features/pasabuy/pasabuy-order-entry";
 
 const REFUND_HIDDEN_STATUSES = new Set(["PENDING", "CANCELLED"]);
-
 const POLL_INTERVAL_MS = 8000;
 
 const STATUS_LABELS: Record<string, string> = {
@@ -65,7 +66,6 @@ const STATUS_PILL_CLASS: Record<string, string> = {
 
 const TERMINAL_STATUSES = new Set(["COMPLETED", "CANCELLED"]);
 
-// Stretch variants: squish in the "closing" axis first, then pop open the other.
 const widgetVariants = {
   hidden: {
     scaleX: 0.4,
@@ -124,15 +124,69 @@ const tabVariants = {
   },
 };
 
-const CARD_TOP_OFFSET = 96; // top-24
+const CARD_TOP_OFFSET = 96;
 const CARD_STACK_GAP = 16;
 const CARD_HEIGHT_ESTIMATE = 230;
 const MINIMIZED_TOP_OFFSET = 96;
 const MINIMIZED_STACK_GAP = 12;
 const MINIMIZED_HEIGHT_ESTIMATE = 112;
 
+const SEEN_READY_EVENTS_KEY = "queueless:seen-ready-event-ids";
+const BUZZER_SOUND_ENABLED_KEY = "queueless:buzzer-sound-enabled";
+const READY_BUZZER_MAX_AGE_MS = 2 * 60 * 1000;
+const MAX_SEEN_READY_EVENTS = 200;
+
 export function OrderStatusWidget() {
   const [orderIds, setOrderIds] = useState<string[]>(getTrackedOrderIds);
+  const [readyAlert, setReadyAlert] = useState<{
+    orderId: string;
+    message: string;
+  } | null>(null);
+  const [soundEnabled, setSoundEnabled] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.localStorage?.getItem(BUZZER_SOUND_ENABLED_KEY) === "true",
+  );
+  const [soundNeedsInteraction, setSoundNeedsInteraction] = useState(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const soundEnabledRef = useRef(
+    typeof window !== "undefined" &&
+      window.localStorage?.getItem(BUZZER_SOUND_ENABLED_KEY) === "true",
+  );
+
+  const enableBuzzerSound = async () => {
+    try {
+      const AudioContextClass =
+        window.AudioContext ||
+        (window as typeof window & {
+          webkitAudioContext?: typeof AudioContext;
+        }).webkitAudioContext;
+
+      if (!AudioContextClass) {
+        setSoundNeedsInteraction(true);
+        return;
+      }
+
+      audioContextRef.current ??= new AudioContextClass();
+      const context = audioContextRef.current;
+      if (context.state === "suspended") {
+        await context.resume();
+      }
+
+      soundEnabledRef.current = true;
+      localStorage.setItem(BUZZER_SOUND_ENABLED_KEY, "true");
+      setSoundEnabled(true);
+      setSoundNeedsInteraction(false);
+    } catch {
+      setSoundNeedsInteraction(true);
+    }
+  };
+
+  const muteBuzzerSound = () => {
+    soundEnabledRef.current = false;
+    localStorage.setItem(BUZZER_SOUND_ENABLED_KEY, "false");
+    setSoundEnabled(false);
+  };
 
   useEffect(() => {
     const refreshOrderIds = () => setOrderIds(getTrackedOrderIds());
@@ -144,18 +198,320 @@ export function OrderStatusWidget() {
     };
   }, []);
 
-  if (!orderIds.length) return null;
+  useEffect(() => {
+    type ReadyOrder = {
+      eventId: string;
+      orderId: string;
+      orderReference: string;
+      status: string;
+      readyAt: string;
+      vendor: {
+        id: string;
+        name: string;
+        pickupLocation?: string | null;
+      };
+      pickupRole?: string;
+    };
+
+    type RecoveryResponse = {
+      serverTime: string;
+      orders: ReadyOrder[];
+    };
+
+    let socket: ReturnType<typeof io> | null = null;
+    let disposed = false;
+    const tabId = crypto.randomUUID();
+
+    const readSeenIds = (): string[] => {
+      try {
+        const value: unknown = JSON.parse(
+          localStorage.getItem(SEEN_READY_EVENTS_KEY) ?? "[]",
+        );
+        return Array.isArray(value)
+          ? value.filter((id): id is string => typeof id === "string")
+          : [];
+      } catch {
+        return [];
+      }
+    };
+
+    const rememberEvent = (eventId: string): boolean => {
+      const seen = readSeenIds();
+      if (seen.includes(eventId)) return false;
+
+      const updated = [...seen, eventId].slice(-MAX_SEEN_READY_EVENTS);
+      try {
+        localStorage.setItem(SEEN_READY_EVENTS_KEY, JSON.stringify(updated));
+      } catch {
+        // Continue with in-memory deduplication if storage is unavailable.
+      }
+      return true;
+    };
+
+    const channel =
+      typeof BroadcastChannel !== "undefined"
+        ? new BroadcastChannel("queueless-ready-buzzer")
+        : null;
+    const tabSeenIds = new Set<string>();
+
+    channel?.addEventListener("message", (event: MessageEvent) => {
+      const data = event.data as
+        | { type?: string; eventId?: string; tabId?: string }
+        | undefined;
+
+      if (
+        data?.type === "ready-seen" &&
+        data.eventId &&
+        data.tabId !== tabId
+      ) {
+        tabSeenIds.add(data.eventId);
+      }
+    });
+
+    const markSeen = (eventId: string): boolean => {
+      if (tabSeenIds.has(eventId)) return false;
+
+      const isNew = rememberEvent(eventId);
+      if (!isNew) return false;
+
+      tabSeenIds.add(eventId);
+      channel?.postMessage({ type: "ready-seen", eventId, tabId });
+      return true;
+    };
+
+    const playBuzzer = async (): Promise<boolean> => {
+      if (!soundEnabledRef.current) return false;
+
+      try {
+        const AudioContextClass =
+          window.AudioContext ||
+          (window as typeof window & {
+            webkitAudioContext?: typeof AudioContext;
+          }).webkitAudioContext;
+
+        if (!AudioContextClass) {
+          setSoundNeedsInteraction(true);
+          return false;
+        }
+
+        audioContextRef.current ??= new AudioContextClass();
+        const context = audioContextRef.current;
+        if (context.state === "suspended") {
+          await context.resume();
+        }
+
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+
+        oscillator.type = "square";
+        oscillator.frequency.value = 880;
+        gain.gain.value = 0.08;
+
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+
+        oscillator.start();
+        oscillator.stop(context.currentTime + 0.35);
+
+        oscillator.onended = () => {
+          oscillator.disconnect();
+          gain.disconnect();
+        };
+
+        setSoundNeedsInteraction(false);
+        return true;
+      } catch {
+        setSoundNeedsInteraction(true);
+        return false;
+      }
+    };
+
+    const showReadyAlert = (order: ReadyOrder) => {
+      const vendorName = order.vendor.name;
+      const pickupLocation = order.vendor.pickupLocation;
+
+      const location = pickupLocation
+        ?.replace(new RegExp(`^${vendorName},?\\s*`, "i"), "")
+        .trim();
+
+      setReadyAlert({
+        orderId: order.orderId,
+        message: `Your order from ${vendorName}${
+          location ? ` at ${location}` : ""
+        } is ready for pickup.`,
+      });
+    };
+
+    const processReadyOrder = (
+      order: ReadyOrder,
+      options: { allowBuzzer: boolean },
+    ) => {
+      if (
+        disposed ||
+        order.status !== "READY_FOR_PICKUP" ||
+        !order.eventId ||
+        !order.orderId
+      ) {
+        return;
+      }
+
+      if (!markSeen(order.eventId)) return;
+
+      showReadyAlert(order);
+
+      if (options.allowBuzzer && soundEnabledRef.current) {
+        void playBuzzer();
+      } else if (options.allowBuzzer && !soundEnabledRef.current) {
+        setSoundNeedsInteraction(false);
+      }
+    };
+
+    const recoverReadyOrders = async () => {
+      try {
+        const result = await fetchWithAuth<RecoveryResponse>(
+          "/orders/ready-for-pickup",
+        );
+
+        if (disposed) return;
+
+        const serverTime = Date.parse(result.serverTime);
+
+        for (const order of result.orders) {
+          const readyAt = Date.parse(order.readyAt);
+          const age = serverTime - readyAt;
+
+          processReadyOrder(order, {
+            allowBuzzer:
+              Number.isFinite(serverTime) &&
+              Number.isFinite(readyAt) &&
+              age >= 0 &&
+              age <= READY_BUZZER_MAX_AGE_MS,
+          });
+        }
+      } catch {
+        // Recovery failure must not break the socket connection.
+      }
+    };
+
+    const connectSocket = () => {
+      const token = localStorage.getItem("token");
+
+      if (!token) {
+        socket?.disconnect();
+        socket = null;
+        return;
+      }
+
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL;
+      const socketOrigin = apiBaseUrl
+        ? new URL(apiBaseUrl, window.location.origin).origin
+        : "http://localhost:5000";
+
+      if (socket) {
+        socket.auth = { token };
+        if (!socket.connected) socket.connect();
+        return;
+      }
+
+      socket = io(`${socketOrigin}/realtime`, {
+        auth: { token },
+        transports: ["websocket", "polling"],
+      });
+
+      socket.on("realtime.ready", () => {
+        void recoverReadyOrders();
+      });
+
+      socket.on("order.ready", (payload: ReadyOrder) => {
+        processReadyOrder(payload, { allowBuzzer: true });
+      });
+    };
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === BUZZER_SOUND_ENABLED_KEY) {
+        soundEnabledRef.current = event.newValue === "true";
+        setSoundEnabled(soundEnabledRef.current);
+      }
+    };
+
+    connectSocket();
+    window.addEventListener(AUTH_STATE_CHANGED_EVENT, connectSocket);
+    window.addEventListener("storage", handleStorage);
+
+    return () => {
+      disposed = true;
+      window.removeEventListener(AUTH_STATE_CHANGED_EVENT, connectSocket);
+      window.removeEventListener("storage", handleStorage);
+      socket?.disconnect();
+      channel?.close();
+      if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+        void audioContextRef.current.close().catch(() => {});
+      }
+    };
+  }, []);
+
+  if (!orderIds.length && !readyAlert) return null;
 
   return (
     <>
+
+      {readyAlert && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="pointer-events-auto fixed left-1/2 top-5 z-[100] flex w-[min(92vw,420px)] -translate-x-1/2 items-center gap-3 rounded-2xl border border-emerald-500/30 bg-card p-4 shadow-2xl"
+        >
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-xl">
+            🔔
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-foreground">Order ready!</p>
+            <p className="text-sm text-muted-foreground">
+              {readyAlert.message}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setReadyAlert(null)}
+            aria-label="Dismiss order ready alert"
+            className="rounded-full p-1 text-muted-foreground hover:bg-secondary"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {orderIds.map((orderId, index) => (
-        <TrackedOrderCard key={orderId} orderId={orderId} stackIndex={index} />
+        <TrackedOrderCard
+          key={orderId}
+          orderId={orderId}
+          stackIndex={index}
+          soundEnabled={soundEnabled}
+          soundNeedsInteraction={soundNeedsInteraction}
+          onEnableSound={enableBuzzerSound}
+          onMuteSound={muteBuzzerSound}
+        />
       ))}
     </>
   );
 }
 
-function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex: number }) {
+function TrackedOrderCard({
+  orderId,
+  stackIndex,
+  soundEnabled,
+  soundNeedsInteraction,
+  onEnableSound,
+  onMuteSound,
+}: {
+  orderId: string;
+  stackIndex: number;
+  soundEnabled: boolean;
+  soundNeedsInteraction: boolean;
+  onEnableSound: () => Promise<void>;
+  onMuteSound: () => void;
+}) {
+
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -309,6 +665,7 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
           animate="visible"
           exit="exit"
         >
+          
           <div
             className="flex cursor-grab items-center justify-between active:cursor-grabbing"
             onPointerDown={(event) => {
@@ -471,16 +828,16 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
           )}
 
           {!order.refund && getOrderHelpEligibility(order, now).contactAvailable && (
-              <button type="button" disabled={isPinging || Boolean(order.buyerContactPingAt)} className="mt-3 w-full rounded-full border border-border py-2 text-xs font-semibold disabled:opacity-60" onClick={async () => {
-                setIsPinging(true);
-                try {
-                  await contactVendor(orderId);
-                  setOrder(await getOrderStatus(orderId));
-                  setRefundMessage("Vendor notified.");
-                } catch (err) { setRefundMessage(err instanceof Error ? err.message : "Could not contact vendor."); }
-                finally { setIsPinging(false); }
-              }}>{order.buyerContactPingAt ? "Vendor contacted" : "Contact vendor"}</button>
-            )}
+            <button type="button" disabled={isPinging || Boolean(order.buyerContactPingAt)} className="mt-3 w-full rounded-full border border-border py-2 text-xs font-semibold disabled:opacity-60" onClick={async () => {
+              setIsPinging(true);
+              try {
+                await contactVendor(orderId);
+                setOrder(await getOrderStatus(orderId));
+                setRefundMessage("Vendor notified.");
+              } catch (err) { setRefundMessage(err instanceof Error ? err.message : "Could not contact vendor."); }
+              finally { setIsPinging(false); }
+            }}>{order.buyerContactPingAt ? "Vendor contacted" : "Contact vendor"}</button>
+          )}
 
           {!REFUND_HIDDEN_STATUSES.has(order.status) && !order.refund && (
             <button
@@ -517,11 +874,66 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
             }}
           />
 
+          <div className="mb-3 flex items-center justify-between gap-3 rounded-xl bg-secondary/30 p-2">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-foreground">
+                Buzzer sound
+              </p>
+              <p className="text-[10px] text-muted-foreground">
+                {soundEnabled ? "Sound enabled" : "Sound muted"}
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={soundEnabled}
+              aria-label="Enable or mute order buzzer"
+              onClick={() => {
+                if (soundEnabled) {
+                  onMuteSound();
+                } else {
+                  void onEnableSound();
+                }
+              }}
+              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                soundEnabled ? "bg-primary" : "bg-muted"
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                  soundEnabled ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+
+          {soundNeedsInteraction && (
+            <div
+              role="status"
+              className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3"
+            >
+              <p className="text-xs font-medium text-foreground">
+                Buzzer sound is unavailable
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Your visual order alerts will still appear. Tap below to retry.
+              </p>
+              <button
+                type="button"
+                onClick={() => void onEnableSound()}
+                className="mt-2 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-secondary"
+              >
+                Retry sound
+              </button>
+            </div>
+          )}
+
           <img
             src="/favicon.png"
             alt="QueueLess"
             className="mx-auto mt-3 h-7 w-7 object-contain"
           />
+
         </motion.aside>
       )}
     </AnimatePresence>
