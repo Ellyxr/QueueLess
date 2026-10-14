@@ -133,7 +133,8 @@ const MINIMIZED_HEIGHT_ESTIMATE = 44;
 const DRAG_CLICK_THRESHOLD_PX = 4;
 const WIDGET_STATE_KEY = "queueless.orderWidget.state";
 
-type WidgetUiState = { minimized: boolean; x: number; y: number };
+type WidgetSide = "left" | "right";
+type WidgetUiState = { minimized: boolean; x: number; y: number; side: WidgetSide };
 
 // Per-session UI state (closed + dragged position) so the widget keeps its
 // place while navigating between pages.
@@ -141,11 +142,18 @@ function readWidgetState(orderId: string): WidgetUiState {
   try {
     const all = JSON.parse(sessionStorage.getItem(WIDGET_STATE_KEY) || "{}");
     const saved = all[orderId];
-    if (saved) return { minimized: Boolean(saved.minimized), x: Number(saved.x) || 0, y: Number(saved.y) || 0 };
+    if (saved) {
+      return {
+        minimized: Boolean(saved.minimized),
+        x: Number(saved.x) || 0,
+        y: Number(saved.y) || 0,
+        side: saved.side === "left" ? "left" : "right",
+      };
+    }
   } catch {
     // storage unavailable or corrupt; fall through to defaults
   }
-  return { minimized: false, x: 0, y: 0 };
+  return { minimized: false, x: 0, y: 0, side: "right" };
 }
 
 function writeWidgetState(orderId: string, state: WidgetUiState) {
@@ -191,6 +199,10 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
   const [order, setOrder] = useState<OrderStatusResponse | null>(null);
   const [initialUi] = useState(() => readWidgetState(orderId));
   const [isMinimized, setIsMinimized] = useState(initialUi.minimized);
+  const [side, setSide] = useState<WidgetSide>(initialUi.side);
+  const [isDragActive, setIsDragActive] = useState(false);
+  const isMinimizedRef = useRef(isMinimized);
+  isMinimizedRef.current = isMinimized;
   const [isItemsExpanded, setIsItemsExpanded] = useState(false);
   const [isCompleting, setIsCompleting] = useState(false);
   const [isPinging, setIsPinging] = useState(false);
@@ -212,8 +224,24 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
   const suppressClick = useRef(false);
 
   useEffect(() => {
-    writeWidgetState(orderId, { minimized: isMinimized, x: dragOffset2d.x, y: dragOffset2d.y });
-  }, [orderId, isMinimized, dragOffset2d]);
+    writeWidgetState(orderId, { minimized: isMinimized, x: dragOffset2d.x, y: dragOffset2d.y, side });
+  }, [orderId, isMinimized, dragOffset2d, side]);
+
+  // Attach to whichever screen edge the widget is currently closest to.
+  const snapToNearestSide = () => {
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const center = rect.left + rect.width / 2;
+    setSide(center < window.innerWidth / 2 ? "left" : "right");
+    setDragOffset2d((current) => ({ x: 0, y: current.y }));
+  };
+  const snapRef = useRef(snapToNearestSide);
+  snapRef.current = snapToNearestSide;
+
+  const minimize = () => {
+    snapToNearestSide();
+    setIsMinimized(true);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -249,6 +277,7 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
       const dx = event.clientX - d.startX;
       const dy = event.clientY - d.startY;
       if (!d.moved && Math.hypot(dx, dy) < DRAG_CLICK_THRESHOLD_PX) return;
+      if (!d.moved) setIsDragActive(true);
       d.moved = true;
       // Keep the widget fully inside the viewport.
       const clampedDx = Math.min(Math.max(dx, -d.rect.left), window.innerWidth - d.rect.right);
@@ -259,6 +288,8 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
       if (drag.current?.moved) {
         // The click that follows a drag must not toggle the widget.
         suppressClick.current = true;
+        setIsDragActive(false);
+        if (isMinimizedRef.current) snapRef.current();
         window.setTimeout(() => {
           suppressClick.current = false;
         }, 0);
@@ -344,7 +375,7 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
   return (
     <div
       ref={wrapperRef}
-      className="pointer-events-none fixed right-0 z-40 touch-none"
+      className={`pointer-events-none fixed z-40 touch-none ${side === "left" ? "left-0" : "right-0"} ${isDragActive ? "" : "transition-transform duration-300"}`}
       style={{ top: baseTop, transform: `translate(${dragOffset2d.x}px, ${dragOffset2d.y}px)` }}
     >
     <AnimatePresence mode="wait" initial={false}>
@@ -352,7 +383,7 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
         <motion.button
           key="minimized"
           type="button"
-          className="group pointer-events-auto relative flex h-11 w-12 cursor-grab items-center justify-center overflow-hidden rounded-l-2xl border border-r-0 border-border/80 bg-card/95 shadow-xl backdrop-blur-md transition-[width] duration-300 hover:w-24 active:cursor-grabbing"
+          className={`group pointer-events-auto relative flex h-11 w-14 cursor-grab items-center justify-center overflow-hidden border border-border/80 px-4 ${side === "left" ? "rounded-r-2xl border-l-0" : "rounded-l-2xl border-r-0"} bg-card/95 shadow-xl backdrop-blur-md transition-[width] duration-300 hover:w-24 active:cursor-grabbing`}
           onPointerDown={startDrag}
           onClick={() => {
             if (!suppressClick.current) setIsMinimized(false);
@@ -364,17 +395,17 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
           exit="exit"
         >
           <span
-            className={`absolute left-2 top-1.5 h-2 w-2.5 rounded-full transition-all duration-300 group-hover:left-3 ${dotClass}`}
+            className={`absolute top-1.5 h-2 w-2 rounded-full transition-all duration-300 ${side === "left" ? "right-2 group-hover:right-3" : "left-2 group-hover:left-3"} ${dotClass}`}
           />
           <CookingPot className="h-5 w-5 text-muted-foreground transition-opacity duration-200 group-hover:opacity-0" />
-          <span className="absolute left-8 whitespace-nowrap font-mono text-[11px] font-semibold text-foreground opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+          <span className={`absolute whitespace-nowrap ${side === "left" ? "left-3" : "left-8"} font-mono text-[11px] font-semibold text-foreground opacity-0 transition-opacity duration-200 group-hover:opacity-100`}>
             {label}
           </span>
         </motion.button>
       ) : (
         <motion.aside
           key="expanded"
-          className="pointer-events-auto mr-4 w-[230px] select-none overflow-y-auto rounded-[24px] border border-border/80 bg-card/95 p-4 shadow-2xl backdrop-blur-md"
+          className={`pointer-events-auto w-[230px] ${side === "left" ? "ml-4" : "mr-4"} select-none overflow-y-auto rounded-[24px] border border-border/80 bg-card/95 p-4 shadow-2xl backdrop-blur-md`}
           style={{ maxHeight: `calc(100vh - ${baseTop + 16}px)` }}
           aria-label="Order status"
           variants={widgetVariants}
@@ -398,7 +429,7 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
                 if (isTerminal) {
                   stopTrackingOrder(orderId);
                 } else {
-                  setIsMinimized(true);
+                  minimize();
                 }
               }}
               aria-label={isTerminal ? "Dismiss order status" : "Minimize order status"}
