@@ -16,6 +16,7 @@ import {
 import { PrismaService } from "../common/prisma/prisma.service";
 import { PaymongoService } from "../payments/paymongo.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
+import { isReservationExpired } from "../orders/preorder-slot.policy";
 
 @Injectable()
 export class WalletService {
@@ -279,6 +280,11 @@ export class WalletService {
         share.payment?.status === PaymentStatus.SUCCEEDED
       )
         throw new ConflictException("Order or payment share cannot be paid");
+      // US-058: checked after the order row lock, so it cannot race the expiry job.
+      if (isReservationExpired(share.order))
+        throw new ConflictException(
+          "This reservation expired before it was paid; please reserve again",
+        );
       if (share.amountDue.lte(0))
         throw new BadRequestException("Payment amount must be positive");
       const debit = await tx.wallet.updateMany({
