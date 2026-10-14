@@ -358,6 +358,8 @@ model Order {
   estimatedReadyAt   DateTime?             @db.Timestamptz(6)
   /// US-057: chosen pickup time for a preorder (inside a vendor pickup window).
   scheduledPickupAt  DateTime?             @db.Timestamptz(6)
+  /// US-058: an unpaid preorder is cancelled (RESERVATION_EXPIRED) at this time.
+  reservationExpiresAt DateTime?           @db.Timestamptz(6)
   pickupConfirmedAt  DateTime?             @db.Timestamptz(6)
   paidAt             DateTime?             @db.Timestamptz(6)
   buyerContactPingAt DateTime?             @db.Timestamptz(6)
@@ -949,6 +951,7 @@ enum CancellationReason {
   CUSTOMER_REQUEST
   CLOSING_EARLY
   AUTO_REFUND_TIMEOUT
+  RESERVATION_EXPIRED
   OTHER
 }
 

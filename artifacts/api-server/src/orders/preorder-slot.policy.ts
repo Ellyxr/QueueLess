@@ -78,6 +78,33 @@ export function validatePreorderSlot(params: {
   }
 }
 
+// US-058: how long an unpaid reservation is held.
+export const DEFAULT_PREORDER_PAYMENT_WINDOW_MINUTES = 15;
+
+export function preorderPaymentWindowMinutes(env: NodeJS.ProcessEnv = process.env): number {
+  const configured = Number(env.PREORDER_PAYMENT_WINDOW_MINUTES);
+  return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_PREORDER_PAYMENT_WINDOW_MINUTES;
+}
+
+/**
+ * When an unpaid reservation is released: after the payment window, or at
+ * the pickup time if that comes first.
+ */
+export function reservationExpiresAt(
+  createdAt: Date,
+  scheduledPickupAt: Date,
+  windowMinutes = preorderPaymentWindowMinutes(),
+): Date {
+  return new Date(Math.min(createdAt.getTime() + windowMinutes * MINUTE_MS, scheduledPickupAt.getTime()));
+}
+
+export function isReservationExpired(
+  order: { isPreorder: boolean; reservationExpiresAt: Date | null },
+  now: Date = new Date(),
+): boolean {
+  return order.isPreorder && !!order.reservationExpiresAt && order.reservationExpiresAt <= now;
+}
+
 /**
  * When the vendor-accept timeout starts: payment time for a regular order,
  * the scheduled pickup time for a preorder (a reservation made at 11 PM must
