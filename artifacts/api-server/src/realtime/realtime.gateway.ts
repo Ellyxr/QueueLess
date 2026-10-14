@@ -9,9 +9,10 @@ import * as jwt from 'jsonwebtoken';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { Logger } from '@nestjs/common';
 
+// CORS and transports come from RenderSocketIoAdapter (see main.ts), so the
+// gateway uses the same CORS_ORIGIN allow-list as the REST API.
 @WebSocketGateway({
   namespace: '/realtime',
-  cors: { origin: true },
 })
 export class RealtimeGateway implements OnGatewayConnection {
   private readonly logger = new Logger(RealtimeGateway.name);
