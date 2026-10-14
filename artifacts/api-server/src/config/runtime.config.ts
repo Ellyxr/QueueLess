@@ -3,6 +3,8 @@
 
 export interface RuntimeConfig {
   isProduction: boolean;
+  // Deployment label (staging, production, development), separate from NODE_ENV.
+  appEnv: string;
   port: number;
   host: string;
   corsOrigins: string[];
@@ -42,13 +44,17 @@ export function parsePort(raw: string | undefined): number {
   return port;
 }
 
+export function resolveAppEnv(env: NodeJS.ProcessEnv = process.env): string {
+  return env.APP_ENV?.trim() || env.NODE_ENV || 'development';
+}
+
 export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const isProduction = env.NODE_ENV === 'production';
 
   if (isProduction) {
     // Fail fast instead of booting with the development JWT fallback secret
     // or without a database.
-    const missing = ['DATABASE_URL', 'JWT_SECRET', 'CORS_ORIGIN'].filter(
+    const missing = ['DATABASE_URL', 'DIRECT_URL', 'JWT_SECRET', 'CORS_ORIGIN'].filter(
       (key) => !env[key]?.trim(),
     );
     if (missing.length) {
@@ -58,6 +64,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
 
   return {
     isProduction,
+    appEnv: resolveAppEnv(env),
     // Render injects PORT (default 10000) and routes traffic to it.
     port: parsePort(env.PORT),
     // Bind to all interfaces so Render's proxy can reach the process.
