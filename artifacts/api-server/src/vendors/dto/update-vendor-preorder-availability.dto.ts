@@ -11,6 +11,7 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Weekday } from '@prisma/client';
+import { MAX_WINDOWS_PER_DAY } from '../availability.util';
 
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -59,11 +60,13 @@ export class UpdateVendorPreorderAvailabilityDto {
   @ApiPropertyOptional({
     type: [VendorPreorderDayDto],
     description:
-      'One entry per weekday, Monday through Saturday. Required when sameAsStoreHours is false.',
+      'Pickup windows, Monday through Saturday, in Asia/Manila time. A weekday may appear ' +
+      'up to 4 times (non-overlapping windows) or once with isEnabled false. ' +
+      'Required when sameAsStoreHours is false.',
   })
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(6)
+  @ArrayMaxSize(6 * MAX_WINDOWS_PER_DAY)
   @ValidateNested({ each: true })
   @Type(() => VendorPreorderDayDto)
   days?: VendorPreorderDayDto[];
