@@ -10,7 +10,7 @@ import { UpdateReportStatusDto } from './dto/update-report-status.dto';
 
 type TargetFields = Pick<Prisma.ReportUncheckedCreateInput,
   'reportedVendorId' | 'reportedUserId' | 'reportedOrderId' |
-  'reportedPaymentId' | 'reportedProductId' | 'reportedPasabuyId'>;
+  'reportedPaymentId' | 'reportedProductId' | 'reportedPasabuyId' | 'reportedReviewId'>;
 
 const targetFilters: Record<ReportTargetType, Prisma.ReportWhereInput> = {
   VENDOR: { reportedVendorId: { not: null } },
@@ -19,6 +19,7 @@ const targetFilters: Record<ReportTargetType, Prisma.ReportWhereInput> = {
   TRANSACTION: { OR: [{ reportedPaymentId: { not: null } }, { targetType: 'TRANSACTION' }] },
   PRODUCT: { reportedProductId: { not: null } },
   PASABUY: { reportedPasabuyId: { not: null } },
+  REVIEW: { reportedReviewId: { not: null } },
 };
 
 const reportSummary = {
@@ -38,6 +39,7 @@ const reportSummary = {
   reportedPaymentId: true,
   reportedProductId: true,
   reportedPasabuyId: true,
+  reportedReviewId: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.ReportSelect;
@@ -88,6 +90,9 @@ export class ReportsService {
         reportedPayment: { select: { id: true, purpose: true, status: true } },
         reportedProduct: { select: { id: true, name: true, vendorId: true } },
         reportedPasabuy: { select: { id: true, status: true } },
+        // US-066: what the admin needs to decide whether to hide it.
+        reportedReview: { select: { id: true, orderId: true, vendorId: true, rating: true, comment: true,
+          createdAt: true, hiddenAt: true, hiddenReason: true } },
         statusHistory: {
           orderBy: [{ changedAt: 'asc' }, { id: 'asc' }],
           select: { id: true, status: true, note: true, changedAt: true, adminUserId: true },
@@ -175,7 +180,7 @@ export class ReportsService {
           id: true, targetType: true, category: true, description: true, status: true,
           reporterUserId: true, reportedVendorId: true, reportedUserId: true,
           reportedOrderId: true, reportedPaymentId: true, reportedProductId: true,
-          reportedPasabuyId: true, attachmentName: true, attachmentMimeType: true,
+          reportedPasabuyId: true, reportedReviewId: true, attachmentName: true, attachmentMimeType: true,
           attachmentSize: true, createdAt: true,
         },
         });
@@ -267,6 +272,15 @@ export class ReportsService {
         });
         if (!found) break;
         return { reportedPasabuyId: id };
+      }
+      case ReportTargetType.REVIEW: {
+        // US-066: reviews are public, so any signed-in user may report one,
+        // except their own.
+        const found = await this.prisma.orderReview.findUnique({
+          where: { id }, select: { id: true, reviewerUserId: true },
+        });
+        if (!found || found.reviewerUserId === userId) break;
+        return { reportedReviewId: id };
       }
       default:
         throw new BadRequestException('Invalid report target type');

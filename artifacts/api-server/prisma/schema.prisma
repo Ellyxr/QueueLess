@@ -13,7 +13,8 @@ model User {
   vendorReportReviews ReportVendorResponse[] @relation("VendorReportReviewer")
   vendorApplications VendorApplication[]
   vendorApplicationDocuments VendorApplicationDocument[]
-  orderReviews OrderReview[]
+  orderReviews OrderReview[] @relation("ReviewAuthor")
+  reviewsHidden OrderReview[] @relation("ReviewHiddenBy")
   wallet Wallet?
   id                              String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email                           String                  @unique
@@ -714,6 +715,8 @@ model Report {
   reportedOrderId    String?               @db.Uuid
   reportedPasabuyId  String?               @db.Uuid
   reportedPaymentId  String?               @db.Uuid
+  /// US-066: a reported review.
+  reportedReviewId   String?               @db.Uuid
   createdAt          DateTime              @default(now()) @db.Timestamptz(6)
   updatedAt          DateTime              @updatedAt @db.Timestamptz(6)
   statusHistory      ReportStatusHistory[]
@@ -723,6 +726,7 @@ model Report {
   reportedProduct    Product?              @relation("ReportTargetProduct", fields: [reportedProductId], references: [id])
   reportedUser       User?                 @relation("ReportTargetUser", fields: [reportedUserId], references: [id])
   reportedVendor     Vendor?               @relation("ReportTargetVendor", fields: [reportedVendorId], references: [id])
+  reportedReview     OrderReview?          @relation("ReportTargetReview", fields: [reportedReviewId], references: [id])
   reporter           User                  @relation("ReportReporter", fields: [reporterUserId], references: [id])
 
   @@index([reporterUserId])
@@ -1247,12 +1251,19 @@ model OrderReview {
   vendorId       String   @db.Uuid
   rating         Int      @db.SmallInt
   comment        String?  @db.VarChar(1000)
+  /// US-066: hidden by an admin (e.g. after a report). Hidden reviews are
+  /// excluded from every listing and rating aggregate.
+  hiddenAt       DateTime? @db.Timestamptz(6)
+  hiddenByUserId String?   @db.Uuid
+  hiddenReason   String?   @db.VarChar(500)
   createdAt      DateTime @default(now()) @db.Timestamptz(6)
   updatedAt      DateTime @updatedAt @db.Timestamptz(6)
 
-  order    Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  reviewer User   @relation(fields: [reviewerUserId], references: [id])
-  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  reviewer User     @relation("ReviewAuthor", fields: [reviewerUserId], references: [id])
+  hiddenBy User?    @relation("ReviewHiddenBy", fields: [hiddenByUserId], references: [id])
+  vendor   Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  reports  Report[] @relation("ReportTargetReview")
 
   @@index([vendorId, createdAt])
   @@index([reviewerUserId])
