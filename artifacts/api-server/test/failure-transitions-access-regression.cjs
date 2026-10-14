@@ -11,11 +11,12 @@ const { OrdersService } = require('../dist/orders/orders.service');
 const { JwtAuthGuard } = require('../dist/auth/jwt-auth.guard');
 const { RolesGuard } = require('../dist/auth/roles.guard');
 
-const STATUSES = ['PENDING', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'READY_FOR_PICKUP', 'COMPLETED', 'CANCELLED'];
+const STATUSES = ['PENDING', 'SCHEDULED', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'READY_FOR_PICKUP', 'COMPLETED', 'CANCELLED'];
 // The vendor-facing state machine. PAID is never settable by a vendor (only
-// the payment webhook marks an order paid).
+// the payment webhook or the US-059 release job sets it).
 const ALLOWED = {
   PENDING: ['CANCELLED'],
+  SCHEDULED: ['CANCELLED'],
   PAID: ['COOKING', 'CANCELLED'],
   COOKING: ['READY_FOR_PICKUP', 'CANCELLED'],
   OUT_FOR_DELIVERY: ['COMPLETED'],

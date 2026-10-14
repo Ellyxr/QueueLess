@@ -360,6 +360,8 @@ model Order {
   scheduledPickupAt  DateTime?             @db.Timestamptz(6)
   /// US-058: an unpaid preorder is cancelled (RESERVATION_EXPIRED) at this time.
   reservationExpiresAt DateTime?           @db.Timestamptz(6)
+  /// US-059: when a SCHEDULED preorder moves into the vendor's live queue (PAID).
+  queueReleaseAt     DateTime?             @db.Timestamptz(6)
   pickupConfirmedAt  DateTime?             @db.Timestamptz(6)
   paidAt             DateTime?             @db.Timestamptz(6)
   buyerContactPingAt DateTime?             @db.Timestamptz(6)
@@ -938,6 +940,8 @@ enum OrderType {
 
 enum OrderStatus {
   PENDING
+  /// US-059: paid preorder held outside the vendor's live queue until queueReleaseAt.
+  SCHEDULED
   PAID
   COOKING
   OUT_FOR_DELIVERY

@@ -23,7 +23,7 @@ import { PaymongoService } from './paymongo.service';
 import { RefundsService } from '../refunds/refunds.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { PasabuyPaymentsService } from '../pasabuy/pasabuy-payments.service';
-import { isReservationExpired } from '../orders/preorder-slot.policy';
+import { isReservationExpired, statusAfterPayment } from '../orders/preorder-slot.policy';
 
 @Injectable()
 export class PaymentsService {
@@ -1144,7 +1144,7 @@ export class PaymentsService {
 
       const existingOrder = await tx.order.findUnique({
         where: { id: orderId },
-        select: { status: true },
+        select: { status: true, isPreorder: true, queueReleaseAt: true },
       });
 
       if (
@@ -1190,13 +1190,17 @@ export class PaymentsService {
       | null = null;
 
       if (unpaidShares === 0) {
+        // US-059: a paid preorder is held as SCHEDULED until its release time.
+        const paidStatus = existingOrder
+          ? statusAfterPayment(existingOrder)
+          : OrderStatus.PAID;
         const orderUpdate = await tx.order.updateMany({
           where: {
             id: orderId,
             status: OrderStatus.PENDING,
           },
           data: {
-            status: OrderStatus.PAID,
+            status: paidStatus,
             paidAt: new Date(),
           },
         });
@@ -1205,16 +1209,18 @@ export class PaymentsService {
           await tx.orderStatusHistory.create({
             data: {
               orderId,
-              status: OrderStatus.PAID,
+              status: paidStatus,
               changedByUserId: null,
-              note: 'Payment confirmed by PayMongo webhook',
+              note: paidStatus === OrderStatus.SCHEDULED
+                ? 'Preorder paid via PayMongo; held until the pickup window opens'
+                : 'Payment confirmed by PayMongo webhook',
             },
           });
           await tx.auditRecord.create({ data: {
             actorUserId: null, actionType: 'ORDER_STATUS_UPDATED',
             entityType: 'Order', entityId: orderId,
             beforeState: { status: OrderStatus.PENDING },
-            afterState: { status: OrderStatus.PAID, paymentId: payment.id },
+            afterState: { status: paidStatus, paymentId: payment.id },
           } });
 
           const order = await tx.order.findUnique({
