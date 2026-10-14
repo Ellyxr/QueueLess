@@ -11,7 +11,30 @@ function getOrderIdFromQuery(): string | null {
 
 export default function PaymentCancelPage() {
   if (new URLSearchParams(window.location.search).has("walletTopupId")) return <WalletPage />;
+  const pasabuyRequestId = new URLSearchParams(window.location.search).get("pasabuyRequestId");
+  if (pasabuyRequestId) return <PasabuyPaymentCancelPage requestId={pasabuyRequestId} />;
   return <OrderPaymentCancelPage />;
+}
+
+function PasabuyPaymentCancelPage({ requestId }: { requestId: string }) {
+  return (
+    <main className="mx-auto flex min-h-[70dvh] w-full max-w-lg flex-col justify-center px-4 py-10">
+      <section className="rounded-[28px] border border-border/80 bg-card p-6 text-center shadow-md sm:p-8">
+        <div className="flex flex-col items-center gap-3 py-4">
+          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-destructive text-destructive-foreground">
+            <XCircle className="h-7 w-7" />
+          </div>
+          <p className="text-lg font-bold text-foreground">Payment cancelled</p>
+          <p className="max-w-xs text-xs text-muted-foreground">
+            Your Pasabuy fee hasn't been paid. You can pay again from your request before the payment deadline.
+          </p>
+        </div>
+        <Button className="mt-4 w-full rounded-full" onClick={() => (window.location.href = `/pasabuy/${requestId}`)}>
+          Back to Pasabuy request
+        </Button>
+      </section>
+    </main>
+  );
 }
 function OrderPaymentCancelPage() {
   const [orderId] = useState(getOrderIdFromQuery);

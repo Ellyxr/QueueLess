@@ -169,6 +169,8 @@ export interface CreatePasabuyRequestInput {
   dropoffLatitude: number;
   dropoffLongitude: number;
   termsAccepted: boolean;
+  /** Required by the backend when the dropoff is beyond the recommended radius. */
+  outsideRadiusConfirmed?: boolean;
 }
 
 /** Raw Prisma `pasabuyRequest.create()` result — includes fee/tier fields the UI shows after creation. */
@@ -195,6 +197,38 @@ export interface CreatedPasabuyRequest {
 
 export function createRequest(input: CreatePasabuyRequestInput): Promise<CreatedPasabuyRequest> {
   return fetchWithAuth("/pasabuy/requests", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export const RECOMMENDED_RADIUS_METERS = 270;
+
+/** Default pickup point (NU Laguna) that every vendor starts with. */
+export const NU_LAGUNA_LOCATION = {
+  label: "NU Laguna",
+  latitude: 14.17841,
+  longitude: 121.136249,
+};
+
+export interface PasabuyDropoffPreview {
+  distanceMeters: number;
+  recommendedRadiusMeters: number;
+  withinRecommendedRadius: boolean;
+  requiresConfirmation: boolean;
+  warning: string | null;
+  inCampus: boolean;
+  convenienceFee: string;
+  feeTier: PasabuyFeeTier;
+}
+
+/** Server-side distance check against the vendor's pickup point; nothing is created. */
+export function previewRequest(input: {
+  orderId: string;
+  dropoffLatitude: number;
+  dropoffLongitude: number;
+}): Promise<PasabuyDropoffPreview> {
+  return fetchWithAuth("/pasabuy/requests/preview", {
     method: "POST",
     body: JSON.stringify(input),
   });
