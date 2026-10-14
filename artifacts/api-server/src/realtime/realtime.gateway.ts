@@ -208,6 +208,54 @@ export class RealtimeGateway implements OnGatewayConnection {
     }
   }
 
+  // US-061: preorder lifecycle events for the student who reserved and the
+  // vendor owner, published after the change has committed:
+  //   preorder.confirmed - payment confirmed; held as SCHEDULED (or straight
+  //                        into the live queue if its release time passed)
+  //   preorder.released  - moved from SCHEDULED into the vendor's live queue
+  // The order is re-read, so nothing is sent if it is not a preorder or was
+  // cancelled meanwhile. eventId is the status-history row, for client dedupe.
+  async emitPreorderEvent(
+    event: 'preorder.confirmed' | 'preorder.released',
+    orderId: string,
+    eventId: string,
+  ) {
+    try {
+      const order = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: {
+          id: true,
+          status: true,
+          isPreorder: true,
+          customerId: true,
+          scheduledPickupAt: true,
+          queueReleaseAt: true,
+          totalAmount: true,
+          vendor: { select: { id: true, name: true, pickupLocation: true, ownerUserId: true } },
+        },
+      });
+      if (!order?.isPreorder || order.status === 'CANCELLED' || order.status === 'PENDING') return;
+
+      const { ownerUserId, ...vendor } = order.vendor;
+      const payload = {
+        eventId,
+        orderId: order.id,
+        orderReference: order.id.slice(0, 8).toUpperCase(),
+        status: order.status,
+        scheduledPickupAt: order.scheduledPickupAt,
+        queueReleaseAt: order.queueReleaseAt,
+        total: order.totalAmount.toFixed(2),
+        vendor,
+      };
+      for (const userId of new Set([order.customerId, ownerUserId])) {
+        this.server.to(this.userRoom(userId)).emit(event, payload);
+      }
+    } catch (error) {
+      // The change is already committed; clients recover on realtime.ready.
+      this.logger.warn(`Could not publish ${event} for ${orderId}: ${String(error)}`);
+    }
+  }
+
   emitNewOrder(
     vendorOwnerUserId: string,
     payload: {
