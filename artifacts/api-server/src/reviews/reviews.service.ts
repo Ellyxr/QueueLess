@@ -4,11 +4,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { OrderStatus, Prisma, VendorStatus } from '@prisma/client';
+import { OrderStatus, Prisma, ReportStatus, VendorStatus } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateReviewDto } from './dto/create-review.dto';
+import { HideReviewDto, RestoreReviewDto } from './dto/moderate-review.dto';
 import { ListVendorReviewsDto } from './dto/list-vendor-reviews.dto';
-import { reviewerDisplayName, summarizeRatings } from './review-summary';
+import { VISIBLE_REVIEW, reviewerDisplayName, summarizeRatings } from './review-summary';
 
 // US-065: vendor's own summary page.
 export const RECENT_REVIEWS_LIMIT = 5;
@@ -21,6 +22,19 @@ const REVIEW_SELECT = {
   rating: true,
   comment: true,
   createdAt: true,
+  // US-066: the author can see their own review was hidden (not why).
+  hiddenAt: true,
+} satisfies Prisma.OrderReviewSelect;
+
+const MODERATION_SELECT = {
+  id: true,
+  orderId: true,
+  vendorId: true,
+  rating: true,
+  comment: true,
+  hiddenAt: true,
+  hiddenByUserId: true,
+  hiddenReason: true,
 } satisfies Prisma.OrderReviewSelect;
 
 /**
@@ -90,11 +104,11 @@ export class ReviewsService {
     const [groups, reviews] = await Promise.all([
       this.prisma.orderReview.groupBy({
         by: ['rating'],
-        where: { vendorId },
+        where: { vendorId, ...VISIBLE_REVIEW },
         _count: { _all: true },
       }),
       this.prisma.orderReview.findMany({
-        where: { vendorId },
+        where: { vendorId, ...VISIBLE_REVIEW },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -142,16 +156,16 @@ export class ReviewsService {
     const [allTime, recentWindow, latest] = await Promise.all([
       this.prisma.orderReview.groupBy({
         by: ['rating'],
-        where: { vendorId: vendor.id },
+        where: { vendorId: vendor.id, ...VISIBLE_REVIEW },
         _count: { _all: true },
       }),
       this.prisma.orderReview.groupBy({
         by: ['rating'],
-        where: { vendorId: vendor.id, createdAt: { gte: since } },
+        where: { vendorId: vendor.id, ...VISIBLE_REVIEW, createdAt: { gte: since } },
         _count: { _all: true },
       }),
       this.prisma.orderReview.findMany({
-        where: { vendorId: vendor.id },
+        where: { vendorId: vendor.id, ...VISIBLE_REVIEW },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: RECENT_REVIEWS_LIMIT,
         select: {
@@ -179,6 +193,91 @@ export class ReviewsService {
         reviewer: { displayName: reviewerDisplayName(review.reviewer.fullName) },
       })),
     };
+  }
+
+  /**
+   * US-066: an admin hides a review (excluded from every listing and rating
+   * aggregate). Audit-logged with the reason. If a report prompted it and is
+   * still open, that report is resolved in the same transaction.
+   */
+  async hideReview(adminUserId: string, reviewId: string, dto: HideReviewDto, now: Date = new Date()) {
+    const reason = dto.reason.trim();
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM order_reviews WHERE id = ${reviewId}::uuid FOR UPDATE`;
+      const review = await tx.orderReview.findUnique({
+        where: { id: reviewId },
+        select: { id: true, hiddenAt: true, vendorId: true },
+      });
+      if (!review) throw new NotFoundException('Review not found');
+      if (review.hiddenAt) throw new ConflictException('This review is already hidden');
+
+      let resolvedReport: string | null = null;
+      if (dto.reportId) {
+        const report = await tx.report.findUnique({
+          where: { id: dto.reportId },
+          select: { id: true, status: true, reportedReviewId: true },
+        });
+        if (!report) throw new NotFoundException('Report not found');
+        if (report.reportedReviewId !== reviewId) {
+          throw new BadRequestException('That report is not about this review');
+        }
+        if (report.status === ReportStatus.OPEN || report.status === ReportStatus.IN_REVIEW) {
+          const note = `Review hidden: ${reason}`;
+          await tx.report.update({ where: { id: report.id }, data: { status: ReportStatus.RESOLVED } });
+          await tx.reportStatusHistory.create({
+            data: { reportId: report.id, status: ReportStatus.RESOLVED, adminUserId, note },
+          });
+          await tx.auditRecord.create({ data: {
+            actorUserId: adminUserId, actionType: 'REPORT_STATUS_UPDATED',
+            entityType: 'Report', entityId: report.id,
+            beforeState: { status: report.status },
+            afterState: { status: ReportStatus.RESOLVED, note },
+          } });
+          resolvedReport = report.id;
+        }
+      }
+
+      const hidden = await tx.orderReview.update({
+        where: { id: reviewId },
+        data: { hiddenAt: now, hiddenByUserId: adminUserId, hiddenReason: reason },
+        select: MODERATION_SELECT,
+      });
+      await tx.auditRecord.create({ data: {
+        actorUserId: adminUserId, actionType: 'REVIEW_HIDDEN',
+        entityType: 'OrderReview', entityId: reviewId,
+        beforeState: { hiddenAt: null },
+        afterState: { hiddenAt: now.toISOString(), reason, reportId: dto.reportId ?? null,
+          vendorId: review.vendorId },
+      } });
+      return { ...hidden, resolvedReportId: resolvedReport };
+    });
+  }
+
+  /** US-066: an admin restores a hidden review; audit-logged. */
+  async restoreReview(adminUserId: string, reviewId: string, dto: RestoreReviewDto) {
+    const reason = dto.reason?.trim() || null;
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM order_reviews WHERE id = ${reviewId}::uuid FOR UPDATE`;
+      const review = await tx.orderReview.findUnique({
+        where: { id: reviewId },
+        select: { id: true, hiddenAt: true, hiddenReason: true, vendorId: true },
+      });
+      if (!review) throw new NotFoundException('Review not found');
+      if (!review.hiddenAt) throw new ConflictException('This review is not hidden');
+
+      const restored = await tx.orderReview.update({
+        where: { id: reviewId },
+        data: { hiddenAt: null, hiddenByUserId: null, hiddenReason: null },
+        select: MODERATION_SELECT,
+      });
+      await tx.auditRecord.create({ data: {
+        actorUserId: adminUserId, actionType: 'REVIEW_RESTORED',
+        entityType: 'OrderReview', entityId: reviewId,
+        beforeState: { hiddenAt: review.hiddenAt.toISOString(), reason: review.hiddenReason },
+        afterState: { hiddenAt: null, reason, vendorId: review.vendorId },
+      } });
+      return restored;
+    });
   }
 
   async getMyReview(userId: string, orderId: string) {

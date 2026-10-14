@@ -9,6 +9,7 @@ export enum ReportTargetType {
   TRANSACTION = 'TRANSACTION',
   PRODUCT = 'PRODUCT',
   PASABUY = 'PASABUY',
+  REVIEW = 'REVIEW', // US-066
 }
 
 export class CreateReportDto {
