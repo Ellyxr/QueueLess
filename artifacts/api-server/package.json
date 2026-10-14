@@ -15,7 +15,9 @@
     "prisma:validate": "prisma validate",
     "prisma:seed": "tsx prisma/seed.ts",
     "db:migrate:status": "prisma migrate status",
-    "db:verify": "tsx prisma/verify-db.ts"
+    "db:verify": "tsx prisma/verify-db.ts",
+    "smoke": "tsx e2e/smoke.ts",
+    "smoke:typecheck": "tsc -p e2e/tsconfig.json"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
