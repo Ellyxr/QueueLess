@@ -14,6 +14,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { RefundsService } from '../refunds/refunds.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { READY_HISTORY_SELECT, readyFields, readyPickupWhere } from './order-ready.policy';
 
 const VENDOR_CONTACT_PING_COOLDOWN_MS = 2 * 60 * 1000;
 const VENDOR_ACCEPT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -410,6 +411,7 @@ export class OrdersService {
               product: true,
             },
           },
+          statusHistory: READY_HISTORY_SELECT,
         },
       });
 
@@ -420,6 +422,46 @@ export class OrdersService {
     }
 
     return this.buildOrderResponse(order);
+  }
+
+  // US-068: authoritative recovery list for the buzzer. Every READY_FOR_PICKUP
+  // order this user collects (same rule as the order.ready socket event), in
+  // the same shape as the event. Clients call it on realtime.ready and ring only
+  // for eventIds they have not seen; serverTime lets them judge age without
+  // trusting the device clock.
+  async getReadyForPickup(userId: string) {
+    const orders = await this.prisma.order.findMany({
+      where: readyPickupWhere(userId),
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        id: true,
+        status: true,
+        customerId: true,
+        isPasabuyRequest: true,
+        vendor: { select: { id: true, name: true, pickupLocation: true } },
+        statusHistory: READY_HISTORY_SELECT,
+      },
+    });
+
+    return {
+      serverTime: new Date(),
+      orders: orders.map((order) => {
+        const { readyAt, readyEventId } = readyFields(order.statusHistory);
+        return {
+          eventId: readyEventId,
+          orderId: order.id,
+          orderReference: order.id.slice(0, 8).toUpperCase(),
+          status: order.status,
+          readyAt,
+          vendor: order.vendor,
+          pickupRole: order.isPasabuyRequest
+            ? 'PASABUY_FULFILLER'
+            : order.customerId === userId
+              ? 'CUSTOMER'
+              : 'GROUP_MEMBER',
+        };
+      }),
+    };
   }
 
   async getCustomerOrders(userId: string) {
@@ -449,12 +491,14 @@ export class OrdersService {
           take: 1,
           select: { status: true, category: true },
         },
+        statusHistory: READY_HISTORY_SELECT,
       },
     });
 
     return orders.map((order) => ({
       id: order.id,
       status: order.status,
+      ...readyFields(order.statusHistory),
       isPreorder: order.isPreorder,
       isPasabuyRequest: order.isPasabuyRequest,
       orderReference: order.id.slice(0, 8).toUpperCase(),
@@ -541,6 +585,7 @@ export class OrdersService {
             changedAt: 'asc',
           },
           select: {
+            id: true,
             status: true,
             note: true,
             changedAt: true,
@@ -597,10 +642,15 @@ export class OrdersService {
         }
       : null;
 
+    const readyHistory = order.statusHistory.filter(
+      (entry) => entry.status === OrderStatus.READY_FOR_PICKUP,
+    );
+
     return {
       orderId: order.id,
       orderType: order.orderType,
       status: order.status,
+      ...readyFields(readyHistory.slice(-1)),
       isPasabuyRequest: order.isPasabuyRequest,
       isPreorder: order.isPreorder,
       orderReference: order.id.slice(0, 8).toUpperCase(),
@@ -1215,7 +1265,10 @@ export class OrdersService {
           };
         };
       };
-    }>,
+    }> & {
+      // Loaded with READY_HISTORY_SELECT by buyer-facing reads (US-068).
+      statusHistory?: { id: string; changedAt: Date }[];
+    },
   ) {
     const estimatedWaitMinutes =
       order.estimatedReadyAt &&
@@ -1241,6 +1294,7 @@ export class OrdersService {
       eventId: order.eventId,
       orderType: order.orderType,
       status: order.status,
+      ...(order.statusHistory ? readyFields(order.statusHistory) : {}),
       isPasabuyRequest: order.isPasabuyRequest,
       isPreorder: order.isPreorder,
       orderReference: order.id.slice(0, 8).toUpperCase(),

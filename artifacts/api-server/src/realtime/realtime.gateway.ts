@@ -8,6 +8,7 @@ import { Server, Socket } from 'socket.io';
 import * as jwt from 'jsonwebtoken';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { Logger } from '@nestjs/common';
+import { ACTIVE_FULFILLER_STATUSES } from '../orders/order-ready.policy';
 
 // CORS and transports come from RenderSocketIoAdapter (see main.ts), so the
 // gateway uses the same CORS_ORIGIN allow-list as the REST API.
@@ -167,7 +168,7 @@ export class RealtimeGateway implements OnGatewayConnection {
           pasabuyRequests: {
             where: {
               fulfillerUserId: { not: null },
-              status: { in: ['ACCEPTED', 'AWAITING_PAYMENT', 'PAID'] },
+              status: { in: ACTIVE_FULFILLER_STATUSES },
             },
             select: { fulfillerUserId: true },
           },
