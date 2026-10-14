@@ -10,6 +10,10 @@ import { CreateReviewDto } from './dto/create-review.dto';
 import { ListVendorReviewsDto } from './dto/list-vendor-reviews.dto';
 import { reviewerDisplayName, summarizeRatings } from './review-summary';
 
+// US-065: vendor's own summary page.
+export const RECENT_REVIEWS_LIMIT = 5;
+export const RECENT_WINDOW_DAYS = 30;
+
 const REVIEW_SELECT = {
   id: true,
   orderId: true,
@@ -114,6 +118,61 @@ export class ReviewsService {
       totalPages: Math.ceil(summary.totalReviews / pageSize),
       items: reviews.map((review) => ({
         id: review.id,
+        rating: review.rating,
+        comment: review.comment,
+        createdAt: review.createdAt,
+        reviewer: { displayName: reviewerDisplayName(review.reviewer.fullName) },
+      })),
+    };
+  }
+
+  /**
+   * US-065: the signed-in vendor owner's own rating summary (all time and the
+   * last 30 days, to see whether service is improving) and latest reviews,
+   * with the order reference so the vendor can look the order up.
+   */
+  async getMyVendorReviewSummary(ownerUserId: string, now: Date = new Date()) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { ownerUserId },
+      select: { id: true, name: true },
+    });
+    if (!vendor) throw new NotFoundException('Vendor not found for this user');
+
+    const since = new Date(now.getTime() - RECENT_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+    const [allTime, recentWindow, latest] = await Promise.all([
+      this.prisma.orderReview.groupBy({
+        by: ['rating'],
+        where: { vendorId: vendor.id },
+        _count: { _all: true },
+      }),
+      this.prisma.orderReview.groupBy({
+        by: ['rating'],
+        where: { vendorId: vendor.id, createdAt: { gte: since } },
+        _count: { _all: true },
+      }),
+      this.prisma.orderReview.findMany({
+        where: { vendorId: vendor.id },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: RECENT_REVIEWS_LIMIT,
+        select: {
+          id: true,
+          orderId: true,
+          rating: true,
+          comment: true,
+          createdAt: true,
+          reviewer: { select: { fullName: true } },
+        },
+      }),
+    ]);
+    const last30Days = summarizeRatings(recentWindow);
+
+    return {
+      vendor,
+      summary: summarizeRatings(allTime),
+      last30Days: { averageRating: last30Days.averageRating, totalReviews: last30Days.totalReviews },
+      recentReviews: latest.map((review) => ({
+        id: review.id,
+        orderReference: review.orderId.slice(0, 8).toUpperCase(),
         rating: review.rating,
         comment: review.comment,
         createdAt: review.createdAt,
