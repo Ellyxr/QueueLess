@@ -6,8 +6,12 @@
 //   -> PayMongo checkout (idempotent) -> payment webhook -> PAID
 //   -> vendor COOKING -> READY (order.ready to the buyer only)
 //   -> recovery endpoints agree on eventId -> buyer confirms pickup -> COMPLETED
+//   -> reviews (US-071): before pickup refused, duplicate refused, listed
+//   -> preorder (US-071): out-of-window/too-soon slots refused, pay -> SCHEDULED,
+//      early start refused, released once, buzzer, pickup (about 2-3 minutes;
+//      skip with --skip-preorder). Vendor preorder hours are restored after.
 //
-// It creates one real order for the test accounts. Use test accounts only.
+// It creates real orders and a review for the test accounts. Use test accounts only.
 //
 // Usage (from artifacts/api-server):
 //   pnpm smoke                                    local API, simulated webhook
@@ -309,6 +313,10 @@ async function run() {
   check('outsider\'s ready list does not include the order',
     !(outsiderList.body?.orders as any[])?.some((o) => o.orderId === orderId), describe(outsiderList));
 
+  // US-071: reviewing is only possible after pickup.
+  const earlyReview = await api('POST', `/orders/${orderId}/review`, { token: buyerToken, body: { rating: 5 } });
+  check('review before pickup is refused (400)', earlyReview.status === 400, describe(earlyReview));
+
   section('7. Pickup');
   const pickup = await api('PATCH', `/orders/${orderId}/pickup`, { token: buyerToken });
   check('buyer confirms pickup -> COMPLETED', pickup.status === 200 && pickup.body?.status === 'COMPLETED', describe(pickup));
@@ -320,6 +328,154 @@ async function run() {
   const final = await api('GET', `/orders/${orderId}/status`, { token: buyerToken });
   check('final status COMPLETED, readyEventId kept',
     final.body?.status === 'COMPLETED' && final.body?.readyEventId === buzz.eventId, describe(final));
+
+  section('8. Reviews');
+  const outsiderReview = await api('POST', `/orders/${orderId}/review`, { token: outsiderToken, body: { rating: 1 } });
+  check('another student cannot review this order (404)', outsiderReview.status === 404, describe(outsiderReview));
+  const badRating = await api('POST', `/orders/${orderId}/review`, { token: buyerToken, body: { rating: 6 } });
+  check('rating outside 1-5 is rejected (400)', badRating.status === 400, describe(badRating));
+  const review = await api('POST', `/orders/${orderId}/review`, {
+    token: buyerToken, body: { rating: 5, comment: '  Smoke test: hot and on time  ' },
+  });
+  check('buyer reviews the picked-up order (201, comment trimmed)',
+    review.status === 201 && review.body?.comment === 'Smoke test: hot and on time', describe(review));
+  const duplicateReview = await api('POST', `/orders/${orderId}/review`, { token: buyerToken, body: { rating: 4 } });
+  check('a second review of the same order is refused (409)', duplicateReview.status === 409, describe(duplicateReview));
+  const reviewsTab = await api('GET', `/vendors/${vendor.body.id}/reviews?pageSize=50`, { token: outsiderToken });
+  const listedReview = (reviewsTab.body?.items as any[])?.find((r) => r.id === review.body.id);
+  check('the review appears on the storefront Reviews tab, reviewer shown by first name + initial',
+    reviewsTab.status === 200 && listedReview?.rating === 5 && !JSON.stringify(listedReview).includes('@'),
+    describe(reviewsTab));
+
+  if (args.includes('--skip-preorder')) {
+    console.log('\n9. Preorder  (skipped: --skip-preorder)');
+  } else if (PAYMENT_MODE !== 'simulate') {
+    console.log('\n9. Preorder  (skipped: needs --payment simulate)');
+  } else {
+    await preorderFlow({ buyer, vendorSocket, buyerToken, vendorToken, vendorId: vendor.body.id, product });
+  }
+}
+
+// ------------------------------------------------------------ preorder flow
+
+const MANILA_OFFSET_MS = 8 * 60 * 60_000;
+const WEEKDAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+const RELEASE_TIMEOUT_MS = 4 * 60_000;
+
+// Manila wall clock for an instant (UTC+8, no DST).
+function manila(at: Date) {
+  const local = new Date(at.getTime() + MANILA_OFFSET_MS);
+  const hhmm = local.toISOString().slice(11, 16);
+  return { day: WEEKDAYS[local.getUTCDay()], date: local.toISOString().slice(0, 10), hhmm,
+    minutes: local.getUTCHours() * 60 + local.getUTCMinutes() };
+}
+const isoManila = (at: Date) => `${manila(at).date}T${manila(at).hhmm}:00+08:00`;
+const ceilMinute = (ms: number) => new Date(Math.ceil(ms / 60_000) * 60_000);
+
+// US-071: reserve -> out-of-window / too-soon slots rejected -> pay -> SCHEDULED
+// (preorder.confirmed to both) -> early start refused -> released exactly once
+// (preorder.released) -> ready (order.ready) -> pickup. The vendor's preorder
+// hours are set to a window opening in ~1 minute and restored afterwards.
+async function preorderFlow(ctx: {
+  buyer: RealtimeProbe; vendorSocket: RealtimeProbe; buyerToken: string; vendorToken: string;
+  vendorId: string; product: any;
+}) {
+  section('9. Preorder (scheduled pickup, payment, release, buzzer)');
+  const { buyer, vendorSocket, buyerToken, vendorToken, vendorId, product } = ctx;
+  const now = Date.now();
+  const open = ceilMinute(now + 60_000);
+  const close = new Date(open.getTime() + 120 * 60_000);
+  const leadMinutes = Math.max(30, Number(product.preparationTimeMinutes ?? 0));
+  const slot = ceilMinute(now + (leadMinutes + 5) * 60_000);
+  if (manila(open).day === 'SUNDAY' || manila(close).minutes <= manila(open).minutes) {
+    console.log('        skipped: needs a 2-hour window on a Manila weekday that does not cross midnight');
+    return;
+  }
+
+  const original = await api('GET', `/vendors/${vendorId}/preorder-availability`, { token: vendorToken });
+  check('vendor can read their preorder hours', original.status === 200, describe(original));
+  const setHours = (body: unknown) =>
+    api('PATCH', `/vendors/${vendorId}/preorder-availability`, { token: vendorToken, body });
+
+  try {
+    const hours = await setHours({ preorderEnabled: true, sameAsStoreHours: false, days: [
+      { dayOfWeek: manila(open).day, isEnabled: true, openTime: manila(open).hhmm, closeTime: manila(close).hhmm },
+    ] });
+    check(`test pickup window ${manila(open).hhmm}-${manila(close).hhmm} (Manila) set`, hours.status === 200, describe(hours));
+
+    const cart = await api('POST', '/carts/items', { token: buyerToken, body: { productId: product.id, quantity: 1 } });
+    check('add item to cart for the preorder', cart.status < 300 && cart.body?.id, describe(cart));
+    const reserve = (scheduledPickupAt: string) => api('POST', '/orders', {
+      token: buyerToken, headers: { 'Idempotency-Key': `smoke-preorder-${randomUUID()}` },
+      body: { cartId: cart.body.id, isPreorder: true, scheduledPickupAt },
+    });
+
+    const outside = await reserve(isoManila(new Date(close.getTime() + 30 * 60_000)));
+    check('pickup time outside the vendor\'s window is rejected (400)',
+      outside.status === 400 && /outside the vendor's pickup hours/.test(outside.body?.message), describe(outside));
+    const tooSoon = await reserve(isoManila(new Date(open.getTime() + 60_000)));
+    check('pickup time inside the lead time is rejected (400)',
+      tooSoon.status === 400 && /at least \d+ minutes/.test(tooSoon.body?.message), describe(tooSoon));
+
+    const preorder = await reserve(isoManila(slot));
+    check('valid slot reserved -> PENDING with a payment deadline',
+      preorder.status === 201 && preorder.body?.isPreorder && preorder.body?.reservationExpiresAt, describe(preorder));
+    const preorderId: string = preorder.body.id;
+    console.log(`        preorder ${preorder.body.orderReference}, pickup ${manila(slot).hhmm} Manila`);
+
+    const hiddenUnpaid = await api('GET', '/orders/vendor/queue', { token: vendorToken });
+    check('the unpaid reservation is not in the vendor\'s queue',
+      !(hiddenUnpaid.body?.orders as any[])?.some((o) => o.id === preorderId), describe(hiddenUnpaid));
+
+    const share = (await api('GET', `/payments/orders/${preorderId}/status`, { token: buyerToken })).body.paymentShare;
+    const checkout = await api('POST', '/payments/checkout', {
+      token: buyerToken, body: { paymentShareId: share.id }, headers: { 'Idempotency-Key': `smoke-precheckout-${randomUUID()}` },
+    });
+    check('preorder checkout created', checkout.status === 201, describe(checkout));
+    const webhook = signedPaidWebhook(checkout.body.checkoutSessionId, checkout.body.paymentId, Math.round(Number(share.amountDue) * 100));
+    const paid = await api('POST', '/payments/webhook', { raw: webhook.body, headers: { 'Paymongo-Signature': webhook.header } });
+    check('preorder payment webhook processed', paid.status === 200 && paid.body?.processed === true, describe(paid));
+
+    const confirmed = await buyer.waitFor('preorder.confirmed', (d) => d.orderId === preorderId);
+    await vendorSocket.waitFor('preorder.confirmed', (d) => d.orderId === preorderId);
+    check('paid preorder is held as SCHEDULED; student and vendor got preorder.confirmed',
+      confirmed.status === 'SCHEDULED' && confirmed.eventId, JSON.stringify(confirmed));
+
+    const scheduled = await api('GET', '/orders/vendor/scheduled', { token: vendorToken });
+    check('vendor sees it under scheduled orders',
+      (scheduled.body?.orders as any[])?.some((o) => o.id === preorderId), describe(scheduled));
+    const early = await api('PATCH', `/orders/vendor/${preorderId}/status`, { token: vendorToken, body: { status: 'COOKING' } });
+    check('vendor cannot start a scheduled preorder early (400)', early.status === 400, describe(early));
+
+    console.log(`        waiting for the release job (window opens ${manila(open).hhmm})...`);
+    const released = await buyer.waitFor('preorder.released', (d) => d.orderId === preorderId, RELEASE_TIMEOUT_MS);
+    await vendorSocket.waitFor('order.created', (d) => d.orderId === preorderId);
+    check('released into the live queue (PAID); vendor got order.created', released.status === 'PAID', JSON.stringify(released));
+    await sleep(35_000); // let at least one more release tick run
+    check('released exactly once (no duplicate release events)',
+      buyer.find('preorder.released', (d) => d.orderId === preorderId).length === 1,
+      `received ${buyer.find('preorder.released', (d) => d.orderId === preorderId).length}`);
+
+    for (const status of ['COOKING', 'READY_FOR_PICKUP']) {
+      const step = await api('PATCH', `/orders/vendor/${preorderId}/status`, { token: vendorToken, body: { status } });
+      check(`vendor: preorder -> ${status}`, step.status === 200, describe(step));
+    }
+    const preorderBuzz = await buyer.waitFor('order.ready', (d) => d.orderId === preorderId);
+    check('student got the buzzer (order.ready) for the preorder', preorderBuzz.eventId, JSON.stringify(preorderBuzz));
+    const collected = await api('PATCH', `/orders/${preorderId}/pickup`, { token: buyerToken });
+    check('student picks up the preorder -> COMPLETED', collected.body?.status === 'COMPLETED', describe(collected));
+  } finally {
+    const before = original.body;
+    const days = (before?.preorderAvailability ?? []).map((w: any) =>
+      ({ dayOfWeek: w.dayOfWeek, isEnabled: w.isEnabled, ...(w.isEnabled ? { openTime: w.openTime, closeTime: w.closeTime } : {}) }));
+    const restored = await setHours({
+      preorderEnabled: before?.preorderEnabled ?? false,
+      sameAsStoreHours: before?.preorderSameAsStoreHours ?? true,
+      // The API needs at least one entry when not using store hours.
+      days: days.length ? days : [{ dayOfWeek: 'MONDAY', isEnabled: false }],
+    });
+    check('vendor\'s original preorder hours restored', restored.status === 200, describe(restored));
+  }
 }
 
 run()
