@@ -761,6 +761,7 @@ export class OrdersService {
     const isCancelling = dto.status === OrderStatus.CANCELLED;
     let justCancelled = false;
     let statusChanged = false;
+    let readyHistory: { id: string; changedAt: Date } | null = null;
 
     const updatedOrder = await this.prisma.$transaction(
       async (tx) => {
@@ -819,11 +820,12 @@ export class OrdersService {
           dto.status,
         );
 
-        statusChanged = true;
-
-        const updated = await tx.order.update({
+        // Conditional on the status we validated, so a concurrent update
+        // (e.g. cancel vs. ready) cannot both commit and publish.
+        const transition = await tx.order.updateMany({
           where: {
             id: order.id,
+            status: order.status,
           },
           data: {
             status: dto.status,
@@ -835,15 +837,15 @@ export class OrdersService {
                 }
               : {}),
           },
-          include: {
-            vendor: true,
-            items: {
-              include: {
-                product: true,
-              },
-            },
-          },
         });
+
+        if (transition.count !== 1) {
+          throw new ConflictException(
+            'Order status was changed by another request; refresh and try again',
+          );
+        }
+
+        statusChanged = true;
 
         if (
           isCancelling &&
@@ -863,14 +865,19 @@ export class OrdersService {
           });
         }
 
-        await tx.orderStatusHistory.create({
+        const history = await tx.orderStatusHistory.create({
           data: {
             orderId: order.id,
             status: dto.status,
             changedByUserId: userId,
             note,
           },
+          select: { id: true, changedAt: true },
         });
+
+        if (dto.status === OrderStatus.READY_FOR_PICKUP) {
+          readyHistory = history;
+        }
 
         await tx.auditRecord.create({ data: {
           actorUserId: userId, actionType: 'ORDER_STATUS_UPDATED',
@@ -879,10 +886,21 @@ export class OrdersService {
           afterState: { status: dto.status },
         } });
 
-        return updated;
+        return tx.order.findUniqueOrThrow({
+          where: { id: order.id },
+          include: {
+            vendor: true,
+            items: {
+              include: {
+                product: true,
+              },
+            },
+          },
+        });
       },
     );
 
+    // Published only after the transaction has committed.
     if (statusChanged) {
       await this.realtimeGateway.emitOrderStatusUpdated(
         updatedOrder.customerId,
@@ -892,6 +910,15 @@ export class OrdersService {
           updatedAt: updatedOrder.updatedAt,
         },
       );
+    }
+
+    // Assigned inside the transaction callback, which TS cannot follow.
+    const ready = readyHistory as { id: string; changedAt: Date } | null;
+    if (ready) {
+      await this.realtimeGateway.emitOrderReady(updatedOrder.id, {
+        eventId: ready.id,
+        readyAt: ready.changedAt,
+      });
     }
 
     if (justCancelled) {
