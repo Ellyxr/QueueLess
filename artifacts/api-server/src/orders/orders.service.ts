@@ -23,6 +23,7 @@ import {
 import {
   PREORDER_ACCEPT_GRACE_MS,
   preorderMinLeadMinutes,
+  reservationExpiresAt,
   validatePreorderSlot,
 } from './preorder-slot.policy';
 
@@ -330,6 +331,10 @@ export class OrdersService {
               isPasabuyRequest: false,
               isPreorder: dto.isPreorder ?? false,
               scheduledPickupAt,
+              // US-058: unpaid reservations are released at this time.
+              reservationExpiresAt: scheduledPickupAt
+                ? reservationExpiresAt(this.clock(), scheduledPickupAt)
+                : null,
               subtotal,
               marketplaceFee,
               estimatedReadyAt,
@@ -544,6 +549,7 @@ export class OrdersService {
         status: true,
         isPreorder: true,
         scheduledPickupAt: true,
+        reservationExpiresAt: true,
         isPasabuyRequest: true,
         totalAmount: true,
         createdAt: true,
@@ -573,6 +579,7 @@ export class OrdersService {
       ...readyFields(order.statusHistory),
       isPreorder: order.isPreorder,
       scheduledPickupAt: order.scheduledPickupAt,
+      reservationExpiresAt: order.reservationExpiresAt,
       isPasabuyRequest: order.isPasabuyRequest,
       orderReference: order.id.slice(0, 8).toUpperCase(),
       total: order.totalAmount.toFixed(2),
@@ -618,6 +625,7 @@ export class OrdersService {
         cancellationNote: true,
         estimatedReadyAt: true,
         scheduledPickupAt: true,
+        reservationExpiresAt: true,
         updatedAt: true,
         pickupConfirmedAt: true,
         paidAt: true,
@@ -732,6 +740,7 @@ export class OrdersService {
       cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
       scheduledPickupAt: order.scheduledPickupAt,
+      reservationExpiresAt: order.reservationExpiresAt,
       estimatedWaitMinutes,
       paidAt: order.paidAt,
       buyerContactPingAt: order.buyerContactPingAt,
@@ -781,6 +790,9 @@ export class OrdersService {
         status: {
           in: ['PENDING', 'PAID', 'COOKING'],
         },
+        // US-058: a preorder is a reservation the vendor can trust only once
+        // it is paid; unpaid ones stay hidden until paid or expired.
+        NOT: { isPreorder: true, status: 'PENDING' },
       },
       orderBy: {
         createdAt: 'asc',
@@ -1398,6 +1410,7 @@ export class OrdersService {
       cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
       scheduledPickupAt: order.scheduledPickupAt,
+      reservationExpiresAt: order.reservationExpiresAt,
       pickupConfirmedAt: order.pickupConfirmedAt,
       estimatedWaitMinutes,
       subtotal: order.subtotal.toFixed(2),
