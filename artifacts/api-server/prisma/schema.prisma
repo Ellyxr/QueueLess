@@ -164,7 +164,9 @@ model VendorPreorderAvailability {
 
   vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
 
-  @@unique([vendorId, dayOfWeek])
+  // US-055: a weekday can have several non-overlapping pickup windows
+  // (validated in availability.util.ts), so (vendorId, dayOfWeek) is not unique.
+  @@index([vendorId, dayOfWeek])
   @@index([vendorId])
   @@map("vendor_preorder_availability")
 }

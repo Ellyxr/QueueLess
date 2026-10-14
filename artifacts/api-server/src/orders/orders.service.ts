@@ -15,6 +15,21 @@ import { RefundsService } from '../refunds/refunds.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { READY_HISTORY_SELECT, readyFields, readyPickupWhere } from './order-ready.policy';
+import {
+  hasPickupWindows,
+  preorderPickupStatus,
+  resolvePreorderWindows,
+} from '../vendors/availability.util';
+
+const PREORDER_SCHEDULE_SELECT = {
+  preorderSameAsStoreHours: true,
+  preorderAvailability: {
+    select: { dayOfWeek: true, isEnabled: true, openTime: true, closeTime: true },
+  },
+  availability: {
+    select: { dayOfWeek: true, isOpen: true, openTime: true, closeTime: true },
+  },
+} satisfies Prisma.VendorSelect;
 
 const VENDOR_CONTACT_PING_COOLDOWN_MS = 2 * 60 * 1000;
 const VENDOR_ACCEPT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -22,6 +37,9 @@ const VENDOR_UNRESPONSIVE_TIMEOUT_MS = 2 * 60 * 1000;
 
 @Injectable()
 export class OrdersService {
+  // Current time for pickup-window checks; replaced in tests.
+  clock: () => Date = () => new Date();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly refundsService: RefundsService,
@@ -143,6 +161,19 @@ export class OrdersService {
 
           if (dto.isPreorder && !cart.vendor.preorderEnabled) {
             throw new BadRequestException('This vendor does not accept preorders');
+          }
+
+          // US-055: a preorder needs at least one pickup window to be collected in.
+          if (dto.isPreorder) {
+            const schedule = await tx.vendor.findUniqueOrThrow({
+              where: { id: cart.vendorId },
+              select: PREORDER_SCHEDULE_SELECT,
+            });
+            if (!hasPickupWindows(resolvePreorderWindows(schedule))) {
+              throw new BadRequestException(
+                'This vendor has not set preorder pickup hours yet',
+              );
+            }
           }
 
           for (const item of cart.items) {
@@ -825,6 +856,7 @@ export class OrdersService {
             vendorId: true,
             status: true,
             isPasabuyRequest: true,
+            isPreorder: true,
             items: {
               select: {
                 productId: true,
@@ -869,6 +901,22 @@ export class OrdersService {
           order.status,
           dto.status,
         );
+
+        // US-055: a preorder is handed over only inside the vendor's pickup
+        // window (Asia/Manila).
+        if (order.isPreorder && dto.status === OrderStatus.READY_FOR_PICKUP) {
+          const schedule = await tx.vendor.findUniqueOrThrow({
+            where: { id: order.vendorId },
+            select: PREORDER_SCHEDULE_SELECT,
+          });
+          const pickup = preorderPickupStatus(schedule, this.clock());
+          if (!pickup.isOpenNow) {
+            throw new BadRequestException(
+              'Preorders can only be marked ready during your preorder pickup hours' +
+                (pickup.nextAvailableLabel ? `; next window opens ${pickup.nextAvailableLabel}` : ''),
+            );
+          }
+        }
 
         // Conditional on the status we validated, so a concurrent update
         // (e.g. cancel vs. ready) cannot both commit and publish.
