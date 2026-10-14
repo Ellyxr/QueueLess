@@ -53,3 +53,9 @@ jobs:
 
       - name: Build applications
         run: pnpm --filter @workspace/frontend... --filter @workspace/api-server... build
+
+      # US-054: regression and failure-path tests (duplicate order/payment,
+      # invalid transitions, unauthorized access, invalid webhooks, realtime
+      # recovery). They run against the compiled API, so they follow the build.
+      - name: Run backend tests
+        run: pnpm --filter @workspace/api-server test
