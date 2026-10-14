@@ -80,12 +80,6 @@ export function PasabuyOrderEntry({
     return <p className="text-[11px] text-muted-foreground">Pasabuy requested for this order.</p>;
   }
 
-  if (isPreorder) {
-    return (
-      <p className="text-[11px] text-muted-foreground">Pasabuy isn't available for preorders.</p>
-    );
-  }
-
   return (
     <>
       <Button
@@ -100,6 +94,7 @@ export function PasabuyOrderEntry({
         open={isDialogOpen}
         onOpenChange={setIsDialogOpen}
         order={order}
+        isPreorder={isPreorder}
         onViewRequest={(id) => setLocation(`/pasabuy/${id}`)}
       />
     </>
