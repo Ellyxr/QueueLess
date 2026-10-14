@@ -339,3 +339,34 @@ export function getCurrentUserId(): string | null {
     return null;
   }
 }
+
+/* ---------------------------------------------------------------------- */
+/* Admin: student ID review                                                 */
+/* ---------------------------------------------------------------------- */
+
+export interface PendingStudentIdReview {
+  userId: string;
+  fullName: string;
+  studentId: string;
+  /** Short-lived (5 min) signed URL to the private ID photo. */
+  photoUrl: string;
+  updatedAt: string;
+}
+
+export function listPendingStudentIds(): Promise<PendingStudentIdReview[]> {
+  return fetchWithAuth("/admin/pasabuy/student-ids");
+}
+
+export function refreshStudentIdPhotoUrl(userId: string): Promise<{ photoUrl: string }> {
+  return fetchWithAuth(`/admin/pasabuy/student-ids/${userId}/photo`);
+}
+
+export function reviewStudentId(
+  userId: string,
+  decision: "APPROVE" | "REJECT",
+): Promise<{ studentIdVerified: boolean }> {
+  return fetchWithAuth(`/admin/pasabuy/student-ids/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ decision }),
+  });
+}
