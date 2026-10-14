@@ -4,6 +4,7 @@ import { CancellationReason, OrderStatus, PaymentProvider, PaymentStatus } from 
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PaymongoService } from '../payments/paymongo.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { preorderPickupGraceMinutes, uncollectedAfter } from './preorder-slot.policy';
 
 /**
  * US-059: releaseScheduledPreorders moves paid preorders from SCHEDULED to
@@ -132,6 +133,84 @@ export class PreorderReservationsService {
       }
     }
     return released;
+  }
+
+  /**
+   * US-062: a ready preorder not collected by the end of its pickup window
+   * plus the grace period is flagged UNCOLLECTED (terminal, so it can no
+   * longer be picked up or progressed), with status history and an audit
+   * entry. The vendor and student are notified (preorder.uncollected).
+   */
+  @Interval(60_000)
+  async flagUncollectedPreorders(): Promise<string[]> {
+    const now = this.clock();
+    const cutoff = new Date(now.getTime() - preorderPickupGraceMinutes() * 60_000);
+    const due = await this.prisma.order.findMany({
+      where: {
+        isPreorder: true,
+        status: OrderStatus.READY_FOR_PICKUP,
+        pickupConfirmedAt: null,
+        OR: [
+          { pickupWindowEndsAt: { lte: cutoff } },
+          // Preorders booked before US-062: grace runs from the pickup time.
+          { pickupWindowEndsAt: null, scheduledPickupAt: { lte: cutoff } },
+        ],
+      },
+      select: { id: true, scheduledPickupAt: true, pickupWindowEndsAt: true },
+      take: 50,
+    });
+
+    const flagged: string[] = [];
+    for (const candidate of due) {
+      try {
+        const order = await this.prisma.$transaction(async (tx) => {
+          const changed = await tx.order.updateMany({
+            where: { id: candidate.id, status: OrderStatus.READY_FOR_PICKUP, pickupConfirmedAt: null },
+            data: { status: OrderStatus.UNCOLLECTED },
+          });
+          if (!changed.count) return null;
+          const deadline = uncollectedAfter(candidate);
+          const history = await tx.orderStatusHistory.create({
+            data: {
+              orderId: candidate.id,
+              status: OrderStatus.UNCOLLECTED,
+              changedByUserId: null,
+              note: 'Not collected within the grace period after the pickup window',
+            },
+            select: { id: true },
+          });
+          await tx.auditRecord.create({ data: {
+            actorUserId: null, actionType: 'ORDER_STATUS_UPDATED',
+            entityType: 'Order', entityId: candidate.id,
+            beforeState: { status: OrderStatus.READY_FOR_PICKUP },
+            afterState: {
+              status: OrderStatus.UNCOLLECTED,
+              source: 'PICKUP_GRACE_EXPIRED',
+              scheduledPickupAt: candidate.scheduledPickupAt?.toISOString() ?? null,
+              pickupWindowEndsAt: candidate.pickupWindowEndsAt?.toISOString() ?? null,
+              graceEndedAt: deadline?.toISOString() ?? null,
+            },
+          } });
+          const updated = await tx.order.findUniqueOrThrow({
+            where: { id: candidate.id },
+            select: { id: true, customerId: true, status: true, updatedAt: true },
+          });
+          return { ...updated, historyId: history.id };
+        });
+        if (!order) continue;
+
+        flagged.push(order.id);
+        await this.realtimeGateway.emitOrderStatusUpdated(order.customerId, {
+          orderId: order.id,
+          status: order.status,
+          updatedAt: order.updatedAt,
+        });
+        await this.realtimeGateway.emitPreorderEvent('preorder.uncollected', order.id, order.historyId);
+      } catch (error) {
+        this.logger.warn(`Could not flag uncollected preorder ${candidate.id}: ${String(error)}`);
+      }
+    }
+    return flagged;
   }
 
   private async expireOne(

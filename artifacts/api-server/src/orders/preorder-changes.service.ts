@@ -21,6 +21,7 @@ import { CancelPreorderDto, ReschedulePreorderDto } from './dto/preorder-change.
 import {
   changeCutoffAt,
   isReservationExpired,
+  pickupWindowEndsAt,
   preorderMinLeadMinutes,
   queueReleaseAt,
   validatePreorderSlot,
@@ -132,6 +133,7 @@ export class PreorderChangesService {
           scheduledPickupAt: slot,
           estimatedReadyAt: slot,
           queueReleaseAt: releaseAt,
+          pickupWindowEndsAt: pickupWindowEndsAt(slot, windows),
           // An unpaid reservation keeps its payment deadline, never past the new slot.
           ...(order.status === OrderStatus.PENDING && order.reservationExpiresAt
             ? { reservationExpiresAt: new Date(Math.min(order.reservationExpiresAt.getTime(), slot.getTime())) }

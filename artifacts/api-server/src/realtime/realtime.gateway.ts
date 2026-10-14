@@ -213,10 +213,11 @@ export class RealtimeGateway implements OnGatewayConnection {
   //   preorder.confirmed - payment confirmed; held as SCHEDULED (or straight
   //                        into the live queue if its release time passed)
   //   preorder.released  - moved from SCHEDULED into the vendor's live queue
+  //   preorder.uncollected - ready but not collected in time (US-062)
   // The order is re-read, so nothing is sent if it is not a preorder or was
   // cancelled meanwhile. eventId is the status-history row, for client dedupe.
   async emitPreorderEvent(
-    event: 'preorder.confirmed' | 'preorder.released',
+    event: 'preorder.confirmed' | 'preorder.released' | 'preorder.uncollected',
     orderId: string,
     eventId: string,
   ) {
