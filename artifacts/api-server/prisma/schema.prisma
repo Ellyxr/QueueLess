@@ -362,6 +362,8 @@ model Order {
   reservationExpiresAt DateTime?           @db.Timestamptz(6)
   /// US-059: when a SCHEDULED preorder moves into the vendor's live queue (PAID).
   queueReleaseAt     DateTime?             @db.Timestamptz(6)
+  /// US-062: close of the pickup window the preorder was booked into.
+  pickupWindowEndsAt DateTime?             @db.Timestamptz(6)
   pickupConfirmedAt  DateTime?             @db.Timestamptz(6)
   paidAt             DateTime?             @db.Timestamptz(6)
   buyerContactPingAt DateTime?             @db.Timestamptz(6)
@@ -948,6 +950,9 @@ enum OrderStatus {
   READY_FOR_PICKUP
   COMPLETED
   CANCELLED
+  /// US-062: ready preorder not collected within the grace period after its
+  /// pickup window. Terminal: no further status changes.
+  UNCOLLECTED
 }
 
 enum CancellationReason {

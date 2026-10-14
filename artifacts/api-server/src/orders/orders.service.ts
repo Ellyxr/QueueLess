@@ -22,6 +22,7 @@ import {
 } from '../vendors/availability.util';
 import {
   PREORDER_ACCEPT_GRACE_MS,
+  pickupWindowEndsAt,
   preorderMinLeadMinutes,
   queueReleaseAt,
   reservationExpiresAt,
@@ -137,6 +138,7 @@ export class OrdersService {
     }
 
     let releaseAt: Date | null = null;
+    let windowEndsAt: Date | null = null;
 
     try {
       const order = await this.prisma.$transaction(
@@ -216,6 +218,8 @@ export class OrdersService {
             });
             // US-059: fixed at reservation so later schedule edits do not move it.
             releaseAt = queueReleaseAt(scheduledPickupAt!, windows, leadMinutes);
+            // US-062: uncollected-pickup grace runs from this window's close.
+            windowEndsAt = pickupWindowEndsAt(scheduledPickupAt!, windows);
           }
 
           for (const item of cart.items) {
@@ -343,6 +347,7 @@ export class OrdersService {
                 : null,
               // US-059: once paid, held as SCHEDULED until this time.
               queueReleaseAt: releaseAt,
+              pickupWindowEndsAt: windowEndsAt,
               subtotal,
               marketplaceFee,
               estimatedReadyAt,
@@ -780,6 +785,49 @@ export class OrdersService {
 
   // US-059: paid preorders held outside the live queue, soonest pickup first.
   // Each moves to the live queue (PAID) at queueReleaseAt.
+  // US-062: preorders flagged UNCOLLECTED, most recent pickup first, so the
+  // vendor can deal with the food that was never collected.
+  async getVendorUncollectedOrders(userId: string) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { ownerUserId: userId },
+      select: { id: true },
+    });
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found for this user');
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where: { vendorId: vendor.id, status: OrderStatus.UNCOLLECTED },
+      orderBy: { scheduledPickupAt: 'desc' },
+      take: 100,
+      select: {
+        id: true,
+        status: true,
+        scheduledPickupAt: true,
+        pickupWindowEndsAt: true,
+        totalAmount: true,
+        updatedAt: true,
+        customer: { select: { fullName: true } },
+        items: { select: { quantity: true, product: { select: { name: true } } } },
+      },
+    });
+
+    return {
+      count: orders.length,
+      orders: orders.map((order) => ({
+        id: order.id,
+        orderReference: order.id.slice(0, 8).toUpperCase(),
+        status: order.status,
+        scheduledPickupAt: order.scheduledPickupAt,
+        pickupWindowEndsAt: order.pickupWindowEndsAt,
+        flaggedAt: order.updatedAt,
+        customerName: order.customer.fullName,
+        total: order.totalAmount.toFixed(2),
+        items: order.items.map((item) => ({ name: item.product.name, quantity: item.quantity })),
+      })),
+    };
+  }
+
   async getVendorScheduledOrders(userId: string) {
     const vendor = await this.prisma.vendor.findUnique({
       where: { ownerUserId: userId },
@@ -1338,7 +1386,8 @@ export class OrdersService {
 
     const weekDayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
     const weekSalesTotals = [0, 0, 0, 0, 0, 0].map(() => new Prisma.Decimal(0));
-    const realizedStatuses = new Set(['SCHEDULED', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'READY_FOR_PICKUP', 'COMPLETED']);
+    // UNCOLLECTED was paid for and prepared, so it still counts as a sale.
+    const realizedStatuses = new Set(['SCHEDULED', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'READY_FOR_PICKUP', 'COMPLETED', 'UNCOLLECTED']);
 
     for (const order of orders) {
       if (order.createdAt < startOfWeek || !realizedStatuses.has(order.status)) {
@@ -1412,6 +1461,8 @@ export class OrdersService {
       ],
       COMPLETED: [],
       CANCELLED: [],
+      // US-062: terminal; flagged by the uncollected-preorder job only.
+      UNCOLLECTED: [],
     };
 
     if (
