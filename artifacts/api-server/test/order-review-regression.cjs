@@ -59,7 +59,7 @@ function harness({ status: orderStatus = 'COMPLETED', customerId = 'student', re
   const tx = {
     orderReview: { create: async ({ data, select }) => {
       if (raceLost) throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 't' });
-      const created = { id: 'review-1', createdAt: new Date('2026-10-15T00:00:00Z'), ...data };
+      const created = { id: 'review-1', createdAt: new Date('2026-10-15T00:00:00Z'), hiddenAt: null, ...data };
       state.reviews.push(created);
       return Object.fromEntries(Object.keys(select).map((k) => [k, created[k]]));
     } },
@@ -77,7 +77,7 @@ test('a student reviews their picked-up order; reviewer and vendor come from the
   const h = harness();
   const review = await h.service.createReview('student', ORDER_ID, { rating: 5, comment: 'Hot and on time' });
   assert.deepEqual(review, { id: 'review-1', orderId: ORDER_ID, vendorId: 'vendor', rating: 5,
-    comment: 'Hot and on time', createdAt: new Date('2026-10-15T00:00:00Z') });
+    comment: 'Hot and on time', createdAt: new Date('2026-10-15T00:00:00Z'), hiddenAt: null });
   assert.equal(h.state.reviews[0].reviewerUserId, 'student');
   assert.deepEqual(h.state.audits[0], { actorUserId: 'student', actionType: 'REVIEW_CREATED', entityType: 'OrderReview',
     entityId: 'review-1', afterState: { orderId: ORDER_ID, vendorId: 'vendor', rating: 5, hasComment: true } });
