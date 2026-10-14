@@ -23,6 +23,7 @@ import {
 import {
   PREORDER_ACCEPT_GRACE_MS,
   preorderMinLeadMinutes,
+  queueReleaseAt,
   reservationExpiresAt,
   validatePreorderSlot,
 } from './preorder-slot.policy';
@@ -135,6 +136,8 @@ export class OrdersService {
       );
     }
 
+    let releaseAt: Date | null = null;
+
     try {
       const order = await this.prisma.$transaction(
         async (tx) => {
@@ -201,15 +204,18 @@ export class OrdersService {
 
             // US-057: the chosen slot must be in the future, inside a pickup
             // window and leave the vendor enough time (server clock).
+            const leadMinutes = Math.max(
+              preorderMinLeadMinutes(),
+              ...cart.items.map((item) => item.product.preparationTimeMinutes),
+            );
             validatePreorderSlot({
               slot: scheduledPickupAt!,
               now: this.clock(),
               windows,
-              leadMinutes: Math.max(
-                preorderMinLeadMinutes(),
-                ...cart.items.map((item) => item.product.preparationTimeMinutes),
-              ),
+              leadMinutes,
             });
+            // US-059: fixed at reservation so later schedule edits do not move it.
+            releaseAt = queueReleaseAt(scheduledPickupAt!, windows, leadMinutes);
           }
 
           for (const item of cart.items) {
@@ -335,6 +341,8 @@ export class OrdersService {
               reservationExpiresAt: scheduledPickupAt
                 ? reservationExpiresAt(this.clock(), scheduledPickupAt)
                 : null,
+              // US-059: once paid, held as SCHEDULED until this time.
+              queueReleaseAt: releaseAt,
               subtotal,
               marketplaceFee,
               estimatedReadyAt,
@@ -550,6 +558,7 @@ export class OrdersService {
         isPreorder: true,
         scheduledPickupAt: true,
         reservationExpiresAt: true,
+        queueReleaseAt: true,
         isPasabuyRequest: true,
         totalAmount: true,
         createdAt: true,
@@ -580,6 +589,7 @@ export class OrdersService {
       isPreorder: order.isPreorder,
       scheduledPickupAt: order.scheduledPickupAt,
       reservationExpiresAt: order.reservationExpiresAt,
+      queueReleaseAt: order.queueReleaseAt,
       isPasabuyRequest: order.isPasabuyRequest,
       orderReference: order.id.slice(0, 8).toUpperCase(),
       total: order.totalAmount.toFixed(2),
@@ -626,6 +636,7 @@ export class OrdersService {
         estimatedReadyAt: true,
         scheduledPickupAt: true,
         reservationExpiresAt: true,
+        queueReleaseAt: true,
         updatedAt: true,
         pickupConfirmedAt: true,
         paidAt: true,
@@ -741,6 +752,7 @@ export class OrdersService {
       estimatedReadyAt: order.estimatedReadyAt,
       scheduledPickupAt: order.scheduledPickupAt,
       reservationExpiresAt: order.reservationExpiresAt,
+      queueReleaseAt: order.queueReleaseAt,
       estimatedWaitMinutes,
       paidAt: order.paidAt,
       buyerContactPingAt: order.buyerContactPingAt,
@@ -763,6 +775,50 @@ export class OrdersService {
             participantCount: order.groupOrder.participants.length,
           }
         : null,
+    };
+  }
+
+  // US-059: paid preorders held outside the live queue, soonest pickup first.
+  // Each moves to the live queue (PAID) at queueReleaseAt.
+  async getVendorScheduledOrders(userId: string) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { ownerUserId: userId },
+      select: { id: true },
+    });
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found for this user');
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where: { vendorId: vendor.id, status: OrderStatus.SCHEDULED },
+      orderBy: { scheduledPickupAt: 'asc' },
+      select: {
+        id: true,
+        status: true,
+        scheduledPickupAt: true,
+        queueReleaseAt: true,
+        totalAmount: true,
+        paidAt: true,
+        customer: { select: { fullName: true } },
+        items: {
+          select: { quantity: true, product: { select: { name: true } } },
+        },
+      },
+    });
+
+    return {
+      count: orders.length,
+      orders: orders.map((order) => ({
+        id: order.id,
+        orderReference: order.id.slice(0, 8).toUpperCase(),
+        status: order.status,
+        scheduledPickupAt: order.scheduledPickupAt,
+        queueReleaseAt: order.queueReleaseAt,
+        customerName: order.customer.fullName,
+        total: order.totalAmount.toFixed(2),
+        paidAt: order.paidAt,
+        items: order.items.map((item) => ({ name: item.product.name, quantity: item.quantity })),
+      })),
     };
   }
 
@@ -1266,6 +1322,7 @@ export class OrdersService {
     );
     const pendingStatuses = new Set([
       'PENDING',
+      'SCHEDULED',
       'PAID',
       'COOKING',
       'OUT_FOR_DELIVERY',
@@ -1281,7 +1338,7 @@ export class OrdersService {
 
     const weekDayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
     const weekSalesTotals = [0, 0, 0, 0, 0, 0].map(() => new Prisma.Decimal(0));
-    const realizedStatuses = new Set(['PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'READY_FOR_PICKUP', 'COMPLETED']);
+    const realizedStatuses = new Set(['SCHEDULED', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'READY_FOR_PICKUP', 'COMPLETED']);
 
     for (const order of orders) {
       if (order.createdAt < startOfWeek || !realizedStatuses.has(order.status)) {
@@ -1332,6 +1389,11 @@ export class OrdersService {
     > = {
       PENDING: [
         OrderStatus.PAID,
+        OrderStatus.CANCELLED,
+      ],
+      // US-059: a held preorder enters the live queue (PAID) only through the
+      // release job; the vendor may still cancel it (refunded).
+      SCHEDULED: [
         OrderStatus.CANCELLED,
       ],
       PAID: [
@@ -1411,6 +1473,7 @@ export class OrdersService {
       estimatedReadyAt: order.estimatedReadyAt,
       scheduledPickupAt: order.scheduledPickupAt,
       reservationExpiresAt: order.reservationExpiresAt,
+      queueReleaseAt: order.queueReleaseAt,
       pickupConfirmedAt: order.pickupConfirmedAt,
       estimatedWaitMinutes,
       subtotal: order.subtotal.toFixed(2),
