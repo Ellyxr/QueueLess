@@ -179,7 +179,10 @@ test('placing a preorder requires the vendor to have pickup hours', async () => 
     };
     const prisma = { orderIdempotencyKey: { findUnique: async () => null }, $transaction: async (work) => work(tx) };
     const pricing = { calculateOrderTotals: (s) => ({ subtotal: s, marketplaceFee: s.mul(0), totalAmount: s }) };
-    return new OrdersService(prisma, {}, {}, pricing, {}).createOrder('student', { cartId: 'cart', isPreorder: true }, 'key');
+    const service = new OrdersService(prisma, {}, {}, pricing, {});
+    service.clock = () => MON('06:00');
+    // US-057: a preorder carries a pickup time inside the window.
+    return service.createOrder('student', { cartId: 'cart', isPreorder: true, scheduledPickupAt: '2026-10-12T08:00:00+08:00' }, 'key');
   };
   await assert.rejects(attempt([]), (e) => status(e) === 400 && /pickup hours/.test(e.message));
   await assert.rejects(attempt([off('MONDAY')]), (e) => status(e) === 400 && /pickup hours/.test(e.message));

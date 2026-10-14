@@ -1,0 +1,92 @@
+import { BadRequestException } from '@nestjs/common';
+import {
+  PreorderWindow,
+  getManilaClock,
+  upcomingWindows,
+} from '../vendors/availability.util';
+
+// US-057: rules for the pickup time a student picks when reserving.
+// Lead time is the larger of this floor and the slowest item's prep time.
+export const DEFAULT_PREORDER_MIN_LEAD_MINUTES = 30;
+export const PREORDER_MAX_DAYS_AHEAD = 7;
+// How long after the scheduled pickup an unaccepted preorder is refunded
+// (same 5 minutes a regular order gets after payment).
+export const PREORDER_ACCEPT_GRACE_MS = 5 * 60 * 1000;
+
+const MINUTE_MS = 60 * 1000;
+
+export function preorderMinLeadMinutes(env: NodeJS.ProcessEnv = process.env): number {
+  const configured = Number(env.PREORDER_MIN_LEAD_MINUTES);
+  return Number.isInteger(configured) && configured >= 0 ? configured : DEFAULT_PREORDER_MIN_LEAD_MINUTES;
+}
+
+function toMinutes(time: string): number {
+  const [hours, minutes] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+/**
+ * Throws 400 unless `slot` is in the future, at least `leadMinutes` away,
+ * no more than PREORDER_MAX_DAYS_AHEAD days away, and inside one of the
+ * vendor's pickup windows (Asia/Manila; close time exclusive). Messages name
+ * the earliest window the student could pick instead.
+ */
+export function validatePreorderSlot(params: {
+  slot: Date;
+  now: Date;
+  windows: PreorderWindow[];
+  leadMinutes: number;
+}): void {
+  const { slot, now, windows, leadMinutes } = params;
+  const earliest = new Date(now.getTime() + leadMinutes * MINUTE_MS);
+  const suggestion = () => {
+    const [next] = upcomingWindows(windows, earliest, 1);
+    return next ? ` Earliest available pickup: ${next.label}.` : '';
+  };
+
+  if (Number.isNaN(slot.getTime())) {
+    throw new BadRequestException('scheduledPickupAt must be a valid date-time');
+  }
+  if (slot <= now) {
+    throw new BadRequestException(`scheduledPickupAt must be in the future.${suggestion()}`);
+  }
+  if (slot < earliest) {
+    throw new BadRequestException(
+      `Pickup must be at least ${leadMinutes} minutes from now so the vendor can prepare your order.${suggestion()}`,
+    );
+  }
+  if (slot.getTime() > now.getTime() + PREORDER_MAX_DAYS_AHEAD * 24 * 60 * MINUTE_MS) {
+    throw new BadRequestException(
+      `Pickup can be scheduled at most ${PREORDER_MAX_DAYS_AHEAD} days ahead`,
+    );
+  }
+
+  const { dayOfWeek, timeMinutes } = getManilaClock(slot);
+  const inWindow = windows.some(
+    (window) =>
+      window.isEnabled &&
+      window.dayOfWeek === dayOfWeek &&
+      window.openTime &&
+      window.closeTime &&
+      timeMinutes >= toMinutes(window.openTime) &&
+      timeMinutes < toMinutes(window.closeTime),
+  );
+  if (!inWindow) {
+    throw new BadRequestException(
+      `The chosen pickup time is outside the vendor's pickup hours.${suggestion()}`,
+    );
+  }
+}
+
+/**
+ * When the vendor-accept timeout starts: payment time for a regular order,
+ * the scheduled pickup time for a preorder (a reservation made at 11 PM must
+ * not be refunded because the vendor was asleep).
+ */
+export function acceptClockStart(order: {
+  isPreorder: boolean;
+  scheduledPickupAt: Date | null;
+  paidAt: Date | null;
+}): Date | null {
+  return order.isPreorder && order.scheduledPickupAt ? order.scheduledPickupAt : order.paidAt;
+}

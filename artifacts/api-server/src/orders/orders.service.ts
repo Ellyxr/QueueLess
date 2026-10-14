@@ -20,6 +20,16 @@ import {
   preorderPickupStatus,
   resolvePreorderWindows,
 } from '../vendors/availability.util';
+import {
+  PREORDER_ACCEPT_GRACE_MS,
+  preorderMinLeadMinutes,
+  validatePreorderSlot,
+} from './preorder-slot.policy';
+
+// Same instant, whatever offset the client used ("08:00+08:00" == "00:00Z").
+function samePickup(stored: Date | null, requested: Date | null): boolean {
+  return (stored?.getTime() ?? null) === (requested?.getTime() ?? null);
+}
 
 const PREORDER_SCHEDULE_SELECT = {
   preorderSameAsStoreHours: true,
@@ -70,6 +80,17 @@ export class OrdersService {
       );
     }
 
+    // US-057: a pickup time only belongs on a preorder.
+    if (!dto.isPreorder && dto.scheduledPickupAt !== undefined) {
+      throw new BadRequestException('scheduledPickupAt can only be set on a preorder');
+    }
+    if (dto.isPreorder && !dto.scheduledPickupAt) {
+      throw new BadRequestException('scheduledPickupAt is required for a preorder');
+    }
+    const scheduledPickupAt = dto.isPreorder && dto.scheduledPickupAt
+      ? new Date(dto.scheduledPickupAt)
+      : null;
+
     const existing =
       await this.prisma.orderIdempotencyKey.findUnique({
         where: {
@@ -96,7 +117,8 @@ export class OrdersService {
       if (
         existing.cartId !== dto.cartId ||
         existing.eventId !== (dto.eventId ?? null) ||
-        (existing.order && existing.order.isPreorder !== (dto.isPreorder ?? false))
+        (existing.order && existing.order.isPreorder !== (dto.isPreorder ?? false)) ||
+        (existing.order && !samePickup(existing.order.scheduledPickupAt, scheduledPickupAt))
       ) {
         throw new ConflictException(
           'Idempotency-Key was already used for a different order request',
@@ -169,11 +191,24 @@ export class OrdersService {
               where: { id: cart.vendorId },
               select: PREORDER_SCHEDULE_SELECT,
             });
-            if (!hasPickupWindows(resolvePreorderWindows(schedule))) {
+            const windows = resolvePreorderWindows(schedule);
+            if (!hasPickupWindows(windows)) {
               throw new BadRequestException(
                 'This vendor has not set preorder pickup hours yet',
               );
             }
+
+            // US-057: the chosen slot must be in the future, inside a pickup
+            // window and leave the vendor enough time (server clock).
+            validatePreorderSlot({
+              slot: scheduledPickupAt!,
+              now: this.clock(),
+              windows,
+              leadMinutes: Math.max(
+                preorderMinLeadMinutes(),
+                ...cart.items.map((item) => item.product.preparationTimeMinutes),
+              ),
+            });
           }
 
           for (const item of cart.items) {
@@ -280,7 +315,8 @@ export class OrdersService {
             ),
           );
 
-          const estimatedReadyAt = new Date(
+          // A preorder is due at the time the student picked.
+          const estimatedReadyAt = scheduledPickupAt ?? new Date(
             Date.now() + estimatedWaitMinutes * 60_000,
           );
 
@@ -293,6 +329,7 @@ export class OrdersService {
               status: 'PENDING',
               isPasabuyRequest: false,
               isPreorder: dto.isPreorder ?? false,
+              scheduledPickupAt,
               subtotal,
               marketplaceFee,
               estimatedReadyAt,
@@ -403,7 +440,10 @@ export class OrdersService {
           existingRequest &&
           (existingRequest.cartId !== dto.cartId ||
             existingRequest.eventId !==
-              (dto.eventId ?? null))
+              (dto.eventId ?? null) ||
+            (existingRequest.order &&
+              (existingRequest.order.isPreorder !== (dto.isPreorder ?? false) ||
+                !samePickup(existingRequest.order.scheduledPickupAt, scheduledPickupAt))))
         ) {
           throw new ConflictException(
             'Idempotency-Key was already used for a different order request',
@@ -503,6 +543,7 @@ export class OrdersService {
         id: true,
         status: true,
         isPreorder: true,
+        scheduledPickupAt: true,
         isPasabuyRequest: true,
         totalAmount: true,
         createdAt: true,
@@ -531,6 +572,7 @@ export class OrdersService {
       status: order.status,
       ...readyFields(order.statusHistory),
       isPreorder: order.isPreorder,
+      scheduledPickupAt: order.scheduledPickupAt,
       isPasabuyRequest: order.isPasabuyRequest,
       orderReference: order.id.slice(0, 8).toUpperCase(),
       total: order.totalAmount.toFixed(2),
@@ -575,6 +617,7 @@ export class OrdersService {
         cancellationReason: true,
         cancellationNote: true,
         estimatedReadyAt: true,
+        scheduledPickupAt: true,
         updatedAt: true,
         pickupConfirmedAt: true,
         paidAt: true,
@@ -688,6 +731,7 @@ export class OrdersService {
       cancellationReason: order.cancellationReason,
       cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
+      scheduledPickupAt: order.scheduledPickupAt,
       estimatedWaitMinutes,
       paidAt: order.paidAt,
       buyerContactPingAt: order.buyerContactPingAt,
@@ -747,6 +791,8 @@ export class OrdersService {
         orderType: true,
         status: true,
         isPasabuyRequest: true,
+        isPreorder: true,
+        scheduledPickupAt: true,
         subtotal: true,
         marketplaceFee: true,
         totalAmount: true,
@@ -795,6 +841,8 @@ export class OrdersService {
         paymentStatus:
           order.status === 'PENDING' ? 'PENDING' : 'PAID',
         isPasabuyRequest: order.isPasabuyRequest,
+        isPreorder: order.isPreorder,
+        scheduledPickupAt: order.scheduledPickupAt,
         orderType: order.orderType,
         status: order.status,
         eventId: order.eventId,
@@ -1349,6 +1397,7 @@ export class OrdersService {
       cancellationReason: order.cancellationReason,
       cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
+      scheduledPickupAt: order.scheduledPickupAt,
       pickupConfirmedAt: order.pickupConfirmedAt,
       estimatedWaitMinutes,
       subtotal: order.subtotal.toFixed(2),
@@ -1424,10 +1473,19 @@ export class OrdersService {
     const now = Date.now();
 
     const acceptTimeoutCutoff = new Date(now - VENDOR_ACCEPT_TIMEOUT_MS);
+    // US-057: a preorder's accept clock starts at its scheduled pickup, not at
+    // payment, so a reservation made overnight is not refunded while the
+    // vendor is closed. Older preorders without a slot keep the payment rule.
     const stalledOnAccept = await this.prisma.order.findMany({
       where: {
         status: OrderStatus.PAID,
-        paidAt: { lte: acceptTimeoutCutoff },
+        OR: [
+          { scheduledPickupAt: null, paidAt: { lte: acceptTimeoutCutoff } },
+          {
+            isPreorder: true,
+            scheduledPickupAt: { lte: new Date(now - PREORDER_ACCEPT_GRACE_MS) },
+          },
+        ],
       },
       select: { id: true },
     });
