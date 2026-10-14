@@ -95,7 +95,7 @@ test('list: summary, page info and items; newest first with a stable tie-break',
   const result = await h.service.listVendorReviews('vendor', 'student', { page: 1, pageSize: 10 });
   assert.deepEqual(h.calls.findMany.orderBy, [{ createdAt: 'desc' }, { id: 'desc' }]);
   assert.deepEqual([h.calls.findMany.skip, h.calls.findMany.take], [0, 10]);
-  assert.deepEqual(h.calls.findMany.where, { vendorId: 'vendor' });
+  assert.deepEqual(h.calls.findMany.where, { vendorId: 'vendor', hiddenAt: null }, 'US-066: hidden excluded');
   assert.deepEqual([result.page, result.pageSize, result.total, result.totalPages], [1, 10, 23, 3]);
   assert.equal(result.summary.totalReviews, 23);
   assert.equal(result.summary.averageRating, 2.9);

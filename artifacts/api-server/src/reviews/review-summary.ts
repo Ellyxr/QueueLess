@@ -1,5 +1,9 @@
 // US-064: shared by the vendor reviews list and the storefront.
 
+// US-066: every public listing and rating aggregate uses this, so a review an
+// admin hid never shows up or counts anywhere.
+export const VISIBLE_REVIEW = { hiddenAt: null } as const;
+
 export interface RatingSummary {
   averageRating: number | null;
   totalReviews: number;

@@ -12,7 +12,7 @@ import type { UserRole } from '../auth/roles';
 import { UpdateVendorDto } from './dto/update-vendor.dto';
 import { UpdateVendorPreorderAvailabilityDto } from './dto/update-vendor-preorder-availability.dto';
 import { UpdateVendorAvailabilityDto } from './dto/update-vendor-availability.dto';
-import { summarizeRatings } from '../reviews/review-summary';
+import { VISIBLE_REVIEW, summarizeRatings } from '../reviews/review-summary';
 import {
   MANILA_TZ,
   computeAvailabilityStatus,
@@ -94,7 +94,7 @@ export class VendorsService {
     const ratingGroups = vendors.length
       ? await this.prisma.orderReview.groupBy({
           by: ['vendorId', 'rating'],
-          where: { vendorId: { in: vendors.map((vendor) => vendor.id) } },
+          where: { vendorId: { in: vendors.map((vendor) => vendor.id) }, ...VISIBLE_REVIEW },
           _count: { _all: true },
         })
       : [];
@@ -180,7 +180,7 @@ export class VendorsService {
     // US-064: rating summary for the Reviews tab header.
     const ratingGroups = await this.prisma.orderReview.groupBy({
       by: ['rating'],
-      where: { vendorId: vendor.id },
+      where: { vendorId: vendor.id, ...VISIBLE_REVIEW },
       _count: { _all: true },
     });
     const { averageRating, totalReviews } = summarizeRatings(ratingGroups);

@@ -52,7 +52,7 @@ test('vendor summary: all time, last 30 days, and latest reviews for their own s
     averageRating: 3.3, totalReviews: 3, distribution: { 1: 1, 2: 0, 3: 0, 4: 1, 5: 1 },
   });
   assert.deepEqual(result.last30Days, { averageRating: 4.5, totalReviews: 2 }, 'the 45-day-old 1-star is excluded');
-  assert.deepEqual(h.calls.groupBy[1].where, { vendorId: 'vendor', createdAt: { gte: daysAgo(30) } });
+  assert.deepEqual(h.calls.groupBy[1].where, { vendorId: 'vendor', hiddenAt: null, createdAt: { gte: daysAgo(30) } });
 
   assert.deepEqual(h.calls.findMany.orderBy, [{ createdAt: 'desc' }, { id: 'desc' }]);
   assert.equal(h.calls.findMany.take, RECENT_REVIEWS_LIMIT);
@@ -101,7 +101,7 @@ test('vendor listing includes each vendor\'s average rating from a single groupe
 
   assert.equal(h.calls.groupBy.length, 1, 'one query for all vendors, not one per vendor');
   assert.deepEqual(h.calls.groupBy[0].by, ['vendorId', 'rating']);
-  assert.deepEqual(h.calls.groupBy[0].where, { vendorId: { in: ['v1', 'v2', 'v3'] } });
+  assert.deepEqual(h.calls.groupBy[0].where, { vendorId: { in: ['v1', 'v2', 'v3'] }, hiddenAt: null }, 'US-066: hidden excluded');
   assert.deepEqual(result.map((v) => [v.id, v.averageRating, v.totalReviews]), [
     ['v1', 4.7, 3], ['v2', 2, 1], ['v3', null, 0],
   ]);
