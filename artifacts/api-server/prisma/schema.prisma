@@ -356,6 +356,8 @@ model Order {
   marketplaceFee     Decimal               @db.Decimal(10, 2)
   totalAmount        Decimal               @db.Decimal(10, 2)
   estimatedReadyAt   DateTime?             @db.Timestamptz(6)
+  /// US-057: chosen pickup time for a preorder (inside a vendor pickup window).
+  scheduledPickupAt  DateTime?             @db.Timestamptz(6)
   pickupConfirmedAt  DateTime?             @db.Timestamptz(6)
   paidAt             DateTime?             @db.Timestamptz(6)
   buyerContactPingAt DateTime?             @db.Timestamptz(6)
