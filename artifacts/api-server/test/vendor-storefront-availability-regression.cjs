@@ -92,7 +92,11 @@ function storefront(vendorOverrides, now) {
     preorderAvailability: WINDOWS, products: [], _count: { favoritedBy: 3 }, favoritedBy: [],
     ...vendorOverrides,
   };
-  const prisma = { vendor: { findFirst: async () => vendor } };
+  const prisma = {
+    vendor: { findFirst: async () => vendor },
+    // US-064: rating summary on the storefront (two 5-star, one 4-star).
+    orderReview: { groupBy: async () => [{ rating: 5, _count: { _all: 2 } }, { rating: 4, _count: { _all: 1 } }] },
+  };
   return new VendorsService(prisma).getVendorStorefront('vendor', 'student', now);
 }
 
@@ -119,6 +123,7 @@ test('storefront: existing fields are unchanged for the current frontend', async
   assert.deepEqual(result.availabilityDays, [storeDay('MONDAY', '10:00', '12:00')]);
   assert.deepEqual(result.preorderAvailability.map((w) => w.openTime), ['07:00', '13:00', '09:00']);
   assert.equal(result.preorderEnabled, true);
+  assert.deepEqual(result.reviewSummary, { averageRating: 4.7, totalReviews: 3 }, 'US-064');
 });
 
 test('storefront: "same as store hours" uses store hours as pickup windows', async () => {
