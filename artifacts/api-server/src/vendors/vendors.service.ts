@@ -15,7 +15,9 @@ import { UpdateVendorAvailabilityDto } from './dto/update-vendor-availability.dt
 import {
   MANILA_TZ,
   computeAvailabilityStatus,
+  nextStoreOpening,
   preorderPickupStatus,
+  storefrontPreorderInfo,
   resolvePreorderWindows,
   sortWindows,
   validateDaySchedule,
@@ -87,7 +89,7 @@ export class VendorsService {
     });
   }
 
-  async getVendorStorefront(vendorId: string, userId: string) {
+  async getVendorStorefront(vendorId: string, userId: string, now: Date = new Date()) {
     const vendor = await this.prisma.vendor.findFirst({
       where: {
         id: vendorId,
@@ -151,13 +153,9 @@ export class VendorsService {
     const { _count, favoritedBy, availability, preorderAvailability, preorderSameAsStoreHours, ...rest } =
       vendor;
 
-    const { isOpenNow, nextAvailableLabel } = computeAvailabilityStatus(availability);
-
-    const effectivePreorderDays = resolvePreorderWindows({
-      preorderSameAsStoreHours,
-      preorderAvailability,
-      availability,
-    });
+    // Computed from the vendor schedule and server time (Asia/Manila).
+    const { isOpenNow, nextAvailableLabel } = computeAvailabilityStatus(availability, now);
+    const schedule = { preorderSameAsStoreHours, preorderAvailability, availability };
 
     return {
       ...rest,
@@ -167,7 +165,12 @@ export class VendorsService {
       isOpenNow,
       nextAvailableLabel,
       preorderSameAsStoreHours,
-      preorderAvailability: effectivePreorderDays,
+      preorderAvailability: resolvePreorderWindows(schedule),
+      // US-056
+      serverTime: now,
+      timezone: MANILA_TZ,
+      nextOpenAt: isOpenNow ? null : nextStoreOpening(availability, now),
+      preorder: storefrontPreorderInfo({ ...schedule, preorderEnabled: vendor.preorderEnabled }, now),
     };
   }
 
