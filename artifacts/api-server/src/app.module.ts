@@ -24,6 +24,7 @@ import { QrModule } from './qr/qr.module';
 import { AdminModule } from './admin/admin.module';
 import { ImagekitModule } from './imagekit/imagekit.module';
 import { DealsModule } from './deals/deals.module';
+import { ReviewsModule } from './reviews/reviews.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { DealsModule } from './deals/deals.module';
     AdminModule,
     ImagekitModule,
     DealsModule,
+    ReviewsModule,
   ],
 })
 export class AppModule {}
