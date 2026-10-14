@@ -85,13 +85,14 @@ export class PreorderReservationsService {
             data: { status: OrderStatus.PAID },
           });
           if (!changed.count) return null;
-          await tx.orderStatusHistory.create({
+          const history = await tx.orderStatusHistory.create({
             data: {
               orderId: id,
               status: OrderStatus.PAID,
               changedByUserId: null,
               note: 'Scheduled preorder released to the live queue',
             },
+            select: { id: true },
           });
           await tx.auditRecord.create({ data: {
             actorUserId: null, actionType: 'ORDER_STATUS_UPDATED',
@@ -99,13 +100,14 @@ export class PreorderReservationsService {
             beforeState: { status: OrderStatus.SCHEDULED },
             afterState: { status: OrderStatus.PAID, source: 'SCHEDULED_RELEASE' },
           } });
-          return tx.order.findUniqueOrThrow({
+          const released = await tx.order.findUniqueOrThrow({
             where: { id },
             select: {
               id: true, vendorId: true, customerId: true, status: true, totalAmount: true,
               createdAt: true, updatedAt: true, vendor: { select: { ownerUserId: true } },
             },
           });
+          return { ...released, historyId: history.id };
         });
         if (!order) continue;
 
@@ -123,6 +125,8 @@ export class PreorderReservationsService {
           status: order.status,
           updatedAt: order.updatedAt,
         });
+        // US-061: both sides learn the reservation is now in the live queue.
+        await this.realtimeGateway.emitPreorderEvent('preorder.released', order.id, order.historyId);
       } catch (error) {
         this.logger.warn(`Could not release scheduled preorder ${id}: ${String(error)}`);
       }

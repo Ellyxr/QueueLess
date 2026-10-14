@@ -201,6 +201,7 @@ function releaseHarness(orders, { failFor = [] } = {}) {
   const realtime = {
     emitNewOrder: (owner, payload) => state.vendorEvents.push([owner, payload.orderId, payload.status]),
     emitOrderStatusUpdated: async (user, payload) => state.studentEvents.push([user, payload.status]),
+    emitPreorderEvent: async () => {}, // US-061, asserted in preorder-realtime-regression.cjs
   };
   const service = new PreorderReservationsService(prisma, {}, realtime);
   service.logger.warn = () => {};

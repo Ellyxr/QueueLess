@@ -325,6 +325,8 @@ export class WalletService {
         amount: share.amountDue.toFixed(2),
       });
       let paidOrder = null;
+      // US-061: status-history id for preorder.confirmed, preorders only.
+      let preorderEventId: string | null = null;
       if (
         (await tx.paymentShare.count({
           where: { orderId: share.orderId, status: PaymentShareStatus.PENDING },
@@ -336,7 +338,8 @@ export class WalletService {
           where: { id: share.orderId },
           data: { status: paidStatus, paidAt: new Date() },
         });
-        await tx.orderStatusHistory.create({
+        const history = await tx.orderStatusHistory.create({
+          select: { id: true },
           data: {
             orderId: share.orderId,
             status: paidStatus,
@@ -347,6 +350,7 @@ export class WalletService {
                 : "Payment confirmed from QueueLess wallet",
           },
         });
+        if (share.order.isPreorder) preorderEventId = history.id;
         await tx.vendorLedgerEntry.create({
           data: {
             vendorId: paidOrder.vendorId,
@@ -369,6 +373,7 @@ export class WalletService {
         orderId: share.orderId,
         duplicate: false,
         paidOrder,
+        preorderEventId,
       };
     });
     if (result.paidOrder)
@@ -377,6 +382,12 @@ export class WalletService {
         status: result.paidOrder.status,
         updatedAt: result.paidOrder.updatedAt,
       });
+    if (result.paidOrder && "preorderEventId" in result && result.preorderEventId)
+      await this.realtime.emitPreorderEvent(
+        "preorder.confirmed",
+        result.orderId,
+        result.preorderEventId,
+      );
     return {
       paymentId: result.paymentId,
       orderId: result.orderId,
