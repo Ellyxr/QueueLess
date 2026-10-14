@@ -6,6 +6,7 @@ import { RefundsModule } from '../refunds/refunds.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
+import { PreorderChangesService } from './preorder-changes.service';
 import { PreorderReservationsService } from './preorder-reservations.service';
 
 @Module({
@@ -17,6 +18,6 @@ import { PreorderReservationsService } from './preorder-reservations.service';
     PaymongoModule,
   ],
   controllers: [OrdersController],
-  providers: [OrdersService, PreorderReservationsService],
+  providers: [OrdersService, PreorderReservationsService, PreorderChangesService],
 })
 export class OrdersModule {}

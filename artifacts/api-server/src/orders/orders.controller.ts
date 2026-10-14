@@ -26,13 +26,59 @@ import { RequestOrderRefundDto } from '../refunds/dto/request-order-refund.dto';
 
 import { CreateOrderDto } from './dto/create-order.dto';
 import { OrdersService } from './orders.service';
+import { CancelPreorderDto, ReschedulePreorderDto } from './dto/preorder-change.dto';
+import { PreorderChangesService } from './preorder-changes.service';
 
 @ApiTags('Orders')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('orders')
 export class OrdersController {
-  constructor(private readonly ordersService: OrdersService) {}
+  constructor(
+    private readonly ordersService: OrdersService,
+    private readonly preorderChanges: PreorderChangesService,
+  ) {}
+
+  // ------------------------------------------------ US-060 preorder changes
+
+  @Get(':orderId/preorder')
+  @UseGuards(RolesGuard)
+  @Roles('BUYER')
+  @ApiOperation({
+    summary: 'View my preorder: pickup time, change cutoff, whether it can be changed, windows to move to',
+  })
+  async viewPreorder(@CurrentUser() user: JwtPayload, @Param('orderId') orderId: string) {
+    return this.preorderChanges.view(user.sub, orderId);
+  }
+
+  @Patch(':orderId/preorder/pickup-time')
+  @UseGuards(RolesGuard)
+  @Roles('BUYER')
+  @ApiOperation({ summary: 'Change my preorder pickup time before the cutoff' })
+  @ApiResponse({ status: 400, description: 'New time is not a valid slot' })
+  @ApiResponse({ status: 404, description: 'Not my order' })
+  @ApiResponse({ status: 409, description: 'Cutoff passed, reservation expired, or order no longer changeable' })
+  async reschedulePreorder(
+    @CurrentUser() user: JwtPayload,
+    @Param('orderId') orderId: string,
+    @Body() dto: ReschedulePreorderDto,
+  ) {
+    return this.preorderChanges.reschedule(user.sub, orderId, dto);
+  }
+
+  @Post(':orderId/preorder/cancel')
+  @UseGuards(RolesGuard)
+  @Roles('BUYER')
+  @ApiOperation({ summary: 'Cancel my preorder before the cutoff; a paid preorder is refunded automatically' })
+  @ApiResponse({ status: 404, description: 'Not my order' })
+  @ApiResponse({ status: 409, description: 'Cutoff passed, reservation expired, or order no longer changeable' })
+  async cancelPreorder(
+    @CurrentUser() user: JwtPayload,
+    @Param('orderId') orderId: string,
+    @Body() dto: CancelPreorderDto,
+  ) {
+    return this.preorderChanges.cancel(user.sub, orderId, dto);
+  }
 
   @Post()
   @ApiOperation({

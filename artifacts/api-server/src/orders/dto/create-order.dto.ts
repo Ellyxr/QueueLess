@@ -3,7 +3,7 @@ import { IsBoolean, IsDefined, IsOptional, IsUUID, Matches, ValidateIf } from 'c
 
 // A bare "2026-10-16T08:00" would be read in the server's timezone, so an
 // explicit offset is required.
-const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
+export const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
 
 export class CreateOrderDto {
   @ApiProperty({
