@@ -23,6 +23,7 @@ import { PaymongoService } from './paymongo.service';
 import { RefundsService } from '../refunds/refunds.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { PasabuyPaymentsService } from '../pasabuy/pasabuy-payments.service';
+import { isReservationExpired } from '../orders/preorder-slot.policy';
 
 @Injectable()
 export class PaymentsService {
@@ -65,6 +66,8 @@ export class PaymentsService {
             select: {
               id: true,
               status: true,
+              isPreorder: true,
+              reservationExpiresAt: true,
             },
           },
           payment: true,
@@ -78,6 +81,14 @@ export class PaymentsService {
     if (paymentShare.order.status !== OrderStatus.PENDING) {
       throw new ConflictException(
         `Order cannot be paid while its status is ${paymentShare.order.status}`,
+      );
+    }
+
+    // US-058: an expired reservation cannot be paid, even before the expiry
+    // job has cancelled it.
+    if (isReservationExpired(paymentShare.order)) {
+      throw new ConflictException(
+        'This reservation expired before it was paid; please reserve again',
       );
     }
 
@@ -238,6 +249,9 @@ export class PaymentsService {
         const currentShare = await tx.paymentShare.findUniqueOrThrow({ where: { id: paymentShare.id }, include: { order: true } });
         if (currentShare.status !== PaymentShareStatus.PENDING || currentShare.order.status !== OrderStatus.PENDING || currentShare.paymentId !== paymentShare.paymentId) {
           throw new ConflictException('Payment share changed; reload payment status');
+        }
+        if (isReservationExpired(currentShare.order)) {
+          throw new ConflictException('This reservation expired before it was paid; please reserve again');
         }
         if (paymentShare.paymentId) {
           const prior = await tx.payment.findUniqueOrThrow({
