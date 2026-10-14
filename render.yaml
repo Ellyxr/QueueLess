@@ -1,4 +1,54 @@
 services:
+  # US-051: NestJS REST API + Socket.IO realtime in one Render Web Service.
+  # REST:     https://queueless-bg1x.onrender.com/api/v1
+  # Socket:   https://queueless-bg1x.onrender.com/realtime  (path /socket.io)
+  # Health:   https://queueless-bg1x.onrender.com/api/v1/health
+  - type: web
+    runtime: node
+    name: queueless-api
+    plan: free
+    # --prod=false keeps devDependencies (Nest CLI, Prisma CLI, @prisma/client)
+    # installed even though NODE_ENV=production.
+    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --dir artifacts/api-server build:render
+    startCommand: pnpm --dir artifacts/api-server start:render
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.19.0
+      - key: NODE_ENV
+        value: production
+      # PORT is injected by Render; the app reads process.env.PORT.
+      - key: CORS_ORIGIN
+        value: https://queueless-static.onrender.com
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 15m
+      - key: PAYMONGO_SECRET_KEY
+        sync: false
+      - key: PAYMONGO_PUBLIC_KEY
+        sync: false
+      - key: PAYMONGO_WEBHOOK_SECRET
+        sync: false
+      - key: MARKETPLACE_FEE_RATE
+        value: '0'
+      - key: PAYMONGO_SUCCESS_URL
+        value: https://queueless-static.onrender.com/payment/success
+      - key: PAYMONGO_CANCEL_URL
+        value: https://queueless-static.onrender.com/payment/cancel
+      - key: PASABUY_CAMPUS_BOUNDS
+        sync: false
+      - key: IMAGEKIT_PUBLIC_KEY
+        sync: false
+      - key: IMAGEKIT_PRIVATE_KEY
+        sync: false
+      - key: IMAGEKIT_URL_ENDPOINT
+        sync: false
+
   - type: web
     runtime: static
     name: queueless-static
