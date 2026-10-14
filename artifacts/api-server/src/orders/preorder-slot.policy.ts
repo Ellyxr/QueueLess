@@ -141,6 +141,17 @@ export function statusAfterPayment(
 }
 
 /**
+ * US-060: the last moment a student may reschedule or cancel a preorder: when
+ * it enters the vendor's live queue (queueReleaseAt), since preparation can
+ * start then. Older preorders without a release time use pickup - lead time.
+ */
+export function changeCutoffAt(order: { queueReleaseAt: Date | null; scheduledPickupAt: Date | null }): Date | null {
+  if (order.queueReleaseAt) return order.queueReleaseAt;
+  if (!order.scheduledPickupAt) return null;
+  return new Date(order.scheduledPickupAt.getTime() - preorderMinLeadMinutes() * MINUTE_MS);
+}
+
+/**
  * When the vendor-accept timeout starts: payment time for a regular order,
  * the scheduled pickup time for a preorder (a reservation made at 11 PM must
  * not be refunded because the vendor was asleep).
