@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { CheckCircle2, Info, Loader2, MapPin } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertTriangle, CheckCircle2, Info, Loader2, MapPin, Store } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -15,6 +15,10 @@ import {
   cancelRequest,
   createRequest,
   getCurrentPosition,
+  NU_LAGUNA_LOCATION,
+  previewRequest,
+  RECOMMENDED_RADIUS_METERS,
+  type PasabuyDropoffPreview,
   type CreatedPasabuyRequest,
   type PasabuyOrderInfo,
 } from "./pasabuy-api";
@@ -34,12 +38,14 @@ export function PasabuyRequestDialog({
   open,
   onOpenChange,
   order,
+  isPreorder = false,
   onCreated,
   onViewRequest,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   order: PasabuyOrderInfo;
+  isPreorder?: boolean;
   onCreated?: (request: CreatedPasabuyRequest) => void;
   onViewRequest?: (requestId: string) => void;
 }) {
@@ -47,6 +53,10 @@ export function PasabuyRequestDialog({
   const [coordinates, setCoordinates] = useState<Coordinates | null>(null);
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PasabuyDropoffPreview | null>(null);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [outsideConfirmed, setOutsideConfirmed] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +67,10 @@ export function PasabuyRequestDialog({
     setCoordinates(null);
     setIsLocating(false);
     setLocationError(null);
+    setPreview(null);
+    setIsPreviewing(false);
+    setPreviewError(null);
+    setOutsideConfirmed(false);
     setTermsAccepted(false);
     setIsSubmitting(false);
     setError(null);
@@ -69,6 +83,7 @@ export function PasabuyRequestDialog({
     try {
       const position = await getCurrentPosition();
       setCoordinates(position);
+      setDropoffLocation(formatCoordinates(position));
     } catch (err) {
       setLocationError(err instanceof Error ? err.message : "Could not get your location.");
     } finally {
@@ -76,7 +91,53 @@ export function PasabuyRequestDialog({
     }
   };
 
-  const canSubmit = termsAccepted && dropoffLocation.trim().length > 0 && coordinates !== null && !isSubmitting;
+  const handleUseStoreAddress = () => {
+    setLocationError(null);
+    setCoordinates({ latitude: NU_LAGUNA_LOCATION.latitude, longitude: NU_LAGUNA_LOCATION.longitude });
+    setDropoffLocation(NU_LAGUNA_LOCATION.label);
+  };
+
+  // Live distance check whenever the coordinates change.
+  useEffect(() => {
+    setOutsideConfirmed(false);
+    if (!open || !coordinates) {
+      setPreview(null);
+      setPreviewError(null);
+      return;
+    }
+    let cancelled = false;
+    setIsPreviewing(true);
+    setPreviewError(null);
+    previewRequest({
+      orderId: order.orderId,
+      dropoffLatitude: coordinates.latitude,
+      dropoffLongitude: coordinates.longitude,
+    })
+      .then((result) => {
+        if (!cancelled) setPreview(result);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setPreview(null);
+        setPreviewError(err instanceof Error ? err.message : "Could not check this location.");
+      })
+      .finally(() => {
+        if (!cancelled) setIsPreviewing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, coordinates, order.orderId]);
+
+  const needsOutsideConfirmation = Boolean(preview?.requiresConfirmation) && !outsideConfirmed;
+  const canSubmit =
+    termsAccepted &&
+    dropoffLocation.trim().length > 0 &&
+    coordinates !== null &&
+    !isPreviewing &&
+    !previewError &&
+    !needsOutsideConfirmation &&
+    !isSubmitting;
 
   const handleSubmit = async () => {
     if (!canSubmit || !coordinates) return;
@@ -89,6 +150,7 @@ export function PasabuyRequestDialog({
         dropoffLatitude: coordinates.latitude,
         dropoffLongitude: coordinates.longitude,
         termsAccepted: true,
+        outsideRadiusConfirmed: preview?.requiresConfirmation ? true : undefined,
       });
       trackPasabuyRequest(record.id, order.orderId);
       setCreated(record);
@@ -157,13 +219,56 @@ export function PasabuyRequestDialog({
                     : "Share my current location"}
               </Button>
 
+              {isPreorder && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full gap-1.5 rounded-full"
+                  onClick={handleUseStoreAddress}
+                >
+                  <Store className="h-3.5 w-3.5" />
+                  Use store address ({NU_LAGUNA_LOCATION.label})
+                </Button>
+              )}
+
               {locationError && <p className="text-[11px] font-medium text-destructive">{locationError}</p>}
               {coordinates && !locationError && (
                 <p className="text-[11px] text-muted-foreground">
-                  Location captured ({coordinates.latitude.toFixed(5)}, {coordinates.longitude.toFixed(5)}).
-                  Your delivery fee is calculated once you submit — it must be within{" "}
-                  {"270"}m of the vendor's pickup point.
+                  Location set ({formatCoordinates(coordinates)}).
                 </p>
+              )}
+              {coordinates && isPreviewing && (
+                <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Checking delivery distance...
+                </p>
+              )}
+              {previewError && <p className="text-[11px] font-medium text-destructive">{previewError}</p>}
+              {preview && !preview.requiresConfirmation && (
+                <p className="flex items-start gap-1.5 rounded-xl bg-emerald-500/10 p-2 text-[11px] font-medium text-emerald-700">
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  Deliverable: {preview.distanceMeters}m from the vendor (within {RECOMMENDED_RADIUS_METERS}m).
+                  Fee: ₱{preview.convenienceFee}.
+                </p>
+              )}
+              {preview && preview.requiresConfirmation && (
+                <div className="space-y-2 rounded-xl bg-amber-500/10 p-2 text-[11px] text-amber-800">
+                  <p className="flex items-start gap-1.5 font-medium">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    Caution: this is {preview.distanceMeters}m from the vendor, beyond the recommended{" "}
+                    {RECOMMENDED_RADIUS_METERS}m. Deliverers may decline or take longer. Fee: ₱
+                    {preview.convenienceFee}.
+                  </p>
+                  <label className="flex cursor-pointer items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={outsideConfirmed}
+                      onChange={(event) => setOutsideConfirmed(event.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span>I understand and want to continue with this location.</span>
+                  </label>
+                </div>
               )}
               {!coordinates && !locationError && !isLocating && (
                 <p className="text-[11px] text-muted-foreground">
@@ -257,6 +362,10 @@ export function PasabuyRequestDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function formatCoordinates(c: Coordinates) {
+  return `${c.latitude.toFixed(6)}, ${c.longitude.toFixed(6)}`;
 }
 
 function Row({ label, value }: { label: string; value: string }) {

@@ -12,6 +12,7 @@ import {
   setCheckoutQueue,
   type CheckoutQueueState,
 } from "@/features/cart/checkout";
+import { getRequest } from "@/features/pasabuy/pasabuy-api";
 import { canTrackNewOrder, MAX_TRACKED_ORDERS } from "@/features/orders/order-tracking";
 
 const POLL_INTERVAL_MS = 2000;
@@ -36,7 +37,94 @@ export default function PaymentSuccessPage() {
     return <FeaturedListingPaymentSuccessPage />;
   }
 
+  if (params.has("pasabuyRequestId")) return <PasabuyPaymentSuccessPage />;
+
   return <OrderPaymentSuccessPage />;
+}
+
+function PasabuyPaymentSuccessPage() {
+  const [requestId] = useState(() => new URLSearchParams(window.location.search).get("pasabuyRequestId"));
+  const [paid, setPaid] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
+  const startedAt = useRef(Date.now());
+
+  useEffect(() => {
+    if (!requestId) return;
+    let cancelled = false;
+    const poll = () => {
+      getRequest(requestId)
+        .then((request) => {
+          if (cancelled) return;
+          if (request.paymentStatus === "PAID") {
+            setPaid(true);
+            window.clearInterval(timer);
+          } else if (Date.now() - startedAt.current > POLL_TIMEOUT_MS) {
+            setTimedOut(true);
+            window.clearInterval(timer);
+          }
+        })
+        .catch(() => {
+          // transient errors are retried on the next tick until the timeout
+          if (!cancelled && Date.now() - startedAt.current > POLL_TIMEOUT_MS) {
+            setTimedOut(true);
+            window.clearInterval(timer);
+          }
+        });
+    };
+    poll();
+    const timer = window.setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [requestId]);
+
+  return (
+    <main className="mx-auto flex min-h-[70dvh] w-full max-w-lg flex-col justify-center px-4 py-10">
+      <section className="rounded-[28px] border border-border/80 bg-card p-6 text-center shadow-md sm:p-8">
+        <div className="mb-6 flex items-center justify-between">
+          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary">Pasabuy payment</p>
+          <Badge variant="secondary" className="gap-1">
+            <ShieldCheck className="h-3 w-3" /> PayMongo Sandbox
+          </Badge>
+        </div>
+        <div className="flex flex-col items-center gap-3 py-4">
+          {paid ? (
+            <>
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-white">
+                <Check className="h-7 w-7" />
+              </div>
+              <p className="text-lg font-bold text-foreground">Payment successful</p>
+              <p className="max-w-xs text-xs text-muted-foreground">
+                Your Pasabuy fee is paid. Your deliverer can now pick up your order.
+              </p>
+            </>
+          ) : timedOut || !requestId ? (
+            <>
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-amber-500 text-white">
+                <ShieldCheck className="h-7 w-7" />
+              </div>
+              <p className="text-lg font-bold text-foreground">Still confirming your payment</p>
+              <p className="max-w-xs text-xs text-muted-foreground">
+                PayMongo hasn't notified us yet. Your request will update automatically once confirmed.
+              </p>
+            </>
+          ) : (
+            <>
+              <Spinner className="h-8 w-8 text-primary" />
+              <p className="font-semibold text-foreground">Confirming your payment…</p>
+            </>
+          )}
+        </div>
+        <Button
+          className="mt-6 w-full rounded-full"
+          onClick={() => (window.location.href = requestId ? `/pasabuy/${requestId}` : "/pasabuy")}
+        >
+          View Pasabuy request
+        </Button>
+      </section>
+    </main>
+  );
 }
 
 function OrderPaymentSuccessPage() {

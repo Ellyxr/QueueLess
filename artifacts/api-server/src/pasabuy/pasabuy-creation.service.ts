@@ -25,7 +25,7 @@ export class PasabuyCreationService {
     const order = await this.prisma.order.findFirst({ where: { id: dto.orderId, customerId: userId },
       include: { vendor: true, items: true } });
     if (!order) throw new NotFoundException('Order not found');
-    if (order.isPreorder || order.orderType !== 'INDIVIDUAL' ||
+    if (order.orderType !== 'INDIVIDUAL' ||
       !['PAID', 'COOKING', 'READY_FOR_PICKUP'].includes(order.status) || !order.items.length)
       throw new ConflictException('An individual paid order is required');
     if (order.vendor.pickupLatitude == null || order.vendor.pickupLongitude == null || !order.vendor.pickupLocation?.trim())
@@ -51,9 +51,6 @@ export class PasabuyCreationService {
           include: { vendor: true, items: { include: { product: true } } },
         });
         if (!order) throw new NotFoundException('Order not found');
-        if (order.isPreorder) {
-          throw new ConflictException('Preorders cannot use Pasabuy');
-        }
         if (order.orderType !== 'INDIVIDUAL' ||
           !(order.status === OrderStatus.PAID || order.status === OrderStatus.COOKING || order.status === OrderStatus.READY_FOR_PICKUP)) {
           throw new ConflictException('An individual paid order is required');
