@@ -17,9 +17,15 @@ services:
         value: 24.19.0
       - key: NODE_ENV
         value: production
+      # US-052: this service is the staging deployment; /api/v1/health reports it.
+      - key: APP_ENV
+        value: staging
       # PORT is injected by Render; the app reads process.env.PORT.
       - key: CORS_ORIGIN
         value: https://queueless-static.onrender.com
+      # US-052: Neon "staging" branch. DATABASE_URL = pooled (-pooler) host,
+      # DIRECT_URL = direct host (used by prisma migrate deploy). Same branch and
+      # database, both with ?sslmode=require. See STAGING_DATABASE.md.
       - key: DATABASE_URL
         sync: false
       - key: DIRECT_URL

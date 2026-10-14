@@ -13,7 +13,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "prisma:seed": "tsx prisma/seed.ts",
+    "db:migrate:status": "prisma migrate status",
+    "db:verify": "tsx prisma/verify-db.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
