@@ -12,7 +12,15 @@ import type { UserRole } from '../auth/roles';
 import { UpdateVendorDto } from './dto/update-vendor.dto';
 import { UpdateVendorPreorderAvailabilityDto } from './dto/update-vendor-preorder-availability.dto';
 import { UpdateVendorAvailabilityDto } from './dto/update-vendor-availability.dto';
-import { computeAvailabilityStatus, validateDaySchedule } from './availability.util';
+import {
+  MANILA_TZ,
+  computeAvailabilityStatus,
+  preorderPickupStatus,
+  resolvePreorderWindows,
+  sortWindows,
+  validateDaySchedule,
+  validatePickupWindows,
+} from './availability.util';
 
 const PREORDER_AVAILABILITY_SELECT = {
   dayOfWeek: true,
@@ -145,14 +153,11 @@ export class VendorsService {
 
     const { isOpenNow, nextAvailableLabel } = computeAvailabilityStatus(availability);
 
-    const effectivePreorderDays = preorderSameAsStoreHours
-      ? availability.map((day) => ({
-          dayOfWeek: day.dayOfWeek,
-          isEnabled: day.isOpen,
-          openTime: day.openTime,
-          closeTime: day.closeTime,
-        }))
-      : preorderAvailability;
+    const effectivePreorderDays = resolvePreorderWindows({
+      preorderSameAsStoreHours,
+      preorderAvailability,
+      availability,
+    });
 
     return {
       ...rest,
@@ -347,34 +352,96 @@ export class VendorsService {
     });
   }
 
-  async updatePreorderAvailability(
+  // Owner of the vendor or an admin; everyone else is refused.
+  private async assertCanManageVendor(
     userId: string,
     vendorId: string,
-    dto: UpdateVendorPreorderAvailabilityDto,
     roles: UserRole[],
+    action: 'view' | 'modify',
   ) {
     const vendor = await this.prisma.vendor.findUnique({
-      where: {
-        id: vendorId,
-      },
-      select: {
-        id: true,
-        ownerUserId: true,
-      },
+      where: { id: vendorId },
+      select: { id: true, ownerUserId: true },
     });
 
     if (!vendor) {
       throw new NotFoundException('Vendor not found');
     }
 
-    const isAdmin = roles.includes('ADMIN');
-    const isOwner = vendor.ownerUserId === userId;
-
-    if (!isAdmin && !isOwner) {
+    if (!roles.includes('ADMIN') && vendor.ownerUserId !== userId) {
       throw new ForbiddenException(
-        'You do not have permission to modify this vendor',
+        `You do not have permission to ${action} this vendor`,
       );
     }
+  }
+
+  // US-055: configured preorder pickup windows, the windows in force (store
+  // hours when sameAsStoreHours) and whether pickup is open now, all in
+  // Asia/Manila time.
+  async getPreorderAvailability(
+    userId: string,
+    vendorId: string,
+    roles: UserRole[],
+    now: Date = new Date(),
+  ) {
+    await this.assertCanManageVendor(userId, vendorId, roles, 'view');
+    return this.buildPreorderAvailability(vendorId, now);
+  }
+
+  private async buildPreorderAvailability(vendorId: string, now: Date) {
+    const vendor = await this.prisma.vendor.findUniqueOrThrow({
+      where: { id: vendorId },
+      select: {
+        id: true,
+        preorderEnabled: true,
+        preorderSameAsStoreHours: true,
+        preorderAvailability: { select: PREORDER_AVAILABILITY_SELECT },
+        availability: { select: AVAILABILITY_SELECT },
+      },
+    });
+    const { isOpenNow, nextAvailableLabel, hasPickupWindows } = preorderPickupStatus(vendor, now);
+
+    return {
+      id: vendor.id,
+      timezone: MANILA_TZ,
+      preorderEnabled: vendor.preorderEnabled,
+      preorderSameAsStoreHours: vendor.preorderSameAsStoreHours,
+      preorderAvailability: sortWindows(vendor.preorderAvailability),
+      effectivePickupWindows: resolvePreorderWindows(vendor),
+      pickup: {
+        hasPickupWindows,
+        isOpenNow: vendor.preorderEnabled && hasPickupWindows && isOpenNow,
+        nextAvailableLabel: vendor.preorderEnabled ? nextAvailableLabel : null,
+      },
+    };
+  }
+
+  async getStoreAvailability(
+    userId: string,
+    vendorId: string,
+    roles: UserRole[],
+    now: Date = new Date(),
+  ) {
+    await this.assertCanManageVendor(userId, vendorId, roles, 'view');
+    const vendor = await this.prisma.vendor.findUniqueOrThrow({
+      where: { id: vendorId },
+      select: { id: true, availability: { select: AVAILABILITY_SELECT } },
+    });
+    return {
+      id: vendor.id,
+      timezone: MANILA_TZ,
+      availability: sortWindows(vendor.availability),
+      ...computeAvailabilityStatus(vendor.availability, now),
+    };
+  }
+
+  async updatePreorderAvailability(
+    userId: string,
+    vendorId: string,
+    dto: UpdateVendorPreorderAvailabilityDto,
+    roles: UserRole[],
+  ) {
+    await this.assertCanManageVendor(userId, vendorId, roles, 'modify');
 
     const days = dto.sameAsStoreHours ? [] : (dto.days ?? []);
 
@@ -384,7 +451,7 @@ export class VendorsService {
       );
     }
 
-    validateDaySchedule(days);
+    validatePickupWindows(days);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.vendor.update({
@@ -412,17 +479,9 @@ export class VendorsService {
       }
     });
 
-    return this.prisma.vendor.findUniqueOrThrow({
-      where: { id: vendorId },
-      select: {
-        id: true,
-        preorderEnabled: true,
-        preorderSameAsStoreHours: true,
-        preorderAvailability: {
-          select: PREORDER_AVAILABILITY_SELECT,
-        },
-      },
-    });
+    // Same fields as before (id, preorderEnabled, preorderSameAsStoreHours,
+    // preorderAvailability) plus the resolved windows and pickup status.
+    return this.buildPreorderAvailability(vendorId, new Date());
   }
 
   async updateAvailability(
@@ -431,28 +490,7 @@ export class VendorsService {
     dto: UpdateVendorAvailabilityDto,
     roles: UserRole[],
   ) {
-    const vendor = await this.prisma.vendor.findUnique({
-      where: {
-        id: vendorId,
-      },
-      select: {
-        id: true,
-        ownerUserId: true,
-      },
-    });
-
-    if (!vendor) {
-      throw new NotFoundException('Vendor not found');
-    }
-
-    const isAdmin = roles.includes('ADMIN');
-    const isOwner = vendor.ownerUserId === userId;
-
-    if (!isAdmin && !isOwner) {
-      throw new ForbiddenException(
-        'You do not have permission to modify this vendor',
-      );
-    }
+    await this.assertCanManageVendor(userId, vendorId, roles, 'modify');
 
     validateDaySchedule(
       dto.days.map((day) => ({
