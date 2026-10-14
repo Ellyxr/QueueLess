@@ -6,6 +6,9 @@ import { PaymongoService } from '../payments/paymongo.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 /**
+ * US-059: releaseScheduledPreorders moves paid preorders from SCHEDULED to
+ * the vendor's live queue when their pickup window opens.
+ *
  * US-058: a preorder is a reservation only once it is paid. An unpaid
  * preorder past its reservationExpiresAt is cancelled (RESERVATION_EXPIRED)
  * and its slot released. Its open PayMongo checkout is expired first so it can
@@ -56,6 +59,75 @@ export class PreorderReservationsService {
       }
     }
     return expiredIds;
+  }
+
+  /**
+   * US-059: moves paid SCHEDULED preorders into the vendor's live queue
+   * (PAID) once their queueReleaseAt arrives, recording status history, and
+   * tells the vendor (order.created) and the student (order.status.updated).
+   */
+  @Interval(30_000)
+  async releaseScheduledPreorders(): Promise<string[]> {
+    const now = this.clock();
+    const due = await this.prisma.order.findMany({
+      where: { status: OrderStatus.SCHEDULED, queueReleaseAt: { lte: now } },
+      select: { id: true },
+      orderBy: { queueReleaseAt: 'asc' },
+      take: 50,
+    });
+
+    const released: string[] = [];
+    for (const { id } of due) {
+      try {
+        const order = await this.prisma.$transaction(async (tx) => {
+          const changed = await tx.order.updateMany({
+            where: { id, status: OrderStatus.SCHEDULED, queueReleaseAt: { lte: now } },
+            data: { status: OrderStatus.PAID },
+          });
+          if (!changed.count) return null;
+          await tx.orderStatusHistory.create({
+            data: {
+              orderId: id,
+              status: OrderStatus.PAID,
+              changedByUserId: null,
+              note: 'Scheduled preorder released to the live queue',
+            },
+          });
+          await tx.auditRecord.create({ data: {
+            actorUserId: null, actionType: 'ORDER_STATUS_UPDATED',
+            entityType: 'Order', entityId: id,
+            beforeState: { status: OrderStatus.SCHEDULED },
+            afterState: { status: OrderStatus.PAID, source: 'SCHEDULED_RELEASE' },
+          } });
+          return tx.order.findUniqueOrThrow({
+            where: { id },
+            select: {
+              id: true, vendorId: true, customerId: true, status: true, totalAmount: true,
+              createdAt: true, updatedAt: true, vendor: { select: { ownerUserId: true } },
+            },
+          });
+        });
+        if (!order) continue;
+
+        released.push(order.id);
+        this.realtimeGateway.emitNewOrder(order.vendor.ownerUserId, {
+          orderId: order.id,
+          vendorId: order.vendorId,
+          customerId: order.customerId,
+          status: order.status,
+          totalAmount: order.totalAmount.toFixed(2),
+          createdAt: order.createdAt,
+        });
+        await this.realtimeGateway.emitOrderStatusUpdated(order.customerId, {
+          orderId: order.id,
+          status: order.status,
+          updatedAt: order.updatedAt,
+        });
+      } catch (error) {
+        this.logger.warn(`Could not release scheduled preorder ${id}: ${String(error)}`);
+      }
+    }
+    return released;
   }
 
   private async expireOne(

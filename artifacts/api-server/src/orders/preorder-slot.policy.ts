@@ -106,6 +106,41 @@ export function isReservationExpired(
 }
 
 /**
+ * US-059: when a paid preorder leaves SCHEDULED for the vendor's live queue:
+ * the opening of the pickup window that contains the slot, or earlier if the
+ * prep lead time needs it (slot - leadMinutes). E.g. window 07:00-10:00,
+ * slot 08:00, lead 30 -> 07:00; window 07:00-10:00, slot 07:15, lead 30 -> 06:45.
+ */
+export function queueReleaseAt(slot: Date, windows: PreorderWindow[], leadMinutes: number): Date {
+  const { dayOfWeek, timeMinutes } = getManilaClock(slot);
+  const containing = windows.find(
+    (window) =>
+      window.isEnabled &&
+      window.dayOfWeek === dayOfWeek &&
+      window.openTime &&
+      window.closeTime &&
+      timeMinutes >= toMinutes(window.openTime) &&
+      timeMinutes < toMinutes(window.closeTime),
+  );
+  const leadStart = slot.getTime() - leadMinutes * MINUTE_MS;
+  if (!containing) return new Date(leadStart);
+  const windowStart = slot.getTime() - (timeMinutes - toMinutes(containing.openTime!)) * MINUTE_MS;
+  return new Date(Math.min(windowStart, leadStart));
+}
+
+/**
+ * US-059: the status an order gets once fully paid. A preorder whose release
+ * time is still ahead is held as SCHEDULED; everything else goes straight to
+ * the live queue as PAID.
+ */
+export function statusAfterPayment(
+  order: { isPreorder: boolean; queueReleaseAt: Date | null },
+  now: Date = new Date(),
+): 'SCHEDULED' | 'PAID' {
+  return order.isPreorder && order.queueReleaseAt && order.queueReleaseAt > now ? 'SCHEDULED' : 'PAID';
+}
+
+/**
  * When the vendor-accept timeout starts: payment time for a regular order,
  * the scheduled pickup time for a preorder (a reservation made at 11 PM must
  * not be refunded because the vendor was asleep).
