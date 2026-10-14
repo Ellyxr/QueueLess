@@ -4,9 +4,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { OrderStatus, Prisma } from '@prisma/client';
+import { OrderStatus, Prisma, VendorStatus } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateReviewDto } from './dto/create-review.dto';
+import { ListVendorReviewsDto } from './dto/list-vendor-reviews.dto';
+import { reviewerDisplayName, summarizeRatings } from './review-summary';
 
 const REVIEW_SELECT = {
   id: true,
@@ -65,6 +67,59 @@ export class ReviewsService {
       }
       throw error;
     }
+  }
+
+  /**
+   * US-064: a vendor's reviews for the storefront Reviews tab, newest first
+   * (id breaks ties so pages never overlap), with the rating summary. Visible
+   * for active vendors, or to the owner for their own store, like the
+   * storefront itself. Reviewers are shown as first name + last initial.
+   */
+  async listVendorReviews(vendorId: string, userId: string, query: ListVendorReviewsDto) {
+    const vendor = await this.prisma.vendor.findFirst({
+      where: { id: vendorId, OR: [{ status: VendorStatus.ACTIVE }, { ownerUserId: userId }] },
+      select: { id: true },
+    });
+    if (!vendor) throw new NotFoundException('Vendor not found');
+
+    const { page, pageSize } = query;
+    const [groups, reviews] = await Promise.all([
+      this.prisma.orderReview.groupBy({
+        by: ['rating'],
+        where: { vendorId },
+        _count: { _all: true },
+      }),
+      this.prisma.orderReview.findMany({
+        where: { vendorId },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: {
+          id: true,
+          rating: true,
+          comment: true,
+          createdAt: true,
+          reviewer: { select: { fullName: true } },
+        },
+      }),
+    ]);
+    const summary = summarizeRatings(groups);
+
+    return {
+      vendorId,
+      summary,
+      page,
+      pageSize,
+      total: summary.totalReviews,
+      totalPages: Math.ceil(summary.totalReviews / pageSize),
+      items: reviews.map((review) => ({
+        id: review.id,
+        rating: review.rating,
+        comment: review.comment,
+        createdAt: review.createdAt,
+        reviewer: { displayName: reviewerDisplayName(review.reviewer.fullName) },
+      })),
+    };
   }
 
   async getMyReview(userId: string, orderId: string) {
