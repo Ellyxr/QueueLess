@@ -44,7 +44,7 @@ export class VendorsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async listActiveVendors() {
-    return this.prisma.vendor.findMany({
+    const vendors = await this.prisma.vendor.findMany({
       where: {
         status: VendorStatus.ACTIVE,
       },
@@ -87,6 +87,25 @@ export class VendorsService {
       orderBy: {
         name: 'asc',
       },
+    });
+
+    // US-065: average rating per vendor, from one grouped query for the
+    // whole list rather than one query per vendor.
+    const ratingGroups = vendors.length
+      ? await this.prisma.orderReview.groupBy({
+          by: ['vendorId', 'rating'],
+          where: { vendorId: { in: vendors.map((vendor) => vendor.id) } },
+          _count: { _all: true },
+        })
+      : [];
+    const groupsByVendor = new Map<string, typeof ratingGroups>();
+    for (const group of ratingGroups) {
+      groupsByVendor.set(group.vendorId, [...(groupsByVendor.get(group.vendorId) ?? []), group]);
+    }
+
+    return vendors.map((vendor) => {
+      const { averageRating, totalReviews } = summarizeRatings(groupsByVendor.get(vendor.id) ?? []);
+      return { ...vendor, averageRating, totalReviews };
     });
   }
 

@@ -3,6 +3,8 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagg
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Roles } from '../auth/roles.decorator';
+import { RolesGuard } from '../auth/roles.guard';
 import { ListVendorReviewsDto } from './dto/list-vendor-reviews.dto';
 import { ReviewsService } from './reviews.service';
 
@@ -14,6 +16,16 @@ import { ReviewsService } from './reviews.service';
 @Controller('vendors')
 export class VendorReviewsController {
   constructor(private readonly reviewsService: ReviewsService) {}
+
+  // US-065. Three segments, so it never matches ':vendorId/reviews' below.
+  @Get('mine/reviews/summary')
+  @UseGuards(RolesGuard)
+  @Roles('VENDOR_OWNER')
+  @ApiOperation({ summary: 'My store rating summary (all time and last 30 days) and latest reviews' })
+  @ApiResponse({ status: 404, description: 'No vendor profile for this user' })
+  async getMyVendorReviewSummary(@CurrentUser() user: JwtPayload) {
+    return this.reviewsService.getMyVendorReviewSummary(user.sub);
+  }
 
   @Get(':vendorId/reviews')
   @ApiOperation({ summary: "A vendor's reviews, newest first, with the rating summary" })
