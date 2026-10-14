@@ -1186,6 +1186,8 @@ export class PaymentsService {
           customerId: string;
           status: OrderStatus;
           updatedAt: Date;
+          // US-061: status-history id for preorder.confirmed, preorders only.
+          preorderEventId: string | null;
         }
       | null = null;
 
@@ -1206,7 +1208,7 @@ export class PaymentsService {
         });
 
         if (orderUpdate.count === 1) {
-          await tx.orderStatusHistory.create({
+          const history = await tx.orderStatusHistory.create({
             data: {
               orderId,
               status: paidStatus,
@@ -1215,6 +1217,7 @@ export class PaymentsService {
                 ? 'Preorder paid via PayMongo; held until the pickup window opens'
                 : 'Payment confirmed by PayMongo webhook',
             },
+            select: { id: true },
           });
           await tx.auditRecord.create({ data: {
             actorUserId: null, actionType: 'ORDER_STATUS_UPDATED',
@@ -1250,6 +1253,7 @@ export class PaymentsService {
               customerId: order.customerId,
               status: order.status,
               updatedAt: order.updatedAt,
+              preorderEventId: existingOrder?.isPreorder ? history.id : null,
             };
           }
 
@@ -1276,6 +1280,14 @@ export class PaymentsService {
           updatedAt: result.paidOrder.updatedAt,
         },
       );
+      // US-061: tell the student and the vendor the reservation is confirmed.
+      if (result.paidOrder.preorderEventId) {
+        await this.realtimeGateway.emitPreorderEvent(
+          'preorder.confirmed',
+          result.paidOrder.id,
+          result.paidOrder.preorderEventId,
+        );
+      }
     }
 
     let refundRequiresReview = false;
