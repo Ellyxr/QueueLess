@@ -16,7 +16,10 @@ import {
 import { PrismaService } from "../common/prisma/prisma.service";
 import { PaymongoService } from "../payments/paymongo.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
-import { isReservationExpired } from "../orders/preorder-slot.policy";
+import {
+  isReservationExpired,
+  statusAfterPayment,
+} from "../orders/preorder-slot.policy";
 
 @Injectable()
 export class WalletService {
@@ -327,16 +330,21 @@ export class WalletService {
           where: { orderId: share.orderId, status: PaymentShareStatus.PENDING },
         })) === 0
       ) {
+        // US-059: a paid preorder is held as SCHEDULED until its release time.
+        const paidStatus = statusAfterPayment(share.order);
         paidOrder = await tx.order.update({
           where: { id: share.orderId },
-          data: { status: OrderStatus.PAID, paidAt: new Date() },
+          data: { status: paidStatus, paidAt: new Date() },
         });
         await tx.orderStatusHistory.create({
           data: {
             orderId: share.orderId,
-            status: OrderStatus.PAID,
+            status: paidStatus,
             changedByUserId: userId,
-            note: "Payment confirmed from QueueLess wallet",
+            note:
+              paidStatus === OrderStatus.SCHEDULED
+                ? "Preorder paid from QueueLess wallet; held until the pickup window opens"
+                : "Payment confirmed from QueueLess wallet",
           },
         });
         await tx.vendorLedgerEntry.create({
@@ -352,7 +360,7 @@ export class WalletService {
           userId,
           "ORDER_STATUS_UPDATED",
           share.orderId,
-          { status: "PAID", paymentId: payment.id },
+          { status: paidOrder.status, paymentId: payment.id },
           "Order",
         );
       }
@@ -366,7 +374,7 @@ export class WalletService {
     if (result.paidOrder)
       await this.realtime.emitOrderStatusUpdated(result.paidOrder.customerId, {
         orderId: result.orderId,
-        status: OrderStatus.PAID,
+        status: result.paidOrder.status,
         updatedAt: result.paidOrder.updatedAt,
       });
     return {

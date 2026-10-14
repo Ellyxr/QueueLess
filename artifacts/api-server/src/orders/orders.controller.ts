@@ -90,6 +90,17 @@ export class OrdersController {
     return this.ordersService.getVendorOrderQueue(user.sub);
   }
 
+  @Get('vendor/scheduled')
+  @UseGuards(RolesGuard)
+  @Roles('VENDOR_OWNER')
+  @ApiOperation({
+    summary:
+      'Paid preorders held until their pickup window opens (US-059); each joins the live queue at queueReleaseAt',
+  })
+  async getVendorScheduledOrders(@CurrentUser() user: JwtPayload) {
+    return this.ordersService.getVendorScheduledOrders(user.sub);
+  }
+
   @Patch('vendor/:orderId/status')
   @UseGuards(RolesGuard)
   @Roles('VENDOR_OWNER')

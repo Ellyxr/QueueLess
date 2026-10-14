@@ -140,6 +140,8 @@ test('preorder is stored with its pickup time; ready time is the pickup time; pr
   assert.equal(order.estimatedReadyAt.toISOString(), '2026-10-13T00:00:00.000Z');
   // US-058: reserved at 23:00 Manila, held unpaid for 15 minutes.
   assert.equal(order.reservationExpiresAt.toISOString(), MON('23:15').toISOString());
+  // US-059: once paid, released to the vendor's queue when the 07:00 window opens.
+  assert.equal(h.state.orders[0].queueReleaseAt.toISOString(), '2026-10-12T23:00:00.000Z');
   assert.equal(order.subtotal, '120.00', '2 x PHP 60.00 from the product, not the client');
   assert.equal(h.state.orders[0].totalAmount.toFixed(2), '120.00');
 });
