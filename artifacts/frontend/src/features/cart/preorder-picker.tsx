@@ -1,11 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { CalendarClock } from "lucide-react";
-import { getVendorPreorderSlots, type VendorPreorderSlots } from "@/features/auth/api";
-import {
-  formatSlotLabel,
-  formatSlotTime,
-  groupSlotsByDay,
-} from "@/features/orders/preorder-format";
+import { getVendorStorefront, type VendorStorefront } from "@/features/auth/api";
+import { PickupTimePicker } from "@/features/orders/pickup-time-picker";
+import { formatSlotLabel } from "@/features/orders/preorder-format";
 
 export type OrderTiming = "NOW" | "PREORDER";
 
@@ -22,7 +19,7 @@ interface PreorderPickerProps {
   disabled?: boolean;
 }
 
-/** "Order now" vs "Pre-order for pickup" choice with a pickup date/time slot picker. */
+/** "Order now" vs "Pre-order for pickup", with the vendor's pickup windows and times. */
 export function PreorderPicker({
   vendorId,
   deliverySelected,
@@ -33,51 +30,39 @@ export function PreorderPicker({
   onPickupAtChange,
   disabled = false,
 }: PreorderPickerProps) {
-  const [info, setInfo] = useState<VendorPreorderSlots | null>(null);
+  const [vendor, setVendor] = useState<VendorStorefront | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
   useEffect(() => {
     if (!vendorId || multiVendor) {
-      setInfo(null);
+      setVendor(null);
       return;
     }
     let cancelled = false;
     setLoadFailed(false);
-    getVendorPreorderSlots(vendorId)
+    getVendorStorefront(vendorId)
       .then((result) => {
-        if (!cancelled) setInfo(result);
+        if (!cancelled) setVendor(result);
       })
       .catch(() => {
-        if (!cancelled) {
-          setInfo(null);
-          setLoadFailed(true);
-        }
+        if (!cancelled) setLoadFailed(true);
       });
     return () => {
       cancelled = true;
     };
   }, [vendorId, multiVendor]);
 
-  const days = useMemo(() => groupSlotsByDay(info?.slots ?? []), [info]);
-  const activeDay = days.find((day) => day.day === selectedDay) ?? days[0];
-
-  // Drop a picked slot that is no longer offered (e.g. after a refresh).
-  useEffect(() => {
-    if (pickupAt && info && !info.slots.includes(pickupAt)) onPickupAtChange(null);
-  }, [info, pickupAt, onPickupAtChange]);
-
+  const preorder = vendor?.preorder;
   // Hide entirely for vendors that don't take pre-orders.
-  if (!multiVendor && !loadFailed && info && !info.preorderEnabled) return null;
+  if (!multiVendor && vendor && !preorder?.enabled) return null;
   if (!vendorId && !multiVendor) return null;
 
   let unavailableReason: string | null = null;
   if (multiVendor) unavailableReason = "Pre-orders are available when ordering from one store at a time.";
   else if (deliverySelected) unavailableReason = "Pre-orders are pickup only — turn off Pasabuy to schedule one.";
   else if (loadFailed) unavailableReason = "Couldn't load pre-order times. Try again shortly.";
-  else if (info && info.slots.length === 0)
-    unavailableReason = "This store has no pre-order times open right now.";
-  const canPreorder = !unavailableReason && Boolean(info);
+  else if (preorder && !preorder.acceptingPreorders) unavailableReason = "This store has no pre-order pickup times set.";
+  const canPreorder = !unavailableReason && Boolean(preorder);
 
   return (
     <div className="rounded-[20px] border border-border bg-card p-4">
@@ -112,51 +97,17 @@ export function PreorderPicker({
 
       {unavailableReason ? (
         <p className="mt-3 text-xs text-muted-foreground">{unavailableReason}</p>
-      ) : timing === "PREORDER" && info ? (
+      ) : timing === "PREORDER" && preorder ? (
         <div className="mt-3 space-y-3">
-          <div className="flex flex-wrap gap-1.5">
-            {days.map((day) => (
-              <button
-                key={day.day}
-                type="button"
-                disabled={disabled}
-                onClick={() => {
-                  setSelectedDay(day.day);
-                  onPickupAtChange(null);
-                }}
-                className={`rounded-full border px-3 py-1 text-xs font-medium ${
-                  activeDay?.day === day.day ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-secondary"
-                }`}
-              >
-                {day.day}
-              </button>
-            ))}
-          </div>
-          <div className="grid max-h-40 grid-cols-3 gap-1.5 overflow-y-auto pr-1">
-            {activeDay?.slots.map((slot) => (
-              <button
-                key={slot}
-                type="button"
-                disabled={disabled}
-                onClick={() => onPickupAtChange(slot)}
-                className={`rounded-lg border px-2 py-1.5 text-xs font-medium ${
-                  pickupAt === slot ? "border-primary bg-primary text-primary-foreground" : "border-border hover:bg-secondary"
-                }`}
-              >
-                {formatSlotTime(slot)}
-              </button>
-            ))}
-          </div>
+          <PickupTimePicker windows={preorder.nextPickupWindows} value={pickupAt} onChange={onPickupAtChange} disabled={disabled} />
           <p className="text-xs text-muted-foreground">
             {pickupAt
-              ? `Pickup ${formatSlotLabel(pickupAt)}. You'll pay now to reserve this slot.`
+              ? `Pickup ${formatSlotLabel(pickupAt)}. You'll pay now to reserve this time; unpaid reservations are released.`
               : "Pick a pickup time. You'll pay now to reserve it."}
           </p>
         </div>
-      ) : info?.nextAvailableAt ? (
-        <p className="mt-3 text-xs text-muted-foreground">
-          Next pre-order pickup: {formatSlotLabel(info.nextAvailableAt)}
-        </p>
+      ) : preorder?.nextPickupLabel ? (
+        <p className="mt-3 text-xs text-muted-foreground">Next pre-order pickup: {preorder.nextPickupLabel}</p>
       ) : null}
     </div>
   );

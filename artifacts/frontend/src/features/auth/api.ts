@@ -104,6 +104,26 @@ export interface VendorAvailabilityDay {
   closeTime: string | null;
 }
 
+/** A concrete upcoming pickup window (Asia/Manila), as returned by the storefront and preorder endpoints. */
+export interface PreorderWindowInstance {
+  dayOfWeek: Weekday;
+  date: string;
+  openTime: string;
+  closeTime: string;
+  opensAt: string;
+  closesAt: string;
+  isOpenNow: boolean;
+  label: string;
+}
+
+export interface StorefrontPreorderInfo {
+  enabled: boolean;
+  acceptingPreorders: boolean;
+  pickupOpenNow: boolean;
+  nextPickupLabel: string | null;
+  nextPickupWindows: PreorderWindowInstance[];
+}
+
 export interface VendorStorefront {
   id: string;
   name: string;
@@ -117,8 +137,13 @@ export interface VendorStorefront {
   isFavoritedByMe?: boolean;
   preorderEnabled?: boolean;
   preorderSameAsStoreHours?: boolean;
-  preorderMinLeadTimeMinutes?: number;
   preorderAvailability?: VendorPreorderDay[];
+  /** Buyer-facing pre-order status and upcoming pickup windows (storefront response only). */
+  preorder?: StorefrontPreorderInfo;
+  reviewSummary?: { averageRating: number | null; totalReviews: number };
+  /** Present on the vendor directory list. */
+  averageRating?: number | null;
+  totalReviews?: number;
   availabilityDays?: VendorAvailabilityDay[];
   /** Only present on the buyer-facing storefront response, not the vendor's own settings fetch. */
   isOpenNow?: boolean;
@@ -179,10 +204,6 @@ export interface VendorQueueOrder {
   userId?: string;
   paymentStatus?: string;
   isPasabuyRequest?: boolean;
-  isPreorder?: boolean;
-  pickupAt?: string | null;
-  scheduledReleaseAt?: string | null;
-  paymentExpiresAt?: string | null;
   status: string;
   items?: VendorOrderItem[];
 }
@@ -191,17 +212,17 @@ export type CancellationReason =
   | 'NOT_AVAILABLE'
   | 'CUSTOMER_REQUEST'
   | 'CLOSING_EARLY'
-  | 'PAYMENT_EXPIRED'
+  | 'RESERVATION_EXPIRED'
   | 'OTHER';
 
 // US-017: Create/Submit Order from Cart
 export interface CreateOrderInput {
   cartId: string;
   isPasabuyRequest?: boolean;
-  /** Place the order as a scheduled pre-order for pickup at `pickupAt`. */
+  /** Reserve the order as a pre-order; requires scheduledPickupAt. */
   isPreorder?: boolean;
-  /** ISO 8601 pickup time; must be one of the vendor's preorder slots. */
-  pickupAt?: string;
+  /** ISO 8601 with an explicit offset (a UTC "Z" timestamp is fine). */
+  scheduledPickupAt?: string;
 }
 
 export interface ProfileData {
@@ -219,8 +240,6 @@ export interface CustomerOrder {
   status: string;
   isPreorder: boolean;
   isPasabuyRequest: boolean;
-  pickupAt: string | null;
-  paymentExpiresAt: string | null;
   /** 8-char uppercase order-id prefix computed server-side — use instead of any client-side UUID truncation. */
   orderReference: string;
   total: string;
@@ -837,23 +856,9 @@ export function updateVendorStorefront(
   });
 }
 
-export interface VendorPreorderSlots {
-  preorderEnabled: boolean;
-  minLeadTimeMinutes: number;
-  slotMinutes: number;
-  /** Bookable pickup instants (ISO 8601, UTC), soonest first. */
-  slots: string[];
-  nextAvailableAt: string | null;
-}
-
-export function getVendorPreorderSlots(vendorId: string): Promise<VendorPreorderSlots> {
-  return fetchWithAuth(`/vendors/${vendorId}/preorder-slots`);
-}
-
 export interface UpdateVendorPreorderAvailabilityInput {
   preorderEnabled: boolean;
   sameAsStoreHours: boolean;
-  minLeadTimeMinutes?: number;
   days?: VendorPreorderDay[];
 }
 
@@ -864,7 +869,6 @@ export function updateVendorPreorderAvailability(
   id: string;
   preorderEnabled: boolean;
   preorderSameAsStoreHours: boolean;
-  preorderMinLeadTimeMinutes: number;
   preorderAvailability: VendorPreorderDay[];
 }> {
   return fetchWithAuth(`/vendors/${vendorId}/preorder-availability`, {
@@ -915,10 +919,11 @@ export interface OrderStatusResponse {
   cancellationReason: CancellationReason | null;
   cancellationNote: string | null;
   estimatedReadyAt: string | null;
+  scheduledPickupAt: string | null;
+  /** Unpaid pre-orders are released after this moment. */
+  reservationExpiresAt: string | null;
+  queueReleaseAt: string | null;
   estimatedWaitMinutes: number | null;
-  pickupAt: string | null;
-  scheduledReleaseAt: string | null;
-  paymentExpiresAt: string | null;
   updatedAt: string;
   paidAt: string | null;
   buyerContactPingAt: string | null;
@@ -1881,4 +1886,121 @@ export function updateFeaturedListingSettings(
     method: "PATCH",
     body: JSON.stringify(input),
   });
+}
+export interface VendorScheduledOrder {
+  id: string;
+  orderReference: string;
+  status: string;
+  scheduledPickupAt: string | null;
+  queueReleaseAt?: string | null;
+  customerName: string | null;
+  total: string;
+  paidAt: string | null;
+  items: Array<{ name: string; quantity: number }>;
+}
+
+export interface VendorScheduledOrdersResponse {
+  count: number;
+  orders: VendorScheduledOrder[];
+}
+
+/** Paid pre-orders waiting for their release time. */
+export function getVendorScheduledOrders(): Promise<VendorScheduledOrdersResponse> {
+  return fetchWithAuth("/orders/vendor/scheduled");
+}
+
+/** Pre-orders flagged UNCOLLECTED after the pickup grace period. */
+export function getVendorUncollectedOrders(): Promise<VendorScheduledOrdersResponse> {
+  return fetchWithAuth("/orders/vendor/uncollected");
+}
+
+export interface PreorderView {
+  orderId: string;
+  orderReference: string;
+  status: string;
+  scheduledPickupAt: string | null;
+  queueReleaseAt: string | null;
+  reservationExpiresAt: string | null;
+  changeCutoffAt: string | null;
+  canReschedule: boolean;
+  canCancel: boolean;
+  refundOnCancel: boolean;
+  rescheduleWindows: PreorderWindowInstance[];
+  serverTime: string;
+}
+
+export function getPreorderView(orderId: string): Promise<PreorderView> {
+  return fetchWithAuth(`/orders/${orderId}/preorder`);
+}
+
+export function reschedulePreorder(orderId: string, scheduledPickupAt: string): Promise<unknown> {
+  return fetchWithAuth(`/orders/${orderId}/preorder/pickup-time`, {
+    method: "PATCH",
+    body: JSON.stringify({ scheduledPickupAt }),
+  });
+}
+
+export function cancelPreorder(orderId: string, reason?: string): Promise<unknown> {
+  return fetchWithAuth(`/orders/${orderId}/preorder/cancel`, {
+    method: "POST",
+    body: JSON.stringify(reason ? { reason } : {}),
+  });
+}
+
+export interface RatingSummary {
+  averageRating: number | null;
+  totalReviews: number;
+  distribution: Record<"1" | "2" | "3" | "4" | "5", number>;
+}
+
+export interface VendorReviewsPage {
+  vendorId: string;
+  summary: RatingSummary;
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: Array<{
+    id: string;
+    rating: number;
+    comment: string | null;
+    createdAt: string;
+    reviewer: { displayName: string };
+  }>;
+}
+
+export function getVendorReviews(vendorId: string, page = 1, pageSize = 10): Promise<VendorReviewsPage> {
+  return fetchWithAuth(`/vendors/${vendorId}/reviews?page=${page}&pageSize=${pageSize}`);
+}
+
+export interface VendorReviewSummary {
+  vendor: { id: string; name: string };
+  summary: RatingSummary;
+  last30Days: { averageRating: number | null; totalReviews: number };
+  recentReviews: Array<{
+    id: string;
+    orderReference: string;
+    rating: number;
+    comment: string | null;
+    createdAt: string;
+    reviewer: { displayName: string };
+  }>;
+}
+
+export function getMyVendorReviewSummary(): Promise<VendorReviewSummary> {
+  return fetchWithAuth("/vendors/mine/reviews/summary");
+}
+
+export function submitOrderReview(orderId: string, data: { rating: number; comment?: string }): Promise<unknown> {
+  return fetchWithAuth(`/orders/${orderId}/review`, { method: "POST", body: JSON.stringify(data) });
+}
+
+/** Resolves true if the signed-in student already reviewed this order (the API answers 404 when not). */
+export async function hasReviewedOrder(orderId: string): Promise<boolean> {
+  try {
+    await fetchWithAuth(`/orders/${orderId}/review`);
+    return true;
+  } catch {
+    return false;
+  }
 }

@@ -3,8 +3,8 @@ const CONTACT_TIMEOUT_MS = 2 * 60 * 1000;
 type OrderTiming = {
   status: string;
   paidAt: string | null;
-  /** Pre-orders only wait on the vendor from their release time. */
-  scheduledReleaseAt?: string | null;
+  /** Pre-orders only wait on the vendor from the moment they join the live queue. */
+  queueReleaseAt?: string | null;
   buyerContactPingAt: string | null;
   estimatedReadyAt?: string | null;
 };
@@ -15,8 +15,8 @@ export function getOrderHelpEligibility(order: OrderTiming, now: number) {
   const vendorNotAccepted =
     order.status === "PAID" &&
     elapsed(
-      order.scheduledReleaseAt && order.paidAt && order.scheduledReleaseAt > order.paidAt
-        ? order.scheduledReleaseAt
+      order.queueReleaseAt && order.paidAt && order.queueReleaseAt > order.paidAt
+        ? order.queueReleaseAt
         : order.paidAt,
       ACCEPT_TIMEOUT_MS,
     );
