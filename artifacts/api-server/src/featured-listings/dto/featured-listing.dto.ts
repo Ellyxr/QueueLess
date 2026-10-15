@@ -100,6 +100,9 @@ export class UpdateFeaturedSettingsDto {
   thirdVendorDiscount!: number;
   @IsBoolean()
   discountOnRenewals!: boolean;
+  /** Master switch for the 1st-3rd vendor discount; omitted = unchanged. */
+  @IsOptional() @IsBoolean()
+  introDiscountEnabled?: boolean;
   @IsInt() @Min(1)
   version!: number;
 }

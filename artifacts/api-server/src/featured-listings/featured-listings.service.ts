@@ -8,6 +8,28 @@ import { CreateFeaturedListingDto, CreateFeaturedPlanDto, ListAdminFeaturedListi
 import { discountedPrice, listingEndDate, lockFeaturedPricing, lockVendorWallet } from './featured-pricing.policy';
 import { createHash } from 'crypto';
 
+const manilaDate = (date: Date) => new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Asia/Manila', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+}).format(date);
+
+export function discountStatusMessage(
+  enabled: boolean, activeVendors: number, lastExpiresAt: Date | null, pendingCheckouts: number, tiersTaken: number,
+) {
+  if (enabled) {
+    return `The 1st-3rd vendor discount is ON. ${tiersTaken} of 3 tiers taken; ` +
+      `${activeVendors} vendor${activeVendors === 1 ? '' : 's'} currently on a discounted plan.`;
+  }
+  const pendingNote = pendingCheckouts
+    ? ` ${pendingCheckouts} discounted checkout${pendingCheckouts === 1 ? ' is' : 's are'} still pending and will be honoured if paid.`
+    : '';
+  if (!lastExpiresAt) {
+    return `The discount is OFF and no discounted plan is running; it is fully disabled now.${pendingNote}`;
+  }
+  return `The discount is OFF for every new purchase. It takes full effect globally on ${manilaDate(lastExpiresAt)} ` +
+    `(Manila), once the last active promotional plan ends - ${activeVendors} vendor${activeVendors === 1 ? '' : 's'} ` +
+    `still on a discounted plan.${pendingNote}`;
+}
+
 @Injectable()
 export class FeaturedListingsService {
   private readonly logger = new Logger(FeaturedListingsService.name);
@@ -56,6 +78,73 @@ export class FeaturedListingsService {
 
   settings() { return this.prisma.featuredListingSettings.findUniqueOrThrow({ where: { id: 1 } }); }
 
+  /**
+   * Admin view of the 1st-3rd vendor discount program: whether it is on, the
+   * one-time vs constant mode, which tier is taken by whom, how many vendors
+   * are still on a discounted plan and when the last one ends - i.e. when
+   * switching the program off has taken full effect.
+   */
+  async discountStatus(now: Date = new Date()) {
+    const [settings, claims, discounted] = await Promise.all([
+      this.prisma.featuredListingSettings.findUniqueOrThrow({ where: { id: 1 } }),
+      this.prisma.featuredIntroClaim.findMany({
+        orderBy: { rank: 'asc' },
+        select: { rank: true, consumedAt: true, createdAt: true, vendor: { select: { id: true, name: true } } },
+      }),
+      this.prisma.featuredListing.findMany({
+        where: { discountPercent: { gt: 0 }, OR: [
+          { status: FeaturedListingStatus.ACTIVE, endDate: { gt: now } },
+          // Checkouts already priced with the discount; honoured if paid.
+          { status: FeaturedListingStatus.PENDING },
+        ] },
+        select: { id: true, vendorId: true, status: true, discountPercent: true, endDate: true },
+        orderBy: { endDate: 'asc' },
+      }),
+    ]);
+
+    const active = discounted.filter((listing) => listing.status === FeaturedListingStatus.ACTIVE);
+    const pending = discounted.filter((listing) => listing.status === FeaturedListingStatus.PENDING);
+    const lastDiscountExpiresAt = active.reduce<Date | null>(
+      (latest, listing) => (listing.endDate && (!latest || listing.endDate > latest) ? listing.endDate : latest), null);
+    const percents = [settings.firstVendorDiscount, settings.secondVendorDiscount, settings.thirdVendorDiscount];
+
+    const tiers = [1, 2, 3].map((rank) => {
+      const claim = claims.find((item) => item.rank === rank);
+      const listing = claim && active.find((item) => item.vendorId === claim.vendor.id);
+      return {
+        rank,
+        discountPercent: percents[rank - 1],
+        // AVAILABLE: nobody yet. RESERVED: a vendor's discounted checkout is
+        // pending. CLAIMED: the vendor has paid at least once with this tier.
+        status: !claim ? 'AVAILABLE' : claim.consumedAt ? 'CLAIMED' : 'RESERVED',
+        vendor: claim?.vendor ?? null,
+        reservedAt: claim?.createdAt ?? null,
+        firstPaidAt: claim?.consumedAt ?? null,
+        activeDiscountedListing: listing
+          ? { id: listing.id, discountPercent: listing.discountPercent, endsAt: listing.endDate }
+          : null,
+      };
+    });
+
+    const activeDiscountedVendors = new Set(active.map((listing) => listing.vendorId)).size;
+    const fullyDisabledAt = settings.introDiscountEnabled ? null : (lastDiscountExpiresAt ?? now);
+    return {
+      enabled: settings.introDiscountEnabled,
+      mode: settings.discountOnRenewals ? 'CONSTANT' : 'ONE_TIME',
+      discountOnRenewals: settings.discountOnRenewals,
+      tiers,
+      tiersTaken: tiers.filter((tier) => tier.status !== 'AVAILABLE').length,
+      activeDiscountedVendors,
+      activeDiscountedListings: active.length,
+      pendingDiscountedCheckouts: pending.length,
+      lastDiscountExpiresAt,
+      fullyDisabledAt,
+      message: discountStatusMessage(settings.introDiscountEnabled, activeDiscountedVendors,
+        lastDiscountExpiresAt, pending.length, tiers.filter((tier) => tier.status !== 'AVAILABLE').length),
+      serverTime: now,
+    };
+  }
+
   async updateSettings(dto: UpdateFeaturedSettingsDto, actorUserId: string) {
     return this.prisma.$transaction(async (tx) => {
       await lockFeaturedPricing(tx);
@@ -64,14 +153,18 @@ export class FeaturedListingsService {
       const after = await tx.featuredListingSettings.update({ where: { id: 1 }, data: {
         monthlyPrice: dto.monthlyPrice, firstVendorDiscount: dto.firstVendorDiscount,
         secondVendorDiscount: dto.secondVendorDiscount, thirdVendorDiscount: dto.thirdVendorDiscount,
-        discountOnRenewals: dto.discountOnRenewals, version: { increment: 1 },
+        discountOnRenewals: dto.discountOnRenewals,
+        // Optional so older admin screens that do not send it leave it unchanged.
+        ...(dto.introDiscountEnabled !== undefined ? { introDiscountEnabled: dto.introDiscountEnabled } : {}),
+        version: { increment: 1 },
       } });
       const plans = await tx.featuredListingPlan.findMany({ where: { managedMonthly: true } });
       for (const plan of plans) await tx.featuredListingPlan.update({ where: { id: plan.id },
         data: { price: after.monthlyPrice.mul(plan.durationMonths!) } });
       const audit = (value: typeof before) => ({ monthlyPrice: value.monthlyPrice.toFixed(2),
         firstVendorDiscount: value.firstVendorDiscount, secondVendorDiscount: value.secondVendorDiscount,
-        thirdVendorDiscount: value.thirdVendorDiscount, discountOnRenewals: value.discountOnRenewals, version: value.version });
+        thirdVendorDiscount: value.thirdVendorDiscount, discountOnRenewals: value.discountOnRenewals,
+        introDiscountEnabled: value.introDiscountEnabled, version: value.version });
       await tx.auditRecord.create({ data: { actorUserId, actionType: 'FEATURED_SETTINGS_UPDATED',
         entityType: 'FeaturedListingSettings', entityId: '1', beforeState: audit(before), afterState: audit(after) } });
       return after;
@@ -179,14 +272,16 @@ export class FeaturedListingsService {
       let claim = await tx.featuredIntroClaim.findUnique({ where: { vendorId } });
       const paidBefore = await tx.payment.count({ where: { status: PaymentStatus.SUCCEEDED,
         featuredListing: { vendorId, placement: FeaturedListingPlacement.MARKETPLACE_HOME } } });
-      if (!claim && !paidBefore) {
+      // While the program is switched off no tier is handed out and nobody
+      // (including vendors already holding a tier) gets the discount.
+      if (!claim && !paidBefore && settings.introDiscountEnabled) {
         const claims = await tx.featuredIntroClaim.findMany({ select: { rank: true } });
         const available = [1, 2, 3].find(value => !claims.some(item => item.rank === value));
         if (available) claim = reserve ? await tx.featuredIntroClaim.create({ data: { vendorId, rank: available } })
           : { vendorId, rank: available, consumedAt: null, createdAt: new Date() };
       }
       rank = claim?.rank ?? null;
-      if (rank && (!paidBefore || settings.discountOnRenewals))
+      if (rank && settings.introDiscountEnabled && (!paidBefore || settings.discountOnRenewals))
         percent = [settings.firstVendorDiscount, settings.secondVendorDiscount, settings.thirdVendorDiscount][rank - 1];
     }
     const base = plan.managedMonthly ? settings.monthlyPrice.mul(plan.durationMonths!) : plan.price;
@@ -204,7 +299,8 @@ export class FeaturedListingsService {
         baseAmount: price.base.toFixed(2), discountPercent: price.percent, introductoryRank: price.rank, discountEligible: price.percent > 0, discountAmount: price.base.sub(price.amount).toFixed(2),
         amount: price.amount.toFixed(2), currency: 'PHP', walletBalance: price.balance.toFixed(2),
         canPayWithWallet: price.balance.greaterThanOrEqualTo(price.amount), settingsVersion: price.settings.version,
-        discountOnRenewals: price.settings.discountOnRenewals, reservation: false };
+        discountOnRenewals: price.settings.discountOnRenewals,
+        introDiscountEnabled: price.settings.introDiscountEnabled, reservation: false };
     }, { maxWait: 10000, timeout: 30000 });
   }
 
