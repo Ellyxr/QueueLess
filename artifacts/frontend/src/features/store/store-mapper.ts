@@ -106,6 +106,7 @@ export function toStorePageProps(vendor: VendorStorefront): StorePageProps {
   );
 
   return {
+    vendorId: vendor.id,
     storeName: vendor.name,
     description: vendor.description,
     campusLocation: vendor.campusLocation,
@@ -125,6 +126,7 @@ export function toStorePageProps(vendor: VendorStorefront): StorePageProps {
         ? buildScheduleRows(vendor.availabilityDays)
         : undefined,
     preorderEnabled: vendor.preorderEnabled,
+    preorderMinLeadTimeMinutes: vendor.preorderMinLeadTimeMinutes,
     preorderSchedule:
       vendor.preorderEnabled && vendor.preorderAvailability && vendor.preorderAvailability.length > 0
         ? buildScheduleRows(vendor.preorderAvailability)

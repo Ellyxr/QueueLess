@@ -128,6 +128,7 @@ model Vendor {
   businessName             String?
   preorderEnabled          Boolean                      @default(false)
   preorderSameAsStoreHours Boolean                      @default(true)
+  preorderMinLeadTimeMinutes Int                        @default(60)
   carts                    Cart[]
   deals                    Deal[]
   eventParticipations      EventVendorParticipation[]
@@ -355,7 +356,13 @@ model Order {
   totalAmount        Decimal               @db.Decimal(10, 2)
   estimatedReadyAt   DateTime?             @db.Timestamptz(6)
   pickupConfirmedAt  DateTime?             @db.Timestamptz(6)
-  paidAt             DateTime?             @db.Timestamptz(6)
+  /// Customer-chosen pickup time for pre-orders.
+  pickupAt           DateTime?             @db.Timestamptz(6)
+  /// When a paid pre-order leaves SCHEDULED and enters the live vendor queue.
+  scheduledReleaseAt DateTime?             @db.Timestamptz(6)
+  /// Unpaid pre-orders are cancelled after this moment.
+  paymentExpiresAt   DateTime?             @db.Timestamptz(6)
+  paidAt            DateTime?             @db.Timestamptz(6)
   buyerContactPingAt DateTime?             @db.Timestamptz(6)
   createdAt          DateTime              @default(now()) @db.Timestamptz(6)
   updatedAt          DateTime              @updatedAt @db.Timestamptz(6)
@@ -379,6 +386,8 @@ model Order {
   @@index([eventId])
   @@index([status])
   @@index([vendorId, status])
+  @@index([status, scheduledReleaseAt])
+  @@index([status, paymentExpiresAt])
   @@map("orders")
 }
 
@@ -933,6 +942,7 @@ enum OrderType {
 enum OrderStatus {
   PENDING
   PAID
+  SCHEDULED
   COOKING
   OUT_FOR_DELIVERY
   READY_FOR_PICKUP
@@ -945,6 +955,7 @@ enum CancellationReason {
   CUSTOMER_REQUEST
   CLOSING_EARLY
   AUTO_REFUND_TIMEOUT
+  PAYMENT_EXPIRED
   OTHER
 }
 

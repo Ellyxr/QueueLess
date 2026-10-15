@@ -1,4 +1,5 @@
 import { FeaturedListingPlacement } from '@prisma/client';
+import { resolvePaidStatus } from '../orders/preorder.util';
 import { listingEndDate, lockFeaturedPricing } from '../featured-listings/featured-pricing.policy';
 import { activateStudentApplication } from '../vendor-applications/activate-student-application';
 import { subscriptionEnd } from '../vendor-applications/vendor-application.policy';
@@ -65,6 +66,7 @@ export class PaymentsService {
             select: {
               id: true,
               status: true,
+              paymentExpiresAt: true,
             },
           },
           payment: true,
@@ -78,6 +80,15 @@ export class PaymentsService {
     if (paymentShare.order.status !== OrderStatus.PENDING) {
       throw new ConflictException(
         `Order cannot be paid while its status is ${paymentShare.order.status}`,
+      );
+    }
+
+    if (
+      paymentShare.order.paymentExpiresAt &&
+      paymentShare.order.paymentExpiresAt.getTime() <= Date.now()
+    ) {
+      throw new ConflictException(
+        'The payment window for this pre-order has expired',
       );
     }
 
@@ -1130,7 +1141,7 @@ export class PaymentsService {
 
       const existingOrder = await tx.order.findUnique({
         where: { id: orderId },
-        select: { status: true },
+        select: { status: true, isPreorder: true, scheduledReleaseAt: true },
       });
 
       if (
@@ -1164,6 +1175,7 @@ export class PaymentsService {
         },
       });
 
+      const paidStatus = existingOrder ? resolvePaidStatus(existingOrder) : OrderStatus.PAID;
       let orderMarkedPaid = false;
 
       let paidOrder:
@@ -1182,7 +1194,7 @@ export class PaymentsService {
             status: OrderStatus.PENDING,
           },
           data: {
-            status: OrderStatus.PAID,
+            status: paidStatus,
             paidAt: new Date(),
           },
         });
@@ -1191,7 +1203,7 @@ export class PaymentsService {
           await tx.orderStatusHistory.create({
             data: {
               orderId,
-              status: OrderStatus.PAID,
+              status: paidStatus,
               changedByUserId: null,
               note: 'Payment confirmed by PayMongo webhook',
             },
@@ -1200,7 +1212,7 @@ export class PaymentsService {
             actorUserId: null, actionType: 'ORDER_STATUS_UPDATED',
             entityType: 'Order', entityId: orderId,
             beforeState: { status: OrderStatus.PENDING },
-            afterState: { status: OrderStatus.PAID, paymentId: payment.id },
+            afterState: { status: paidStatus, paymentId: payment.id },
           } });
 
           const order = await tx.order.findUnique({

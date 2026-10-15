@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
@@ -14,6 +15,10 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { RefundsService } from '../refunds/refunds.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { PaymongoService } from '../payments/paymongo.service';
+import { VendorsService } from '../vendors/vendors.service';
+import { isBookablePreorderSlot } from '../vendors/preorder-slots.util';
+import { PREORDER_PAYMENT_WINDOW_MS } from './preorder.util';
 
 const VENDOR_CONTACT_PING_COOLDOWN_MS = 2 * 60 * 1000;
 const VENDOR_ACCEPT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -21,12 +26,16 @@ const VENDOR_UNRESPONSIVE_TIMEOUT_MS = 2 * 60 * 1000;
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly refundsService: RefundsService,
     private readonly notificationsService: NotificationsService,
     private readonly pricingService: PricingService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly vendorsService: VendorsService,
+    private readonly paymongoService: PaymongoService,
   ) {}
 
   async createOrder(
@@ -37,6 +46,13 @@ export class OrdersService {
     if (dto.isPasabuyRequest) {
       throw new BadRequestException('Pay for the order first, then POST /pasabuy/requests');
     }
+    if (dto.isPreorder && !dto.pickupAt) {
+      throw new BadRequestException('Choose a pickup date and time for your pre-order');
+    }
+    if (!dto.isPreorder && dto.pickupAt) {
+      throw new BadRequestException('pickupAt is only valid for pre-orders');
+    }
+    const pickupAt = dto.pickupAt ? new Date(dto.pickupAt) : null;
     const key = idempotencyKey?.trim();
 
     if (!key) {
@@ -77,7 +93,8 @@ export class OrdersService {
       if (
         existing.cartId !== dto.cartId ||
         existing.eventId !== (dto.eventId ?? null) ||
-        (existing.order && existing.order.isPreorder !== (dto.isPreorder ?? false))
+        (existing.order && existing.order.isPreorder !== (dto.isPreorder ?? false)) ||
+        (existing.order && (existing.order.pickupAt?.getTime() ?? null) !== (pickupAt?.getTime() ?? null))
       ) {
         throw new ConflictException(
           'Idempotency-Key was already used for a different order request',
@@ -142,6 +159,15 @@ export class OrdersService {
 
           if (dto.isPreorder && !cart.vendor.preorderEnabled) {
             throw new BadRequestException('This vendor does not accept preorders');
+          }
+
+          if (dto.isPreorder && pickupAt) {
+            const schedule = await this.vendorsService.getEffectivePreorderDays(cart.vendorId);
+            if (!isBookablePreorderSlot(schedule.days, schedule.minLeadTimeMinutes, pickupAt)) {
+              throw new BadRequestException(
+                'That pickup time is no longer available. Please choose another slot.',
+              );
+            }
           }
 
           for (const item of cart.items) {
@@ -248,9 +274,17 @@ export class OrdersService {
             ),
           );
 
-          const estimatedReadyAt = new Date(
-            Date.now() + estimatedWaitMinutes * 60_000,
-          );
+          const isPreorderOrder = !!(dto.isPreorder && pickupAt);
+          const estimatedReadyAt = isPreorderOrder
+            ? pickupAt!
+            : new Date(Date.now() + estimatedWaitMinutes * 60_000);
+          // Hand a paid pre-order to the vendor in time to prepare it.
+          const scheduledReleaseAt = isPreorderOrder
+            ? new Date(pickupAt!.getTime() - estimatedWaitMinutes * 60_000)
+            : null;
+          const paymentExpiresAt = isPreorderOrder
+            ? new Date(Date.now() + PREORDER_PAYMENT_WINDOW_MS)
+            : null;
 
           const order = await tx.order.create({
             data: {
@@ -261,6 +295,9 @@ export class OrdersService {
               status: 'PENDING',
               isPasabuyRequest: false,
               isPreorder: dto.isPreorder ?? false,
+              pickupAt: isPreorderOrder ? pickupAt : null,
+              scheduledReleaseAt,
+              paymentExpiresAt,
               subtotal,
               marketplaceFee,
               estimatedReadyAt,
@@ -431,6 +468,8 @@ export class OrdersService {
         status: true,
         isPreorder: true,
         isPasabuyRequest: true,
+        pickupAt: true,
+        paymentExpiresAt: true,
         totalAmount: true,
         createdAt: true,
         paidAt: true,
@@ -457,6 +496,8 @@ export class OrdersService {
       status: order.status,
       isPreorder: order.isPreorder,
       isPasabuyRequest: order.isPasabuyRequest,
+      pickupAt: order.pickupAt,
+      paymentExpiresAt: order.paymentExpiresAt,
       orderReference: order.id.slice(0, 8).toUpperCase(),
       total: order.totalAmount.toFixed(2),
       createdAt: order.createdAt,
@@ -502,6 +543,9 @@ export class OrdersService {
         estimatedReadyAt: true,
         updatedAt: true,
         pickupConfirmedAt: true,
+        pickupAt: true,
+        scheduledReleaseAt: true,
+        paymentExpiresAt: true,
         paidAt: true,
         buyerContactPingAt: true,
         refunds: {
@@ -608,6 +652,9 @@ export class OrdersService {
       cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
       estimatedWaitMinutes,
+      pickupAt: order.pickupAt,
+      scheduledReleaseAt: order.scheduledReleaseAt,
+      paymentExpiresAt: order.paymentExpiresAt,
       paidAt: order.paidAt,
       buyerContactPingAt: order.buyerContactPingAt,
       refund: order.refunds[0] ?? null,
@@ -654,7 +701,7 @@ export class OrdersService {
       where: {
         vendorId: vendor.id,
         status: {
-          in: ['PENDING', 'PAID', 'COOKING'],
+          in: ['PENDING', 'PAID', 'SCHEDULED', 'COOKING'],
         },
       },
       orderBy: {
@@ -666,6 +713,10 @@ export class OrdersService {
         orderType: true,
         status: true,
         isPasabuyRequest: true,
+        isPreorder: true,
+        pickupAt: true,
+        scheduledReleaseAt: true,
+        paymentExpiresAt: true,
         subtotal: true,
         marketplaceFee: true,
         totalAmount: true,
@@ -714,6 +765,10 @@ export class OrdersService {
         paymentStatus:
           order.status === 'PENDING' ? 'PENDING' : 'PAID',
         isPasabuyRequest: order.isPasabuyRequest,
+        isPreorder: order.isPreorder,
+        pickupAt: order.pickupAt,
+        scheduledReleaseAt: order.scheduledReleaseAt,
+        paymentExpiresAt: order.paymentExpiresAt,
         orderType: order.orderType,
         status: order.status,
         eventId: order.eventId,
@@ -1153,6 +1208,9 @@ export class OrdersService {
         OrderStatus.COOKING,
         OrderStatus.CANCELLED,
       ],
+      SCHEDULED: [
+        OrderStatus.CANCELLED,
+      ],
       COOKING: [
         OrderStatus.READY_FOR_PICKUP,
         OrderStatus.CANCELLED,
@@ -1221,6 +1279,8 @@ export class OrdersService {
       cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
       pickupConfirmedAt: order.pickupConfirmedAt,
+      pickupAt: order.pickupAt,
+      paymentExpiresAt: order.paymentExpiresAt,
       estimatedWaitMinutes,
       subtotal: order.subtotal.toFixed(2),
     };
@@ -1303,6 +1363,10 @@ export class OrdersService {
       where: {
         status: OrderStatus.PAID,
         paidAt: { lte: acceptTimeoutCutoff },
+        OR: [
+          { scheduledReleaseAt: null },
+          { scheduledReleaseAt: { lte: acceptTimeoutCutoff } },
+        ],
       },
       select: { id: true },
     });
@@ -1328,6 +1392,145 @@ export class OrdersService {
         order.updatedAt <= order.buyerContactPingAt
       ) {
         await this.autoCancelAndRefund(order.id, 'VENDOR_UNRESPONSIVE');
+      }
+    }
+  }
+
+  /**
+   * Moves paid pre-orders whose release time has arrived from SCHEDULED
+   * into the live vendor queue (PAID), and tells the vendor.
+   */
+  @Cron('*/1 * * * *')
+  async releaseScheduledOrders() {
+    const due = await this.prisma.order.findMany({
+      where: { status: OrderStatus.SCHEDULED, scheduledReleaseAt: { lte: new Date() } },
+      select: { id: true },
+    });
+
+    for (const { id } of due) {
+      const released = await this.prisma.$transaction(async (tx) => {
+        const result = await tx.order.updateMany({
+          where: { id, status: OrderStatus.SCHEDULED },
+          data: { status: OrderStatus.PAID },
+        });
+        if (result.count !== 1) return null;
+
+        await tx.orderStatusHistory.create({
+          data: {
+            orderId: id,
+            status: OrderStatus.PAID,
+            changedByUserId: null,
+            note: 'Pre-order released to the vendor queue',
+          },
+        });
+        await tx.auditRecord.create({ data: {
+          actorUserId: null, actionType: 'ORDER_STATUS_UPDATED',
+          entityType: 'Order', entityId: id,
+          beforeState: { status: OrderStatus.SCHEDULED },
+          afterState: { status: OrderStatus.PAID, source: 'PREORDER_RELEASE' },
+        } });
+        return tx.order.findUniqueOrThrow({
+          where: { id },
+          select: {
+            id: true, vendorId: true, customerId: true, status: true,
+            totalAmount: true, createdAt: true, updatedAt: true,
+            vendor: { select: { ownerUserId: true } },
+          },
+        });
+      });
+
+      if (!released) continue;
+
+      this.realtimeGateway.emitNewOrder(released.vendor.ownerUserId, {
+        orderId: released.id,
+        vendorId: released.vendorId,
+        customerId: released.customerId,
+        status: released.status,
+        totalAmount: released.totalAmount.toFixed(2),
+        createdAt: released.createdAt,
+      });
+      await this.realtimeGateway.emitOrderStatusUpdated(released.customerId, {
+        orderId: released.id,
+        status: released.status,
+        updatedAt: released.updatedAt,
+      });
+    }
+  }
+
+  /**
+   * Cancels pre-orders that were reserved but not paid within the payment
+   * window, expiring any open PayMongo checkout first. A checkout that can't
+   * be confirmed expired (e.g. it was just paid) is left for its webhook.
+   */
+  @Cron('*/1 * * * *')
+  async expireUnpaidPreorders() {
+    const expired = await this.prisma.order.findMany({
+      where: { status: OrderStatus.PENDING, paymentExpiresAt: { lte: new Date() } },
+      select: {
+        id: true,
+        paymentShares: {
+          select: { payment: { select: { status: true, provider: true, providerPaymentId: true } } },
+        },
+      },
+    });
+
+    for (const order of expired) {
+      try {
+        const openCheckouts = order.paymentShares
+          .map((share) => share.payment)
+          .filter(
+            (payment) =>
+              payment?.provider === 'PAYMONGO' &&
+              payment.status === 'PENDING' &&
+              payment.providerPaymentId,
+          );
+        let safeToCancel = true;
+        for (const payment of openCheckouts) {
+          if (!(await this.paymongoService.expireCheckoutSession(payment!.providerPaymentId!))) {
+            safeToCancel = false;
+          }
+        }
+        if (!safeToCancel) continue;
+
+        const cancelled = await this.prisma.$transaction(async (tx) => {
+          const result = await tx.order.updateMany({
+            where: { id: order.id, status: OrderStatus.PENDING },
+            data: {
+              status: OrderStatus.CANCELLED,
+              cancellationReason: CancellationReason.PAYMENT_EXPIRED,
+            },
+          });
+          if (result.count !== 1) return null;
+
+          await tx.orderStatusHistory.create({
+            data: {
+              orderId: order.id,
+              status: OrderStatus.CANCELLED,
+              changedByUserId: null,
+              note: 'Pre-order cancelled: payment window expired',
+            },
+          });
+          await tx.auditRecord.create({ data: {
+            actorUserId: null, actionType: 'ORDER_STATUS_UPDATED',
+            entityType: 'Order', entityId: order.id,
+            beforeState: { status: OrderStatus.PENDING },
+            afterState: { status: OrderStatus.CANCELLED, source: 'PAYMENT_EXPIRED' },
+          } });
+          return tx.order.findUniqueOrThrow({
+            where: { id: order.id },
+            select: { id: true, customerId: true, status: true, updatedAt: true },
+          });
+        });
+
+        if (cancelled) {
+          await this.realtimeGateway.emitOrderStatusUpdated(cancelled.customerId, {
+            orderId: cancelled.id,
+            status: cancelled.status,
+            updatedAt: cancelled.updatedAt,
+          });
+        }
+      } catch (error) {
+        this.logger.warn(`Could not expire pre-order ${order.id}: ${String(error)}`);
       }
     }
   }

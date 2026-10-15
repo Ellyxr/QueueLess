@@ -1,3 +1,4 @@
+import { resolvePaidStatus } from "../orders/preorder.util";
 import {
   BadRequestException,
   ConflictException,
@@ -279,6 +280,9 @@ export class WalletService {
         share.payment?.status === PaymentStatus.SUCCEEDED
       )
         throw new ConflictException("Order or payment share cannot be paid");
+      if (share.order.paymentExpiresAt && share.order.paymentExpiresAt.getTime() <= Date.now())
+        throw new ConflictException("The payment window for this pre-order has expired");
+      const paidStatus = resolvePaidStatus(share.order);
       if (share.amountDue.lte(0))
         throw new BadRequestException("Payment amount must be positive");
       const debit = await tx.wallet.updateMany({
@@ -323,12 +327,12 @@ export class WalletService {
       ) {
         paidOrder = await tx.order.update({
           where: { id: share.orderId },
-          data: { status: OrderStatus.PAID, paidAt: new Date() },
+          data: { status: paidStatus, paidAt: new Date() },
         });
         await tx.orderStatusHistory.create({
           data: {
             orderId: share.orderId,
-            status: OrderStatus.PAID,
+            status: paidStatus,
             changedByUserId: userId,
             note: "Payment confirmed from QueueLess wallet",
           },
@@ -346,7 +350,7 @@ export class WalletService {
           userId,
           "ORDER_STATUS_UPDATED",
           share.orderId,
-          { status: "PAID", paymentId: payment.id },
+          { status: paidStatus, paymentId: payment.id },
           "Order",
         );
       }
@@ -360,7 +364,7 @@ export class WalletService {
     if (result.paidOrder)
       await this.realtime.emitOrderStatusUpdated(result.paidOrder.customerId, {
         orderId: result.orderId,
-        status: OrderStatus.PAID,
+        status: result.paidOrder.status,
         updatedAt: result.paidOrder.updatedAt,
       });
     return {

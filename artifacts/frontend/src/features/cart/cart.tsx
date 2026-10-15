@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ChevronDown,
@@ -20,6 +20,8 @@ import {
   ORDER_TRACKING_CHANGED_EVENT,
 } from "@/features/orders/order-tracking";
 import { createOrderForVendorItems, setCheckoutQueue } from "@/features/cart/checkout";
+import { PreorderPicker, type OrderTiming } from "@/features/cart/preorder-picker";
+import { getVendorPreorderSlots } from "@/features/auth/api";
 import { GroupOrderCartView } from "@/features/group-orders/group-order-cart-view";
 import {
   GROUP_ORDER_SESSION_CHANGED_EVENT,
@@ -122,6 +124,11 @@ export default function CartPage() {
   const [paymentMethod, setPaymentMethod] = useState<"PAYMONGO" | "WALLET">("PAYMONGO");
   const [items, setItems] = useState<CartItem[]>(getCartItems);
   const [delivery, setDelivery] = useState(false);
+  const [orderTiming, setOrderTiming] = useState<OrderTiming>("NOW");
+  const [preorderPickupAt, setPreorderPickupAt] = useState<string | null>(null);
+  const [preorderError, setPreorderError] = useState<string | null>(null);
+  // Synchronous guard: state updates are async, so a fast double-click could otherwise submit twice.
+  const submitLock = useRef(false);
   const [promoCode, setPromoCode] = useState("");
   const [promoApplied, setPromoApplied] = useState(false);
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
@@ -213,7 +220,10 @@ export default function CartPage() {
     () => new Set(items.map((item) => item.vendorId || "unknown")).size,
     [items],
   );
-  let orderButtonLabel = vendorCount > 1 ? "Order Now (1st store)" : "Order Now";
+  const isPreorder = orderTiming === "PREORDER" && vendorCount === 1 && !delivery;
+  let orderButtonLabel = isPreorder
+    ? "Pay to reserve pre-order"
+    : vendorCount > 1 ? "Order Now (1st store)" : "Order Now";
   if (isRedirectingToPaymongo) {
     orderButtonLabel = "Redirecting to PayMongo...";
   } else if (isSubmitting) {
@@ -248,15 +258,34 @@ export default function CartPage() {
   };
 
   const submitOrder = async () => {
-    if (isSubmitting || !items.length) return;
+    if (submitLock.current || isSubmitting || !items.length) return;
+    if (isPreorder && !preorderPickupAt) {
+      setPreorderError("Choose a pickup date and time for your pre-order.");
+      return;
+    }
     if (!canTrackNewOrder()) {
       alert(
         `You already have ${MAX_TRACKED_ORDERS} orders being tracked. Complete or dismiss one before placing another.`,
       );
       return;
     }
+    submitLock.current = true;
     setIsSubmitting(true);
+    setPreorderError(null);
     try {
+      if (isPreorder && preorderPickupAt) {
+        // Re-check the slot before touching the server cart: the slot may have
+        // lapsed (lead time) while this page was open, and a failed order
+        // attempt would otherwise leave items added to the cart.
+        const slots = await getVendorPreorderSlots(items[0].vendorId || "");
+        if (!slots.preorderEnabled || !slots.slots.includes(preorderPickupAt)) {
+          setPreorderPickupAt(null);
+          setPreorderError("That pickup time is no longer available. Please choose another slot.");
+          submitLock.current = false;
+          setIsSubmitting(false);
+          return;
+        }
+      }
       // Items can come from several vendors — each vendor gets its own
       // order (and its own PayMongo checkout session), one at a time.
       // We place the first vendor's order now; the rest stay queued and
@@ -272,7 +301,12 @@ export default function CartPage() {
         .filter((item) => (item.vendorId || "unknown") === firstVendorId)
         .map((item) => ({ productId: item.id, quantity: item.quantity }));
 
-      const { checkoutUrl } = await createOrderForVendorItems(firstGroupItems, delivery, paymentMethod);
+      const { checkoutUrl } = await createOrderForVendorItems(
+        firstGroupItems,
+        delivery,
+        paymentMethod,
+        isPreorder ? preorderPickupAt ?? undefined : undefined,
+      );
 
       const remainingItems = items.filter(
         (item) => (item.vendorId || "unknown") !== firstVendorId,
@@ -288,7 +322,13 @@ export default function CartPage() {
       window.location.href = checkoutUrl;
     } catch (error) {
       console.error("Failed to submit order:", error);
-      alert("Failed to submit order. Please try again.");
+      if (isPreorder) {
+        setPreorderError(error instanceof Error ? error.message : "Failed to place pre-order. Please try again.");
+        setPreorderPickupAt(null);
+      } else {
+        alert("Failed to submit order. Please try again.");
+      }
+      submitLock.current = false;
       setIsSubmitting(false);
       setIsRedirectingToPaymongo(false);
     }
@@ -552,7 +592,13 @@ export default function CartPage() {
             {/* Request Pasabuy */}
             <button
               type="button"
-              onClick={() => setDelivery(!delivery)}
+              onClick={() => {
+                if (!delivery) {
+                  setOrderTiming("NOW");
+                  setPreorderPickupAt(null);
+                }
+                setDelivery(!delivery);
+              }}
               className={`group relative flex w-full items-center justify-between overflow-hidden rounded-[20px] border p-4 text-left hover:border hover:border-primary transition-colors duration-500 ${
                 delivery
                   ? "border-primary bg-primary text-accent "
@@ -625,6 +671,23 @@ export default function CartPage() {
               </span>
             </button>
 
+            <PreorderPicker
+              vendorId={items[0]?.vendorId}
+              deliverySelected={delivery}
+              multiVendor={vendorCount > 1}
+              timing={orderTiming}
+              pickupAt={preorderPickupAt}
+              onTimingChange={(timing) => {
+                setOrderTiming(timing);
+                setPreorderError(null);
+              }}
+              onPickupAtChange={setPreorderPickupAt}
+              disabled={isSubmitting}
+            />
+            {preorderError && (
+              <p className="px-1 text-xs text-destructive">{preorderError}</p>
+            )}
+
             {/* Promo code */}
             <div className="flex items-center rounded-[20px] border border-border bg-card px-4 py-1">
               <input
@@ -695,7 +758,7 @@ export default function CartPage() {
               </select>
               <Button
                 type="button"
-                disabled={isSubmitting || trackedOrderCount >= MAX_TRACKED_ORDERS}
+                disabled={isSubmitting || trackedOrderCount >= MAX_TRACKED_ORDERS || (isPreorder && !preorderPickupAt)}
                 onClick={submitOrder}
                 className="mt-5 w-full rounded-full"
               >
@@ -705,6 +768,7 @@ export default function CartPage() {
               <p className="mt-3 text-center text-[11px] text-muted-foreground">
                 {trackedOrderCount >= MAX_TRACKED_ORDERS
                   ? `You have ${MAX_TRACKED_ORDERS} orders in progress. Complete or dismiss one to order again.`
+                  : isPreorder ? "Pay within 10 minutes to reserve your pickup slot, or it will be released."
                   : paymentMethod === "WALLET" ? "Continue to your wallet to confirm payment or cash in." : `You'll be redirected to PayMongo Sandbox to complete payment. (${trackedOrderCount}/${MAX_TRACKED_ORDERS} active orders)`}
               </p>
             </section>

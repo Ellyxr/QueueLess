@@ -710,6 +710,7 @@ export class RefundsService {
         customerId: true,
         status: true,
         paidAt: true,
+        scheduledReleaseAt: true,
         buyerContactPingAt: true,
         updatedAt: true,
       },
@@ -782,6 +783,7 @@ export class RefundsService {
     order: {
       status: string;
       paidAt: Date | null;
+      scheduledReleaseAt?: Date | null;
       buyerContactPingAt: Date | null;
       updatedAt: Date;
     },
@@ -802,8 +804,12 @@ export class RefundsService {
         );
       }
 
-      const remainingMs =
-        FIVE_MINUTES_MS - (now - order.paidAt.getTime());
+      // Pre-orders only start waiting on the vendor once released to the queue.
+      const waitingSince = Math.max(
+        order.paidAt.getTime(),
+        order.scheduledReleaseAt?.getTime() ?? 0,
+      );
+      const remainingMs = FIVE_MINUTES_MS - (now - waitingSince);
 
       if (remainingMs > 0) {
         throw new BadRequestException(

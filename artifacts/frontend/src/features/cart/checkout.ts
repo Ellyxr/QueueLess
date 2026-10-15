@@ -60,6 +60,8 @@ export async function createOrderForVendorItems(
   items: Array<{ productId: string; quantity: number }>,
   isPasabuyRequest: boolean,
   paymentMethod: "PAYMONGO" | "WALLET" = "PAYMONGO",
+  /** Reserve the order for pickup at this ISO time instead of ordering now. */
+  preorderPickupAt?: string,
 ): Promise<{ orderId: string; checkoutUrl: string }> {
   let activeCartId = "";
   for (const item of items) {
@@ -83,6 +85,7 @@ export async function createOrderForVendorItems(
   const order = await createOrder({
     cartId: activeCartId,
     isPasabuyRequest,
+    ...(preorderPickupAt ? { isPreorder: true, pickupAt: preorderPickupAt } : {}),
   });
 
   const orderId = order?.id;
