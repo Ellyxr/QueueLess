@@ -790,6 +790,10 @@ model FeaturedListingSettings {
   secondVendorDiscount Int @default(20)
   thirdVendorDiscount Int @default(10)
   discountOnRenewals Boolean @default(true)
+  /// Master switch for the 1st-3rd vendor introductory discount. When off,
+  /// nobody gets it (not even vendors holding a tier); listings already sold
+  /// at a discount keep running until their plan ends.
+  introDiscountEnabled Boolean @default(true)
   version Int @default(1)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
   @@map("featured_listing_settings")

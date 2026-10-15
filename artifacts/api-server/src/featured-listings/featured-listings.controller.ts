@@ -31,6 +31,10 @@ export class FeaturedListingsController {
   @UseGuards(JwtAuthGuard, RolesGuard) @Roles('ADMIN') @ApiBearerAuth()
   settings() { return this.featured.settings(); }
 
+  @Get('settings/discount-status')
+  @UseGuards(JwtAuthGuard, RolesGuard) @Roles('ADMIN') @ApiBearerAuth()
+  discountStatus() { return this.featured.discountStatus(); }
+
   @Patch('settings')
   @UseGuards(JwtAuthGuard, RolesGuard) @Roles('ADMIN') @ApiBearerAuth()
   updateSettings(@CurrentUser() user: { sub: string }, @Body() dto: UpdateFeaturedSettingsDto) {

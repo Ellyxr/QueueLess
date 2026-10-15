@@ -17,7 +17,7 @@ const D = value => new Prisma.Decimal(value);
 const unique = () => new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: '6.19.3' });
 const reject = (promise, status) => assert.rejects(promise, error => error.getStatus?.() === status);
 function featuredHarness() {
-  let state = { settings: { id: 1, monthlyPrice: '100', firstVendorDiscount: 30, secondVendorDiscount: 20, thirdVendorDiscount: 10, discountOnRenewals: true, version: 1 },
+  let state = { settings: { id: 1, monthlyPrice: '100', firstVendorDiscount: 30, secondVendorDiscount: 20, thirdVendorDiscount: 10, discountOnRenewals: true, introDiscountEnabled: true, version: 1 },
     plans: [{ id: 'month', price: '100', name: 'Monthly', durationDays: 30, durationMonths: 1, managedMonthly: true, placement: 'MARKETPLACE_HOME', isActive: true },
       { id: 'spot', price: '100', name: 'Spot', durationDays: 30, durationMonths: null, managedMonthly: false, placement: 'PRODUCT_SPOTLIGHT', isActive: true }],
     vendors: ['v1','v2','v3','v4'].map(id => ({id, status: 'ACTIVE'})), claims: [], listings: [], payments: [], entries: [], payouts: [], audits: [] };
@@ -314,4 +314,51 @@ test('optional admin plan fields and confirmed amount reject null instead of fai
   assert((await validate(plainToInstance(UpdateFeaturedPlanDto,{price:null,isActive:null}))).length >= 2);
   assert((await validate(plainToInstance(CreateFeaturedListingDto,{planId:'00000000-0000-4000-8000-000000000001',expectedAmount:null}))).length);
   const h=featuredHarness();await reject(h.service.updatePlan('month',{},'admin'),400);
+});
+
+// ---------------------------------------------------------------------------
+// Introductory discount master switch (admin can switch the 1st-3rd vendor
+// discount off; nobody then gets it, tiers are kept for when it is back on).
+const settingsUpdate = (h, changes) => h.service.updateSettings({ monthlyPrice: 100, firstVendorDiscount: 30,
+  secondVendorDiscount: 20, thirdVendorDiscount: 10, discountOnRenewals: true, version: h.state().settings.version, ...changes }, 'admin');
+
+test('discount switched off: the first-ever vendor pays full price and no tier is handed out', async () => {
+  const h = featuredHarness(); h.fund('v1', 100);
+  await settingsUpdate(h, { introDiscountEnabled: false });
+  const quote = await h.service.quote('v1', intent);
+  assert.deepEqual([quote.amount, quote.discountPercent, quote.discountEligible, quote.introDiscountEnabled], ['100.00', 0, false, false]);
+  const bought = await h.service.create('v1', intent, 'k1');
+  assert.equal(bought.amount, '100.00');
+  assert.deepEqual(h.state().claims, [], 'no 1st-3rd tier reserved while off');
+});
+
+test('discount switched off: a vendor already holding a tier gets no discount on renewal; tier kept', async () => {
+  const h = featuredHarness(); h.fund('v1', 300);
+  assert.equal((await h.service.create('v1', intent, 'k1')).amount, '70.00');
+  const firstListing = { ...h.state().listings[0] };
+  await settingsUpdate(h, { introDiscountEnabled: false });
+  assert.equal(h.state().listings[0].status, firstListing.status, 'the running discounted plan is not touched');
+  assert.equal(h.state().listings[0].pricePaid, firstListing.pricePaid);
+  h.expire('v1');
+  assert.equal((await h.service.create('v1', intent, 'k2')).amount, '100.00');
+  assert.deepEqual(h.state().claims.map((c) => [c.vendorId, c.rank]), [['v1', 1]], 'tier 1 still recorded for v1');
+});
+
+test('switched back on: tier holders get their discount again and the next vendor gets the next tier', async () => {
+  const h = featuredHarness(); h.fund('v1', 300); h.fund('v2', 100);
+  await h.service.create('v1', intent, 'k1');
+  await settingsUpdate(h, { introDiscountEnabled: false });
+  h.expire('v1');
+  await settingsUpdate(h, { introDiscountEnabled: true });
+  assert.equal((await h.service.create('v1', intent, 'k2')).amount, '70.00', 'constant deal resumes for tier 1');
+  assert.equal((await h.service.create('v2', intent, 'k3')).amount, '80.00', 'next vendor is tier 2, tiers were not reset');
+});
+
+test('saving settings without the switch leaves it unchanged; changes are audited', async () => {
+  const h = featuredHarness();
+  await settingsUpdate(h, { introDiscountEnabled: false });
+  await settingsUpdate(h, {});
+  assert.equal(h.state().settings.introDiscountEnabled, false, 'older admin screens do not re-enable it');
+  const audit = h.state().audits.find((a) => a.actionType === 'FEATURED_SETTINGS_UPDATED');
+  assert.deepEqual([audit.beforeState.introDiscountEnabled, audit.afterState.introDiscountEnabled], [true, false]);
 });
