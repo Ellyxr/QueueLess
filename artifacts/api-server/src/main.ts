@@ -1,30 +1,31 @@
 import 'reflect-metadata';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { loadRuntimeConfig } from './config/runtime.config';
+import { RenderSocketIoAdapter } from './realtime/socket-io.adapter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { rawBody: true });
-  const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .map((value) => {
-      const url = new URL(value);
-      if (!['http:', 'https:'].includes(url.protocol) || url.pathname !== '/' ||
-          url.search || url.hash || url.username || url.password || value.includes('*')) {
-        throw new Error(`CORS_ORIGIN must contain HTTP(S) origins only: ${value}`);
-      }
-      return url.origin;
-    });
-  if (!corsOrigins.length) throw new Error('CORS_ORIGIN must include at least one origin');
+  const logger = new Logger('Bootstrap');
+
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+    logger: process.env.NODE_ENV === 'production' ? ['log', 'warn', 'error'] : undefined,
+  });
+  // Read after create() so ConfigModule has loaded a local .env file.
+  const config = loadRuntimeConfig();
+
+  // Render terminates TLS at its proxy; trust it so req.ip/req.secure are correct.
+  app.set('trust proxy', 1);
+  app.disable('x-powered-by');
 
   app.setGlobalPrefix('api/v1');
-  app.use(cors({ origin: corsOrigins, credentials: true }));
+  app.use(cors({ origin: config.corsOrigins, credentials: true }));
   app.use(cookieParser());
   app.useGlobalPipes(
     new ValidationPipe({
@@ -35,6 +36,12 @@ async function bootstrap() {
   );
   app.useGlobalFilters(new HttpExceptionFilter());
 
+  // REST and Socket.IO share this one HTTP server and port.
+  app.useWebSocketAdapter(new RenderSocketIoAdapter(app, config.corsOrigins));
+
+  // Render sends SIGTERM on deploys/restarts; close Prisma and sockets cleanly.
+  app.enableShutdownHooks();
+
   const swaggerConfig = new DocumentBuilder()
     .setTitle('QueueLess API')
     .setDescription('QueueLess foundation API')
@@ -44,7 +51,16 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup('api/v1/docs', app, document);
 
-  await app.listen(Number(process.env.PORT ?? 5000), '0.0.0.0');
+  await app.listen(config.port, config.host);
+  logger.log(
+    `QueueLess API + Socket.IO listening on ${config.host}:${config.port} ` +
+      `(${config.isProduction ? 'production' : 'development'}); ` +
+      `CORS origins: ${config.corsOrigins.join(', ')}`,
+  );
 }
 
-void bootstrap();
+bootstrap().catch((error) => {
+  // Exit non-zero so Render marks the deploy as failed instead of hanging.
+  console.error('Failed to start QueueLess API', error);
+  process.exit(1);
+});

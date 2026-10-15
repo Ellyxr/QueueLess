@@ -15,10 +15,35 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { RefundsService } from '../refunds/refunds.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
-import { PaymongoService } from '../payments/paymongo.service';
-import { VendorsService } from '../vendors/vendors.service';
-import { isBookablePreorderSlot } from '../vendors/preorder-slots.util';
-import { PREORDER_PAYMENT_WINDOW_MS } from './preorder.util';
+import { READY_HISTORY_SELECT, readyFields, readyPickupWhere } from './order-ready.policy';
+import {
+  hasPickupWindows,
+  preorderPickupStatus,
+  resolvePreorderWindows,
+} from '../vendors/availability.util';
+import {
+  PREORDER_ACCEPT_GRACE_MS,
+  pickupWindowEndsAt,
+  preorderMinLeadMinutes,
+  queueReleaseAt,
+  reservationExpiresAt,
+  validatePreorderSlot,
+} from './preorder-slot.policy';
+
+// Same instant, whatever offset the client used ("08:00+08:00" == "00:00Z").
+function samePickup(stored: Date | null, requested: Date | null): boolean {
+  return (stored?.getTime() ?? null) === (requested?.getTime() ?? null);
+}
+
+const PREORDER_SCHEDULE_SELECT = {
+  preorderSameAsStoreHours: true,
+  preorderAvailability: {
+    select: { dayOfWeek: true, isEnabled: true, openTime: true, closeTime: true },
+  },
+  availability: {
+    select: { dayOfWeek: true, isOpen: true, openTime: true, closeTime: true },
+  },
+} satisfies Prisma.VendorSelect;
 
 const VENDOR_CONTACT_PING_COOLDOWN_MS = 2 * 60 * 1000;
 const VENDOR_ACCEPT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -26,7 +51,8 @@ const VENDOR_UNRESPONSIVE_TIMEOUT_MS = 2 * 60 * 1000;
 
 @Injectable()
 export class OrdersService {
-  private readonly logger = new Logger(OrdersService.name);
+  // Current time for pickup-window checks; replaced in tests.
+  clock: () => Date = () => new Date();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -67,6 +93,17 @@ export class OrdersService {
       );
     }
 
+    // US-057: a pickup time only belongs on a preorder.
+    if (!dto.isPreorder && dto.scheduledPickupAt !== undefined) {
+      throw new BadRequestException('scheduledPickupAt can only be set on a preorder');
+    }
+    if (dto.isPreorder && !dto.scheduledPickupAt) {
+      throw new BadRequestException('scheduledPickupAt is required for a preorder');
+    }
+    const scheduledPickupAt = dto.isPreorder && dto.scheduledPickupAt
+      ? new Date(dto.scheduledPickupAt)
+      : null;
+
     const existing =
       await this.prisma.orderIdempotencyKey.findUnique({
         where: {
@@ -94,7 +131,7 @@ export class OrdersService {
         existing.cartId !== dto.cartId ||
         existing.eventId !== (dto.eventId ?? null) ||
         (existing.order && existing.order.isPreorder !== (dto.isPreorder ?? false)) ||
-        (existing.order && (existing.order.pickupAt?.getTime() ?? null) !== (pickupAt?.getTime() ?? null))
+        (existing.order && !samePickup(existing.order.scheduledPickupAt, scheduledPickupAt))
       ) {
         throw new ConflictException(
           'Idempotency-Key was already used for a different order request',
@@ -109,6 +146,9 @@ export class OrdersService {
         'This order request is already being processed. Please retry with the same Idempotency-Key.',
       );
     }
+
+    let releaseAt: Date | null = null;
+    let windowEndsAt: Date | null = null;
 
     try {
       const order = await this.prisma.$transaction(
@@ -161,13 +201,35 @@ export class OrdersService {
             throw new BadRequestException('This vendor does not accept preorders');
           }
 
-          if (dto.isPreorder && pickupAt) {
-            const schedule = await this.vendorsService.getEffectivePreorderDays(cart.vendorId);
-            if (!isBookablePreorderSlot(schedule.days, schedule.minLeadTimeMinutes, pickupAt)) {
+          // US-055: a preorder needs at least one pickup window to be collected in.
+          if (dto.isPreorder) {
+            const schedule = await tx.vendor.findUniqueOrThrow({
+              where: { id: cart.vendorId },
+              select: PREORDER_SCHEDULE_SELECT,
+            });
+            const windows = resolvePreorderWindows(schedule);
+            if (!hasPickupWindows(windows)) {
               throw new BadRequestException(
-                'That pickup time is no longer available. Please choose another slot.',
+                'This vendor has not set preorder pickup hours yet',
               );
             }
+
+            // US-057: the chosen slot must be in the future, inside a pickup
+            // window and leave the vendor enough time (server clock).
+            const leadMinutes = Math.max(
+              preorderMinLeadMinutes(),
+              ...cart.items.map((item) => item.product.preparationTimeMinutes),
+            );
+            validatePreorderSlot({
+              slot: scheduledPickupAt!,
+              now: this.clock(),
+              windows,
+              leadMinutes,
+            });
+            // US-059: fixed at reservation so later schedule edits do not move it.
+            releaseAt = queueReleaseAt(scheduledPickupAt!, windows, leadMinutes);
+            // US-062: uncollected-pickup grace runs from this window's close.
+            windowEndsAt = pickupWindowEndsAt(scheduledPickupAt!, windows);
           }
 
           for (const item of cart.items) {
@@ -274,17 +336,10 @@ export class OrdersService {
             ),
           );
 
-          const isPreorderOrder = !!(dto.isPreorder && pickupAt);
-          const estimatedReadyAt = isPreorderOrder
-            ? pickupAt!
-            : new Date(Date.now() + estimatedWaitMinutes * 60_000);
-          // Hand a paid pre-order to the vendor in time to prepare it.
-          const scheduledReleaseAt = isPreorderOrder
-            ? new Date(pickupAt!.getTime() - estimatedWaitMinutes * 60_000)
-            : null;
-          const paymentExpiresAt = isPreorderOrder
-            ? new Date(Date.now() + PREORDER_PAYMENT_WINDOW_MS)
-            : null;
+          // A preorder is due at the time the student picked.
+          const estimatedReadyAt = scheduledPickupAt ?? new Date(
+            Date.now() + estimatedWaitMinutes * 60_000,
+          );
 
           const order = await tx.order.create({
             data: {
@@ -295,9 +350,14 @@ export class OrdersService {
               status: 'PENDING',
               isPasabuyRequest: false,
               isPreorder: dto.isPreorder ?? false,
-              pickupAt: isPreorderOrder ? pickupAt : null,
-              scheduledReleaseAt,
-              paymentExpiresAt,
+              scheduledPickupAt,
+              // US-058: unpaid reservations are released at this time.
+              reservationExpiresAt: scheduledPickupAt
+                ? reservationExpiresAt(this.clock(), scheduledPickupAt)
+                : null,
+              // US-059: once paid, held as SCHEDULED until this time.
+              queueReleaseAt: releaseAt,
+              pickupWindowEndsAt: windowEndsAt,
               subtotal,
               marketplaceFee,
               estimatedReadyAt,
@@ -408,7 +468,10 @@ export class OrdersService {
           existingRequest &&
           (existingRequest.cartId !== dto.cartId ||
             existingRequest.eventId !==
-              (dto.eventId ?? null))
+              (dto.eventId ?? null) ||
+            (existingRequest.order &&
+              (existingRequest.order.isPreorder !== (dto.isPreorder ?? false) ||
+                !samePickup(existingRequest.order.scheduledPickupAt, scheduledPickupAt))))
         ) {
           throw new ConflictException(
             'Idempotency-Key was already used for a different order request',
@@ -447,6 +510,7 @@ export class OrdersService {
               product: true,
             },
           },
+          statusHistory: READY_HISTORY_SELECT,
         },
       });
 
@@ -459,6 +523,46 @@ export class OrdersService {
     return this.buildOrderResponse(order);
   }
 
+  // US-068: authoritative recovery list for the buzzer. Every READY_FOR_PICKUP
+  // order this user collects (same rule as the order.ready socket event), in
+  // the same shape as the event. Clients call it on realtime.ready and ring only
+  // for eventIds they have not seen; serverTime lets them judge age without
+  // trusting the device clock.
+  async getReadyForPickup(userId: string) {
+    const orders = await this.prisma.order.findMany({
+      where: readyPickupWhere(userId),
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        id: true,
+        status: true,
+        customerId: true,
+        isPasabuyRequest: true,
+        vendor: { select: { id: true, name: true, pickupLocation: true } },
+        statusHistory: READY_HISTORY_SELECT,
+      },
+    });
+
+    return {
+      serverTime: new Date(),
+      orders: orders.map((order) => {
+        const { readyAt, readyEventId } = readyFields(order.statusHistory);
+        return {
+          eventId: readyEventId,
+          orderId: order.id,
+          orderReference: order.id.slice(0, 8).toUpperCase(),
+          status: order.status,
+          readyAt,
+          vendor: order.vendor,
+          pickupRole: order.isPasabuyRequest
+            ? 'PASABUY_FULFILLER'
+            : order.customerId === userId
+              ? 'CUSTOMER'
+              : 'GROUP_MEMBER',
+        };
+      }),
+    };
+  }
+
   async getCustomerOrders(userId: string) {
     const orders = await this.prisma.order.findMany({
       where: { customerId: userId },
@@ -467,6 +571,9 @@ export class OrdersService {
         id: true,
         status: true,
         isPreorder: true,
+        scheduledPickupAt: true,
+        reservationExpiresAt: true,
+        queueReleaseAt: true,
         isPasabuyRequest: true,
         pickupAt: true,
         paymentExpiresAt: true,
@@ -488,13 +595,18 @@ export class OrdersService {
           take: 1,
           select: { status: true, category: true },
         },
+        statusHistory: READY_HISTORY_SELECT,
       },
     });
 
     return orders.map((order) => ({
       id: order.id,
       status: order.status,
+      ...readyFields(order.statusHistory),
       isPreorder: order.isPreorder,
+      scheduledPickupAt: order.scheduledPickupAt,
+      reservationExpiresAt: order.reservationExpiresAt,
+      queueReleaseAt: order.queueReleaseAt,
       isPasabuyRequest: order.isPasabuyRequest,
       pickupAt: order.pickupAt,
       paymentExpiresAt: order.paymentExpiresAt,
@@ -541,6 +653,9 @@ export class OrdersService {
         cancellationReason: true,
         cancellationNote: true,
         estimatedReadyAt: true,
+        scheduledPickupAt: true,
+        reservationExpiresAt: true,
+        queueReleaseAt: true,
         updatedAt: true,
         pickupConfirmedAt: true,
         pickupAt: true,
@@ -585,6 +700,7 @@ export class OrdersService {
             changedAt: 'asc',
           },
           select: {
+            id: true,
             status: true,
             note: true,
             changedAt: true,
@@ -641,16 +757,24 @@ export class OrdersService {
         }
       : null;
 
+    const readyHistory = order.statusHistory.filter(
+      (entry) => entry.status === OrderStatus.READY_FOR_PICKUP,
+    );
+
     return {
       orderId: order.id,
       orderType: order.orderType,
       status: order.status,
+      ...readyFields(readyHistory.slice(-1)),
       isPasabuyRequest: order.isPasabuyRequest,
       isPreorder: order.isPreorder,
       orderReference: order.id.slice(0, 8).toUpperCase(),
       cancellationReason: order.cancellationReason,
       cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
+      scheduledPickupAt: order.scheduledPickupAt,
+      reservationExpiresAt: order.reservationExpiresAt,
+      queueReleaseAt: order.queueReleaseAt,
       estimatedWaitMinutes,
       pickupAt: order.pickupAt,
       scheduledReleaseAt: order.scheduledReleaseAt,
@@ -679,6 +803,93 @@ export class OrdersService {
     };
   }
 
+  // US-059: paid preorders held outside the live queue, soonest pickup first.
+  // Each moves to the live queue (PAID) at queueReleaseAt.
+  // US-062: preorders flagged UNCOLLECTED, most recent pickup first, so the
+  // vendor can deal with the food that was never collected.
+  async getVendorUncollectedOrders(userId: string) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { ownerUserId: userId },
+      select: { id: true },
+    });
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found for this user');
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where: { vendorId: vendor.id, status: OrderStatus.UNCOLLECTED },
+      orderBy: { scheduledPickupAt: 'desc' },
+      take: 100,
+      select: {
+        id: true,
+        status: true,
+        scheduledPickupAt: true,
+        pickupWindowEndsAt: true,
+        totalAmount: true,
+        updatedAt: true,
+        customer: { select: { fullName: true } },
+        items: { select: { quantity: true, product: { select: { name: true } } } },
+      },
+    });
+
+    return {
+      count: orders.length,
+      orders: orders.map((order) => ({
+        id: order.id,
+        orderReference: order.id.slice(0, 8).toUpperCase(),
+        status: order.status,
+        scheduledPickupAt: order.scheduledPickupAt,
+        pickupWindowEndsAt: order.pickupWindowEndsAt,
+        flaggedAt: order.updatedAt,
+        customerName: order.customer.fullName,
+        total: order.totalAmount.toFixed(2),
+        items: order.items.map((item) => ({ name: item.product.name, quantity: item.quantity })),
+      })),
+    };
+  }
+
+  async getVendorScheduledOrders(userId: string) {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { ownerUserId: userId },
+      select: { id: true },
+    });
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found for this user');
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where: { vendorId: vendor.id, status: OrderStatus.SCHEDULED },
+      orderBy: { scheduledPickupAt: 'asc' },
+      select: {
+        id: true,
+        status: true,
+        scheduledPickupAt: true,
+        queueReleaseAt: true,
+        totalAmount: true,
+        paidAt: true,
+        customer: { select: { fullName: true } },
+        items: {
+          select: { quantity: true, product: { select: { name: true } } },
+        },
+      },
+    });
+
+    return {
+      count: orders.length,
+      orders: orders.map((order) => ({
+        id: order.id,
+        orderReference: order.id.slice(0, 8).toUpperCase(),
+        status: order.status,
+        scheduledPickupAt: order.scheduledPickupAt,
+        queueReleaseAt: order.queueReleaseAt,
+        customerName: order.customer.fullName,
+        total: order.totalAmount.toFixed(2),
+        paidAt: order.paidAt,
+        items: order.items.map((item) => ({ name: item.product.name, quantity: item.quantity })),
+      })),
+    };
+  }
+
   async getVendorOrderQueue(userId: string) {
     const vendor = await this.prisma.vendor.findUnique({
       where: {
@@ -703,6 +914,9 @@ export class OrdersService {
         status: {
           in: ['PENDING', 'PAID', 'SCHEDULED', 'COOKING'],
         },
+        // US-058: a preorder is a reservation the vendor can trust only once
+        // it is paid; unpaid ones stay hidden until paid or expired.
+        NOT: { isPreorder: true, status: 'PENDING' },
       },
       orderBy: {
         createdAt: 'asc',
@@ -714,9 +928,7 @@ export class OrdersService {
         status: true,
         isPasabuyRequest: true,
         isPreorder: true,
-        pickupAt: true,
-        scheduledReleaseAt: true,
-        paymentExpiresAt: true,
+        scheduledPickupAt: true,
         subtotal: true,
         marketplaceFee: true,
         totalAmount: true,
@@ -766,9 +978,7 @@ export class OrdersService {
           order.status === 'PENDING' ? 'PENDING' : 'PAID',
         isPasabuyRequest: order.isPasabuyRequest,
         isPreorder: order.isPreorder,
-        pickupAt: order.pickupAt,
-        scheduledReleaseAt: order.scheduledReleaseAt,
-        paymentExpiresAt: order.paymentExpiresAt,
+        scheduledPickupAt: order.scheduledPickupAt,
         orderType: order.orderType,
         status: order.status,
         eventId: order.eventId,
@@ -816,6 +1026,7 @@ export class OrdersService {
     const isCancelling = dto.status === OrderStatus.CANCELLED;
     let justCancelled = false;
     let statusChanged = false;
+    let readyHistory: { id: string; changedAt: Date } | null = null;
 
     const updatedOrder = await this.prisma.$transaction(
       async (tx) => {
@@ -829,6 +1040,7 @@ export class OrdersService {
             vendorId: true,
             status: true,
             isPasabuyRequest: true,
+            isPreorder: true,
             items: {
               select: {
                 productId: true,
@@ -874,11 +1086,28 @@ export class OrdersService {
           dto.status,
         );
 
-        statusChanged = true;
+        // US-055: a preorder is handed over only inside the vendor's pickup
+        // window (Asia/Manila).
+        if (order.isPreorder && dto.status === OrderStatus.READY_FOR_PICKUP) {
+          const schedule = await tx.vendor.findUniqueOrThrow({
+            where: { id: order.vendorId },
+            select: PREORDER_SCHEDULE_SELECT,
+          });
+          const pickup = preorderPickupStatus(schedule, this.clock());
+          if (!pickup.isOpenNow) {
+            throw new BadRequestException(
+              'Preorders can only be marked ready during your preorder pickup hours' +
+                (pickup.nextAvailableLabel ? `; next window opens ${pickup.nextAvailableLabel}` : ''),
+            );
+          }
+        }
 
-        const updated = await tx.order.update({
+        // Conditional on the status we validated, so a concurrent update
+        // (e.g. cancel vs. ready) cannot both commit and publish.
+        const transition = await tx.order.updateMany({
           where: {
             id: order.id,
+            status: order.status,
           },
           data: {
             status: dto.status,
@@ -890,15 +1119,15 @@ export class OrdersService {
                 }
               : {}),
           },
-          include: {
-            vendor: true,
-            items: {
-              include: {
-                product: true,
-              },
-            },
-          },
         });
+
+        if (transition.count !== 1) {
+          throw new ConflictException(
+            'Order status was changed by another request; refresh and try again',
+          );
+        }
+
+        statusChanged = true;
 
         if (
           isCancelling &&
@@ -918,14 +1147,19 @@ export class OrdersService {
           });
         }
 
-        await tx.orderStatusHistory.create({
+        const history = await tx.orderStatusHistory.create({
           data: {
             orderId: order.id,
             status: dto.status,
             changedByUserId: userId,
             note,
           },
+          select: { id: true, changedAt: true },
         });
+
+        if (dto.status === OrderStatus.READY_FOR_PICKUP) {
+          readyHistory = history;
+        }
 
         await tx.auditRecord.create({ data: {
           actorUserId: userId, actionType: 'ORDER_STATUS_UPDATED',
@@ -934,10 +1168,21 @@ export class OrdersService {
           afterState: { status: dto.status },
         } });
 
-        return updated;
+        return tx.order.findUniqueOrThrow({
+          where: { id: order.id },
+          include: {
+            vendor: true,
+            items: {
+              include: {
+                product: true,
+              },
+            },
+          },
+        });
       },
     );
 
+    // Published only after the transaction has committed.
     if (statusChanged) {
       await this.realtimeGateway.emitOrderStatusUpdated(
         updatedOrder.customerId,
@@ -947,6 +1192,15 @@ export class OrdersService {
           updatedAt: updatedOrder.updatedAt,
         },
       );
+    }
+
+    // Assigned inside the transaction callback, which TS cannot follow.
+    const ready = readyHistory as { id: string; changedAt: Date } | null;
+    if (ready) {
+      await this.realtimeGateway.emitOrderReady(updatedOrder.id, {
+        eventId: ready.id,
+        readyAt: ready.changedAt,
+      });
     }
 
     if (justCancelled) {
@@ -1136,6 +1390,7 @@ export class OrdersService {
     );
     const pendingStatuses = new Set([
       'PENDING',
+      'SCHEDULED',
       'PAID',
       'COOKING',
       'OUT_FOR_DELIVERY',
@@ -1151,7 +1406,8 @@ export class OrdersService {
 
     const weekDayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
     const weekSalesTotals = [0, 0, 0, 0, 0, 0].map(() => new Prisma.Decimal(0));
-    const realizedStatuses = new Set(['PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'READY_FOR_PICKUP', 'COMPLETED']);
+    // UNCOLLECTED was paid for and prepared, so it still counts as a sale.
+    const realizedStatuses = new Set(['SCHEDULED', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'READY_FOR_PICKUP', 'COMPLETED', 'UNCOLLECTED']);
 
     for (const order of orders) {
       if (order.createdAt < startOfWeek || !realizedStatuses.has(order.status)) {
@@ -1204,6 +1460,11 @@ export class OrdersService {
         OrderStatus.PAID,
         OrderStatus.CANCELLED,
       ],
+      // US-059: a held preorder enters the live queue (PAID) only through the
+      // release job; the vendor may still cancel it (refunded).
+      SCHEDULED: [
+        OrderStatus.CANCELLED,
+      ],
       PAID: [
         OrderStatus.COOKING,
         OrderStatus.CANCELLED,
@@ -1223,6 +1484,8 @@ export class OrdersService {
       ],
       COMPLETED: [],
       CANCELLED: [],
+      // US-062: terminal; flagged by the uncollected-preorder job only.
+      UNCOLLECTED: [],
     };
 
     if (
@@ -1246,7 +1509,10 @@ export class OrdersService {
           };
         };
       };
-    }>,
+    }> & {
+      // Loaded with READY_HISTORY_SELECT by buyer-facing reads (US-068).
+      statusHistory?: { id: string; changedAt: Date }[];
+    },
   ) {
     const estimatedWaitMinutes =
       order.estimatedReadyAt &&
@@ -1272,12 +1538,16 @@ export class OrdersService {
       eventId: order.eventId,
       orderType: order.orderType,
       status: order.status,
+      ...(order.statusHistory ? readyFields(order.statusHistory) : {}),
       isPasabuyRequest: order.isPasabuyRequest,
       isPreorder: order.isPreorder,
       orderReference: order.id.slice(0, 8).toUpperCase(),
       cancellationReason: order.cancellationReason,
       cancellationNote: order.cancellationNote,
       estimatedReadyAt: order.estimatedReadyAt,
+      scheduledPickupAt: order.scheduledPickupAt,
+      reservationExpiresAt: order.reservationExpiresAt,
+      queueReleaseAt: order.queueReleaseAt,
       pickupConfirmedAt: order.pickupConfirmedAt,
       pickupAt: order.pickupAt,
       paymentExpiresAt: order.paymentExpiresAt,
@@ -1359,13 +1629,18 @@ export class OrdersService {
     const now = Date.now();
 
     const acceptTimeoutCutoff = new Date(now - VENDOR_ACCEPT_TIMEOUT_MS);
+    // US-057: a preorder's accept clock starts at its scheduled pickup, not at
+    // payment, so a reservation made overnight is not refunded while the
+    // vendor is closed. Older preorders without a slot keep the payment rule.
     const stalledOnAccept = await this.prisma.order.findMany({
       where: {
         status: OrderStatus.PAID,
-        paidAt: { lte: acceptTimeoutCutoff },
         OR: [
-          { scheduledReleaseAt: null },
-          { scheduledReleaseAt: { lte: acceptTimeoutCutoff } },
+          { scheduledPickupAt: null, paidAt: { lte: acceptTimeoutCutoff } },
+          {
+            isPreorder: true,
+            scheduledPickupAt: { lte: new Date(now - PREORDER_ACCEPT_GRACE_MS) },
+          },
         ],
       },
       select: { id: true },

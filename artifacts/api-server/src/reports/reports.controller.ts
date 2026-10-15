@@ -104,12 +104,12 @@ export class ReportsController {
   @UseInterceptors(FileInterceptor('attachment', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
   @ApiConsumes('application/json', 'multipart/form-data')
   @ApiBody({ schema: { type: 'object', required: ['targetType', 'category', 'description'], properties: {
-    targetType: { type: 'string', enum: ['VENDOR', 'USER', 'ORDER', 'TRANSACTION', 'PRODUCT', 'PASABUY'] },
+    targetType: { type: 'string', enum: ['VENDOR', 'USER', 'ORDER', 'TRANSACTION', 'PRODUCT', 'PASABUY', 'REVIEW'] },
     targetId: { type: 'string', format: 'uuid', description: 'Optional only for TRANSACTION with an attachment' },
     category: { type: 'string' }, description: { type: 'string' },
     attachment: { type: 'string', format: 'binary', description: 'Optional JPEG, PNG, or PDF up to 5 MB' },
   } } })
-  @ApiOperation({ summary: 'Report a vendor, user, order, transaction, product, or Pasabuy request' })
+  @ApiOperation({ summary: 'Report a vendor, user, order, transaction, product, Pasabuy request, or review' })
   @ApiResponse({ status: 201, description: 'Report opened for review' })
   @ApiResponse({ status: 400, description: 'Invalid category, description, or target' })
   @ApiResponse({ status: 401, description: 'Authentication required' })

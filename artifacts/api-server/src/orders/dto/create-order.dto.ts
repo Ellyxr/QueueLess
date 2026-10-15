@@ -1,5 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsDateString, IsOptional, IsUUID } from 'class-validator';
+import { IsBoolean, IsDefined, IsOptional, IsUUID, Matches, ValidateIf } from 'class-validator';
+
+// A bare "2026-10-16T08:00" would be read in the server's timezone, so an
+// explicit offset is required.
+export const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
 
 export class CreateOrderDto {
   @ApiProperty({
@@ -33,10 +37,15 @@ export class CreateOrderDto {
 
   @ApiPropertyOptional({
     description:
-      'Requested pickup time (ISO 8601). Required when isPreorder is true; must be a bookable slot from GET /vendors/:id/preorder-slots.',
-    example: '2026-10-16T02:30:00.000Z',
+      'US-057: pickup time for a preorder (required when isPreorder is true). ISO 8601 with ' +
+      'an explicit offset, e.g. "2026-10-16T08:00:00+08:00". Must be inside a vendor pickup ' +
+      'window (Asia/Manila) and past the minimum lead time.',
+    example: '2026-10-16T08:00:00+08:00',
   })
-  @IsOptional()
-  @IsDateString()
-  pickupAt?: string;
+  @ValidateIf((dto: CreateOrderDto) => dto.isPreorder === true || dto.scheduledPickupAt !== undefined)
+  @IsDefined({ message: 'scheduledPickupAt is required for a preorder' })
+  @Matches(ISO_WITH_OFFSET, {
+    message: 'scheduledPickupAt must be an ISO 8601 date-time with a timezone offset (e.g. +08:00 or Z)',
+  })
+  scheduledPickupAt?: string;
 }

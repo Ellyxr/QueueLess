@@ -105,6 +105,35 @@ export class VendorsController {
     );
   }
 
+  // US-055: preorder pickup windows (Asia/Manila) for the owner or an admin.
+  @Get(':vendorId/preorder-availability')
+  @UseGuards(RolesGuard)
+  @Roles('VENDOR_OWNER', 'ADMIN')
+  async getPreorderAvailability(
+    @Param('vendorId') vendorId: string,
+    @Req() request: { user: JwtPayload },
+  ) {
+    return this.vendorsService.getPreorderAvailability(
+      request.user.sub,
+      vendorId,
+      request.user.roles,
+    );
+  }
+
+  @Get(':vendorId/availability')
+  @UseGuards(RolesGuard)
+  @Roles('VENDOR_OWNER', 'ADMIN')
+  async getStoreAvailability(
+    @Param('vendorId') vendorId: string,
+    @Req() request: { user: JwtPayload },
+  ) {
+    return this.vendorsService.getStoreAvailability(
+      request.user.sub,
+      vendorId,
+      request.user.roles,
+    );
+  }
+
   @Patch(':vendorId/preorder-availability')
   @UseGuards(RolesGuard)
   @Roles('VENDOR_OWNER', 'ADMIN')

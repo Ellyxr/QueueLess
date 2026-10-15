@@ -27,6 +27,7 @@ import {
 } from './dto/request-order-refund.dto';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import type { UserRole } from '../auth/roles';
+import { acceptClockStart } from '../orders/preorder-slot.policy';
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 const TWO_MINUTES_MS = 2 * 60 * 1000;
@@ -710,7 +711,8 @@ export class RefundsService {
         customerId: true,
         status: true,
         paidAt: true,
-        scheduledReleaseAt: true,
+        isPreorder: true,
+        scheduledPickupAt: true,
         buyerContactPingAt: true,
         updatedAt: true,
       },
@@ -783,7 +785,8 @@ export class RefundsService {
     order: {
       status: string;
       paidAt: Date | null;
-      scheduledReleaseAt?: Date | null;
+      isPreorder: boolean;
+      scheduledPickupAt: Date | null;
       buyerContactPingAt: Date | null;
       updatedAt: Date;
     },
@@ -804,16 +807,17 @@ export class RefundsService {
         );
       }
 
-      // Pre-orders only start waiting on the vendor once released to the queue.
-      const waitingSince = Math.max(
-        order.paidAt.getTime(),
-        order.scheduledReleaseAt?.getTime() ?? 0,
-      );
-      const remainingMs = FIVE_MINUTES_MS - (now - waitingSince);
+      // US-057: for a preorder the vendor has until 5 minutes after the
+      // scheduled pickup, not 5 minutes after payment.
+      const clockStart = acceptClockStart(order)!;
+      const remainingMs =
+        FIVE_MINUTES_MS - (now - clockStart.getTime());
 
       if (remainingMs > 0) {
         throw new BadRequestException(
-          `You can request this refund once the vendor has had 5 minutes to accept your order (about ${Math.ceil(remainingMs / 1000)}s left).`,
+          order.isPreorder && order.scheduledPickupAt
+            ? 'You can request this refund if the vendor has not accepted your preorder 5 minutes after your scheduled pickup time.'
+            : `You can request this refund once the vendor has had 5 minutes to accept your order (about ${Math.ceil(remainingMs / 1000)}s left).`,
         );
       }
 
