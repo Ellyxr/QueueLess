@@ -24,6 +24,7 @@ import { PaymongoService } from './paymongo.service';
 import { RefundsService } from '../refunds/refunds.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { PasabuyPaymentsService } from '../pasabuy/pasabuy-payments.service';
+import { isReservationExpired, statusAfterPayment } from '../orders/preorder-slot.policy';
 
 @Injectable()
 export class PaymentsService {
@@ -66,7 +67,8 @@ export class PaymentsService {
             select: {
               id: true,
               status: true,
-              paymentExpiresAt: true,
+              isPreorder: true,
+              reservationExpiresAt: true,
             },
           },
           payment: true,
@@ -83,12 +85,11 @@ export class PaymentsService {
       );
     }
 
-    if (
-      paymentShare.order.paymentExpiresAt &&
-      paymentShare.order.paymentExpiresAt.getTime() <= Date.now()
-    ) {
+    // US-058: an expired reservation cannot be paid, even before the expiry
+    // job has cancelled it.
+    if (isReservationExpired(paymentShare.order)) {
       throw new ConflictException(
-        'The payment window for this pre-order has expired',
+        'This reservation expired before it was paid; please reserve again',
       );
     }
 
@@ -249,6 +250,9 @@ export class PaymentsService {
         const currentShare = await tx.paymentShare.findUniqueOrThrow({ where: { id: paymentShare.id }, include: { order: true } });
         if (currentShare.status !== PaymentShareStatus.PENDING || currentShare.order.status !== OrderStatus.PENDING || currentShare.paymentId !== paymentShare.paymentId) {
           throw new ConflictException('Payment share changed; reload payment status');
+        }
+        if (isReservationExpired(currentShare.order)) {
+          throw new ConflictException('This reservation expired before it was paid; please reserve again');
         }
         if (paymentShare.paymentId) {
           const prior = await tx.payment.findUniqueOrThrow({
@@ -1141,7 +1145,7 @@ export class PaymentsService {
 
       const existingOrder = await tx.order.findUnique({
         where: { id: orderId },
-        select: { status: true, isPreorder: true, scheduledReleaseAt: true },
+        select: { status: true, isPreorder: true, queueReleaseAt: true },
       });
 
       if (
@@ -1184,10 +1188,16 @@ export class PaymentsService {
           customerId: string;
           status: OrderStatus;
           updatedAt: Date;
+          // US-061: status-history id for preorder.confirmed, preorders only.
+          preorderEventId: string | null;
         }
       | null = null;
 
       if (unpaidShares === 0) {
+        // US-059: a paid preorder is held as SCHEDULED until its release time.
+        const paidStatus = existingOrder
+          ? statusAfterPayment(existingOrder)
+          : OrderStatus.PAID;
         const orderUpdate = await tx.order.updateMany({
           where: {
             id: orderId,
@@ -1200,13 +1210,16 @@ export class PaymentsService {
         });
 
         if (orderUpdate.count === 1) {
-          await tx.orderStatusHistory.create({
+          const history = await tx.orderStatusHistory.create({
             data: {
               orderId,
               status: paidStatus,
               changedByUserId: null,
-              note: 'Payment confirmed by PayMongo webhook',
+              note: paidStatus === OrderStatus.SCHEDULED
+                ? 'Preorder paid via PayMongo; held until the pickup window opens'
+                : 'Payment confirmed by PayMongo webhook',
             },
+            select: { id: true },
           });
           await tx.auditRecord.create({ data: {
             actorUserId: null, actionType: 'ORDER_STATUS_UPDATED',
@@ -1242,6 +1255,7 @@ export class PaymentsService {
               customerId: order.customerId,
               status: order.status,
               updatedAt: order.updatedAt,
+              preorderEventId: existingOrder?.isPreorder ? history.id : null,
             };
           }
 
@@ -1268,6 +1282,14 @@ export class PaymentsService {
           updatedAt: result.paidOrder.updatedAt,
         },
       );
+      // US-061: tell the student and the vendor the reservation is confirmed.
+      if (result.paidOrder.preorderEventId) {
+        await this.realtimeGateway.emitPreorderEvent(
+          'preorder.confirmed',
+          result.paidOrder.id,
+          result.paidOrder.preorderEventId,
+        );
+      }
     }
 
     let refundRequiresReview = false;

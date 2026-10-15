@@ -17,6 +17,10 @@ import {
 import { PrismaService } from "../common/prisma/prisma.service";
 import { PaymongoService } from "../payments/paymongo.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
+import {
+  isReservationExpired,
+  statusAfterPayment,
+} from "../orders/preorder-slot.policy";
 
 @Injectable()
 export class WalletService {
@@ -280,9 +284,6 @@ export class WalletService {
         share.payment?.status === PaymentStatus.SUCCEEDED
       )
         throw new ConflictException("Order or payment share cannot be paid");
-      if (share.order.paymentExpiresAt && share.order.paymentExpiresAt.getTime() <= Date.now())
-        throw new ConflictException("The payment window for this pre-order has expired");
-      const paidStatus = resolvePaidStatus(share.order);
       if (share.amountDue.lte(0))
         throw new BadRequestException("Payment amount must be positive");
       const debit = await tx.wallet.updateMany({
@@ -320,23 +321,32 @@ export class WalletService {
         amount: share.amountDue.toFixed(2),
       });
       let paidOrder = null;
+      // US-061: status-history id for preorder.confirmed, preorders only.
+      let preorderEventId: string | null = null;
       if (
         (await tx.paymentShare.count({
           where: { orderId: share.orderId, status: PaymentShareStatus.PENDING },
         })) === 0
       ) {
+        // US-059: a paid preorder is held as SCHEDULED until its release time.
+        const paidStatus = statusAfterPayment(share.order);
         paidOrder = await tx.order.update({
           where: { id: share.orderId },
           data: { status: paidStatus, paidAt: new Date() },
         });
-        await tx.orderStatusHistory.create({
+        const history = await tx.orderStatusHistory.create({
+          select: { id: true },
           data: {
             orderId: share.orderId,
             status: paidStatus,
             changedByUserId: userId,
-            note: "Payment confirmed from QueueLess wallet",
+            note:
+              paidStatus === OrderStatus.SCHEDULED
+                ? "Preorder paid from QueueLess wallet; held until the pickup window opens"
+                : "Payment confirmed from QueueLess wallet",
           },
         });
+        if (share.order.isPreorder) preorderEventId = history.id;
         await tx.vendorLedgerEntry.create({
           data: {
             vendorId: paidOrder.vendorId,
@@ -350,7 +360,7 @@ export class WalletService {
           userId,
           "ORDER_STATUS_UPDATED",
           share.orderId,
-          { status: paidStatus, paymentId: payment.id },
+          { status: "PAID", paymentId: payment.id },
           "Order",
         );
       }
@@ -359,6 +369,7 @@ export class WalletService {
         orderId: share.orderId,
         duplicate: false,
         paidOrder,
+        preorderEventId,
       };
     });
     if (result.paidOrder)
@@ -367,6 +378,12 @@ export class WalletService {
         status: result.paidOrder.status,
         updatedAt: result.paidOrder.updatedAt,
       });
+    if (result.paidOrder && "preorderEventId" in result && result.preorderEventId)
+      await this.realtime.emitPreorderEvent(
+        "preorder.confirmed",
+        result.orderId,
+        result.preorderEventId,
+      );
     return {
       paymentId: result.paymentId,
       orderId: result.orderId,

@@ -7,11 +7,18 @@
     "dev": "nest start --watch",
     "build": "nest build",
     "start": "node dist/main.js",
+    "build:render": "prisma generate && nest build",
+    "start:render": "prisma migrate deploy && node dist/main.js",
     "lint": "eslint \"src/**/*.ts\"",
+    "test": "node --test test/*.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "prisma:seed": "tsx prisma/seed.ts",
+    "db:migrate:status": "prisma migrate status",
+    "db:verify": "tsx prisma/verify-db.ts",
+    "smoke": "tsx e2e/smoke.ts",
+    "smoke:typecheck": "tsc -p e2e/tsconfig.json"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
