@@ -537,7 +537,8 @@ type MarketplaceVendor = {
   campusLocation: string;
   vendorType: string;
   eta: string;
-  rating: number;
+  rating: number | null;
+  ratingCount: number;
   menuItems: Array<{
     id: string;
     image: string;
@@ -557,7 +558,8 @@ function toMarketplaceVendor(vendor: VendorStorefront): MarketplaceVendor {
     campusLocation: vendor.campusLocation || "Campus",
     vendorType: vendor.vendorType,
     eta: "15-25 min",
-    rating: 5,
+    rating: vendor.averageRating ?? null,
+    ratingCount: vendor.totalReviews ?? 0,
     menuItems: (vendor.products || [])
       .filter((product) => product.isAvailable && product.category !== EXTRA_CATEGORY)
       .map((product) => ({
@@ -581,6 +583,7 @@ function VendorCard({
   name,
   eta,
   rating,
+  ratingCount = 0,
   type,
   onSelect,
 }: {
@@ -595,7 +598,8 @@ function VendorCard({
   }>;
   name: string;
   eta: string;
-  rating: number;
+  rating: number | null;
+  ratingCount?: number;
   type: string;
   onSelect?: (id: string) => void;
 }) {
@@ -622,7 +626,7 @@ function VendorCard({
             </div>
             <span className="flex items-center gap-1 rounded-full bg-secondary px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-secondary-foreground">
               <Star className="h-3 w-3 fill-current" />
-              {rating}
+              {rating === null ? "New" : ratingCount > 0 ? `${rating.toFixed(1)} (${ratingCount})` : rating.toFixed(1)}
             </span>
           </div>
 
