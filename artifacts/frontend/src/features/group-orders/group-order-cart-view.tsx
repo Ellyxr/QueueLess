@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, Crown, Loader2, Trash2, Users } from "lucide-react";
+import { Check, Copy, Crown, Loader2, LogOut, Trash2, UserMinus, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -15,12 +15,15 @@ import {
   cancelGroupOrder,
   finalizeGroupOrder,
   getGroupOrder,
+  leaveGroupOrder,
   lockGroupOrder,
   pingGroupOrder,
   removeGroupOrderItem,
+  removeGroupOrderMember,
   setGroupOrderPaymentSplit,
   type GroupOrderResponse,
 } from "@/features/auth/api";
+import { toast } from "@/hooks/use-toast";
 import { startOrderTracking } from "@/features/orders/order-tracking";
 import {
   clearGroupOrderSession,
@@ -51,6 +54,12 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
   const [isCancelling, setIsCancelling] = useState(false);
   const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false);
   const hasTrackedFinalOrder = useRef(false);
+  const hasLoadedOnce = useRef(false);
+  // Member being removed (owner) or the current user leaving; drives the confirm dialog.
+  const [memberAction, setMemberAction] = useState<
+    { kind: "kick"; userId: string; name: string } | { kind: "leave" } | null
+  >(null);
+  const [isMemberActionBusy, setIsMemberActionBusy] = useState(false);
 
   const currentUserId = useMemo(() => {
     try {
@@ -67,6 +76,7 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
       getGroupOrder(session.groupOrderId)
         .then((data) => {
           if (cancelled) return;
+          hasLoadedOnce.current = true;
           setGroupOrder(data);
           setLoadError(null);
 
@@ -86,6 +96,12 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
         })
         .catch((error: unknown) => {
           if (cancelled) return;
+          // The API 404s once we are no longer a joined member, i.e. the owner removed us.
+          if (hasLoadedOnce.current && !session.isOwner && error instanceof Error && /not found/i.test(error.message)) {
+            toast({ title: "Removed from group order", description: "The owner removed you from this group order." });
+            clearGroupOrderSession();
+            return;
+          }
           setLoadError(error instanceof Error ? error.message : "Could not load group order.");
         });
     };
@@ -135,6 +151,27 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
       setActionError(error instanceof Error ? error.message : "Could not remove that item.");
     } finally {
       setRemovingItemId(null);
+    }
+  };
+
+  const handleConfirmMemberAction = async () => {
+    if (!memberAction || isMemberActionBusy) return;
+    setIsMemberActionBusy(true);
+    setActionError(null);
+    try {
+      if (memberAction.kind === "leave") {
+        await leaveGroupOrder(session.groupOrderId);
+        toast({ title: "You left the group order" });
+        clearGroupOrderSession();
+      } else {
+        await removeGroupOrderMember(session.groupOrderId, memberAction.userId);
+        setGroupOrder(await getGroupOrder(session.groupOrderId));
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not update the group order.");
+    } finally {
+      setIsMemberActionBusy(false);
+      setMemberAction(null);
     }
   };
 
@@ -369,7 +406,25 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
                       {participant.isOwner && <Crown className="h-3.5 w-3.5 text-amber-500" />}
                       {participant.user.fullName}
                     </span>
-                    <span className="text-sm text-muted-foreground">{currency(participant.subtotal)}</span>
+                    <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                      {currency(participant.subtotal)}
+                      {session.isOwner && !participant.isOwner && groupOrder.status === "OPEN" && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setMemberAction({
+                              kind: "kick",
+                              userId: participant.user.id,
+                              name: participant.user.fullName,
+                            })
+                          }
+                          aria-label={`Remove ${participant.user.fullName} from the group`}
+                          className="transition-colors hover:text-destructive"
+                        >
+                          <UserMinus className="h-4 w-4" />
+                        </button>
+                      )}
+                    </span>
                   </div>
                   {participant.items.length > 0 ? (
                     <ul className="mt-1 space-y-0.5">
@@ -461,10 +516,47 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
               >
                 {pingSent ? "Owner notified" : isPinging ? "Pinging..." : "Ping owner"}
               </Button>
+              {groupOrder.status === "OPEN" && (
+                <Button
+                  variant="outline"
+                  className="ml-2 mt-3 gap-1.5 rounded-full text-destructive hover:text-destructive"
+                  disabled={isMemberActionBusy}
+                  onClick={() => setMemberAction({ kind: "leave" })}
+                >
+                  <LogOut className="h-4 w-4" /> Leave group
+                </Button>
+              )}
             </section>
           )}
         </>
       )}
+
+      <AlertDialog open={memberAction !== null} onOpenChange={(open) => !open && setMemberAction(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {memberAction?.kind === "kick" ? `Remove ${memberAction.name}?` : "Leave this group order?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {memberAction?.kind === "kick"
+                ? "Their items will be removed from the group order. They can rejoin with the code while it is still open."
+                : "The items you added will be removed from the group order. You can rejoin later with the code while it is still open."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isMemberActionBusy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isMemberActionBusy}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleConfirmMemberAction();
+              }}
+            >
+              {isMemberActionBusy ? "Working..." : memberAction?.kind === "kick" ? "Remove" : "Leave"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={isCancelDialogOpen} onOpenChange={setIsCancelDialogOpen}>
         <AlertDialogContent>
