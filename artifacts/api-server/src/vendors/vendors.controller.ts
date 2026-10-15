@@ -68,11 +68,6 @@ export class VendorsController {
     );
   }
 
-  @Get(':vendorId/preorder-slots')
-  async getPreorderSlots(@Param('vendorId') vendorId: string) {
-    return this.vendorsService.getPreorderSlots(vendorId);
-  }
-
   @Post(':vendorId/favorite')
   async favoriteVendor(
     @Param('vendorId') vendorId: string,
