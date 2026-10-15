@@ -1556,9 +1556,13 @@ export class OrdersService {
       );
     }
 
+    const pingedAt = new Date();
     await this.prisma.order.update({
       where: { id: orderId },
-      data: { buyerContactPingAt: new Date() },
+      // updatedAt is pinned to the ping time: Prisma would otherwise stamp it a few
+      // ms later, and "updatedAt > ping" is how the refund rules detect that the
+      // order progressed after the buyer contacted the vendor.
+      data: { buyerContactPingAt: pingedAt, updatedAt: pingedAt },
     });
 
     const alreadyPinged = await this.notificationsService.hasRecentUnread(

@@ -62,6 +62,8 @@ export interface StorePageProps {
     description: string;
   }) => void | Promise<void>;
   onBack?: () => void;
+  /** Hide the floating back arrow (e.g. in the marketplace split pane, which has its own close button). */
+  hideBackButton?: boolean;
   /** Whether the vendor is currently within its configured availability window. Undefined means no schedule was configured (always orderable). */
   isOpenNow?: boolean;
   nextAvailableLabel?: string | null;
@@ -87,6 +89,7 @@ export default function StorePage({
   onReorderCategories,
   onSaveStoreDetails,
   onBack,
+  hideBackButton,
   isOpenNow,
   nextAvailableLabel,
   availabilitySchedule,
@@ -170,16 +173,18 @@ export default function StorePage({
   return (
     <main className="min-h-dvh bg-background">
       <div className="relative">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={handleBack}
-          className="absolute left-4 top-4 z-20 rounded-full border border-border bg-background/80 text-foreground hover:bg-background md:left-6 md:top-6"
-          aria-label="Go back"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
+        {!hideBackButton && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={handleBack}
+            className="absolute left-4 top-4 z-20 rounded-full border border-border bg-background/80 text-foreground hover:bg-background md:left-6 md:top-6"
+            aria-label="Go back"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        )}
 
         <div className="relative h-64 w-full overflow-hidden bg-muted sm:h-72 md:h-80">
           <img
