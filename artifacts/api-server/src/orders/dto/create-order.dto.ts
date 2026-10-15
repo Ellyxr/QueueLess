@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsOptional, IsUUID } from 'class-validator';
+import { IsBoolean, IsDateString, IsOptional, IsUUID } from 'class-validator';
 
 export class CreateOrderDto {
   @ApiProperty({
@@ -30,4 +30,13 @@ export class CreateOrderDto {
   @IsOptional()
   @IsBoolean()
   isPreorder?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Requested pickup time (ISO 8601). Required when isPreorder is true; must be a bookable slot from GET /vendors/:id/preorder-slots.',
+    example: '2026-10-16T02:30:00.000Z',
+  })
+  @IsOptional()
+  @IsDateString()
+  pickupAt?: string;
 }

@@ -4,6 +4,9 @@ import {
   IsArray,
   IsBoolean,
   IsEnum,
+  IsInt,
+  Max,
+  Min,
   IsOptional,
   Matches,
   ValidateIf,
@@ -55,6 +58,16 @@ export class UpdateVendorPreorderAvailabilityDto {
   })
   @IsBoolean()
   sameAsStoreHours!: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Minimum minutes between ordering and the pickup time (0-1440). Defaults to 60.',
+    example: 60,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(1440)
+  minLeadTimeMinutes?: number;
 
   @ApiPropertyOptional({
     type: [VendorPreorderDayDto],

@@ -765,6 +765,7 @@ export class AdminService {
   const activeOrderStatuses = [
     'PENDING',
     'PAID',
+    'SCHEDULED',
     'COOKING',
     'OUT_FOR_DELIVERY',
     'READY_FOR_PICKUP',

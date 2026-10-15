@@ -145,6 +145,17 @@ const CANCELLATION_REASONS: { value: string; label: string }[] = [
   { value: 'OTHER', label: 'Other' },
 ];
 
+function formatPickupTime(iso: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(iso));
+}
+
 export default function VendorPage({ username = 'Jordan' }: { username?: string }) {
   useRequireAuth(['vendor', 'student_vendor', 'admin']);
   const [, setLocation] = useLocation();
@@ -179,6 +190,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
   const [isStorefrontSaving, setIsStorefrontSaving] = useState(false);
   const [preorderEnabled, setPreorderEnabled] = useState(false);
   const [preorderSameAsStoreHours, setPreorderSameAsStoreHours] = useState(true);
+  const [preorderLeadTime, setPreorderLeadTime] = useState('60');
   const [preorderDays, setPreorderDays] = useState<Record<Weekday, PreorderDayState>>(
     () => createDefaultPreorderDays(),
   );
@@ -196,6 +208,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
 
   // US-017 State Management (Vendor Queue & Order Details)
   const [orderQueue, setOrderQueue] = useState<VendorQueueOrder[]>([]);
+  const [queueTab, setQueueTab] = useState<'LIVE' | 'SCHEDULED'>('LIVE');
   const [selectedOrder, setSelectedOrder] = useState<VendorQueueOrder | null>(null);
   const [isQueueLoading, setIsQueueLoading] = useState(true);
 
@@ -236,6 +249,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
         });
         setPreorderEnabled(vendorData.preorderEnabled ?? false);
         setPreorderSameAsStoreHours(vendorData.preorderSameAsStoreHours ?? true);
+        setPreorderLeadTime(String(vendorData.preorderMinLeadTimeMinutes ?? 60));
         if (vendorData.preorderAvailability) {
           setPreorderDays((prev) => {
             const next = { ...prev };
@@ -360,6 +374,16 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
     }
   };
 
+  const scheduledOrders = Array.isArray(orderQueue)
+    ? orderQueue
+        .filter((order) => order.status === 'SCHEDULED')
+        .sort((a, b) => new Date(a.pickupAt ?? 0).getTime() - new Date(b.pickupAt ?? 0).getTime())
+    : [];
+  const liveOrders = Array.isArray(orderQueue)
+    ? orderQueue.filter((order) => order.status !== 'SCHEDULED')
+    : [];
+  const visibleQueue = queueTab === 'SCHEDULED' ? scheduledOrders : liveOrders;
+
   const handleSavePreorderAvailability = async () => {
     if (!vendor || isPreorderSaving) return;
 
@@ -373,11 +397,18 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
       }
     }
 
+    const leadTimeMinutes = Number(preorderLeadTime);
+    if (!Number.isInteger(leadTimeMinutes) || leadTimeMinutes < 0 || leadTimeMinutes > 1440) {
+      showToast('Minimum lead time must be a whole number of minutes between 0 and 1440.', 'error');
+      return;
+    }
+
     setIsPreorderSaving(true);
     try {
       const updated = await updateVendorPreorderAvailability(vendor.id, {
         preorderEnabled,
         sameAsStoreHours: preorderSameAsStoreHours,
+        minLeadTimeMinutes: leadTimeMinutes,
         days: preorderSameAsStoreHours
           ? undefined
           : WEEKDAYS.map(({ key }) => ({
@@ -393,6 +424,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
               ...prev,
               preorderEnabled: updated.preorderEnabled,
               preorderSameAsStoreHours: updated.preorderSameAsStoreHours,
+              preorderMinLeadTimeMinutes: updated.preorderMinLeadTimeMinutes,
               preorderAvailability: updated.preorderAvailability,
             }
           : prev,
@@ -959,6 +991,25 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                   below.
                 </p>
               )}
+              <div className={`mb-4 ${!preorderEnabled ? 'opacity-50' : ''}`}>
+                <label htmlFor="preorder-lead-time" className="block text-sm font-medium text-foreground">
+                  Minimum lead time (minutes)
+                </label>
+                <input
+                  id="preorder-lead-time"
+                  type="number"
+                  min={0}
+                  max={1440}
+                  step={5}
+                  value={preorderLeadTime}
+                  disabled={!preorderEnabled}
+                  onChange={(event) => setPreorderLeadTime(event.target.value)}
+                  className="mt-1 h-10 w-32 rounded-lg border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Buyers can only pick a pickup time at least this far ahead (15-minute slots).
+                </p>
+              </div>
               <label
                 className={`mb-4 flex items-center gap-2 text-sm font-medium text-foreground ${!preorderEnabled ? 'opacity-50' : ''}`}
               >
@@ -1095,6 +1146,25 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
               <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Incoming Queue</p>
               <h2 className="mt-1 text-2xl font-semibold tracking-[-0.05em] text-foreground">Order Queue & Status</h2>
             </div>
+            <div className="flex gap-1 rounded-full border border-border bg-secondary/40 p-1" role="tablist" aria-label="Order queue view">
+              {([
+                { key: 'LIVE', label: 'Live', count: liveOrders.length },
+                { key: 'SCHEDULED', label: 'Scheduled', count: scheduledOrders.length },
+              ] as const).map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={queueTab === tab.key}
+                  onClick={() => setQueueTab(tab.key)}
+                  className={`rounded-full px-4 py-1.5 text-xs font-semibold transition-colors ${
+                    queueTab === tab.key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {tab.label} ({tab.count})
+                </button>
+              ))}
+            </div>
           </div>
 
           <Card className="border-card-border/80 bg-card/90 shadow-sm overflow-hidden">
@@ -1113,12 +1183,14 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                 <div className="p-8 text-center text-muted-foreground text-sm">
                   Loading order queue...
                 </div>
-              ) : !Array.isArray(orderQueue) || orderQueue.length === 0 ? (
+              ) : visibleQueue.length === 0 ? (
                 <div className="p-8 text-center text-muted-foreground text-sm">
-                  No active orders in queue.
+                  {queueTab === 'SCHEDULED'
+                    ? 'No scheduled pre-orders. Paid pre-orders wait here until it is time to prepare them.'
+                    : 'No active orders in queue.'}
                 </div>
               ) : (
-                orderQueue.map((order) => (
+                visibleQueue.map((order) => (
                   <div
                     key={order.id}
                     className="grid grid-cols-[1fr_1fr_1.1fr_0.7fr_0.7fr_0.8fr_1.8fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
@@ -1186,6 +1258,11 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                       >
                         {order.status.replace(/_/g, ' ')}
                       </span>
+                      {order.isPreorder && order.pickupAt && (
+                        <p className="mt-1 text-[10px] font-medium text-violet-600">
+                          Pickup {formatPickupTime(order.pickupAt)}
+                        </p>
+                      )}
                     </div>
 
                     <div className="flex flex-wrap items-center justify-end gap-1.5">

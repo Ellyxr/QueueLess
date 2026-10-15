@@ -3,6 +3,8 @@ const CONTACT_TIMEOUT_MS = 2 * 60 * 1000;
 type OrderTiming = {
   status: string;
   paidAt: string | null;
+  /** Pre-orders only wait on the vendor from their release time. */
+  scheduledReleaseAt?: string | null;
   buyerContactPingAt: string | null;
   estimatedReadyAt?: string | null;
 };
@@ -11,7 +13,13 @@ export function getOrderHelpEligibility(order: OrderTiming, now: number) {
     Boolean(date) && now - new Date(date!).getTime() >= duration;
   const terminal = order.status === "COMPLETED" || order.status === "CANCELLED";
   const vendorNotAccepted =
-    order.status === "PAID" && elapsed(order.paidAt, ACCEPT_TIMEOUT_MS);
+    order.status === "PAID" &&
+    elapsed(
+      order.scheduledReleaseAt && order.paidAt && order.scheduledReleaseAt > order.paidAt
+        ? order.scheduledReleaseAt
+        : order.paidAt,
+      ACCEPT_TIMEOUT_MS,
+    );
   const vendorUnresponsive =
     !terminal && elapsed(order.buyerContactPingAt, CONTACT_TIMEOUT_MS);
   const waitingExpired =

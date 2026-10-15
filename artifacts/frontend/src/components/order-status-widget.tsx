@@ -18,6 +18,7 @@ import {
 } from "@/features/auth/api";
 import { RefundRequestDialog } from "@/features/refunds/refund-request-dialog";
 import { PasabuyOrderEntry } from "@/features/pasabuy/pasabuy-order-entry";
+import { formatCountdown, formatSlotLabel } from "@/features/orders/preorder-format";
 
 const REFUND_HIDDEN_STATUSES = new Set(["PENDING", "CANCELLED"]);
 
@@ -26,6 +27,7 @@ const POLL_INTERVAL_MS = 8000;
 const STATUS_LABELS: Record<string, string> = {
   PENDING: "Pending",
   PAID: "Paid",
+  SCHEDULED: "Scheduled",
   COOKING: "Preparing",
   OUT_FOR_DELIVERY: "Out for delivery",
   READY_FOR_PICKUP: "Ready for pickup",
@@ -36,6 +38,7 @@ const STATUS_LABELS: Record<string, string> = {
 const STATUS_SUBTEXT: Record<string, string> = {
   PENDING: "Vendor hasn't confirmed your order yet",
   PAID: "Payment received; waiting for vendor acceptance",
+  SCHEDULED: "Payment received; the vendor will start on your pre-order closer to pickup time",
   COOKING: "Your order is being prepared",
   OUT_FOR_DELIVERY: "Your order is on its way",
   READY_FOR_PICKUP: "Your order is ready — come grab it",
@@ -46,6 +49,7 @@ const STATUS_SUBTEXT: Record<string, string> = {
 const STATUS_DOT_CLASS: Record<string, string> = {
   PENDING: "bg-slate-400 shadow-slate-300/60",
   PAID: "bg-blue-500 shadow-blue-300/60",
+  SCHEDULED: "bg-violet-500 shadow-violet-300/60",
   COOKING: "bg-amber-400 shadow-amber-300/60",
   OUT_FOR_DELIVERY: "bg-amber-400 shadow-amber-300/60",
   READY_FOR_PICKUP: "bg-amber-400 shadow-amber-300/60",
@@ -56,6 +60,7 @@ const STATUS_DOT_CLASS: Record<string, string> = {
 const STATUS_PILL_CLASS: Record<string, string> = {
   PENDING: "bg-slate-500/10 text-slate-600",
   PAID: "bg-blue-500/10 text-blue-600",
+  SCHEDULED: "bg-violet-500/10 text-violet-600",
   COOKING: "bg-amber-500/10 text-amber-600",
   OUT_FOR_DELIVERY: "bg-amber-500/10 text-amber-600",
   READY_FOR_PICKUP: "bg-amber-500/10 text-amber-600",
@@ -364,7 +369,23 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
 
   const isTerminal = TERMINAL_STATUSES.has(order.status);
   const label = STATUS_LABELS[order.status] || order.status;
-  const subtext = STATUS_SUBTEXT[order.status] || "";
+  const paymentCountdown =
+    order.isPreorder && order.status === "PENDING" && order.paymentExpiresAt
+      ? formatCountdown(order.paymentExpiresAt, now)
+      : null;
+  const paymentWindowExpired =
+    order.isPreorder &&
+    order.status === "PENDING" &&
+    Boolean(order.paymentExpiresAt) &&
+    paymentCountdown === null;
+  let subtext = STATUS_SUBTEXT[order.status] || "";
+  if (order.isPreorder && order.status === "PENDING") {
+    subtext = paymentWindowExpired
+      ? "Payment window expired — this pre-order is being cancelled"
+      : "Awaiting payment to reserve your pickup slot";
+  } else if (order.status === "CANCELLED" && order.cancellationReason === "PAYMENT_EXPIRED") {
+    subtext = "Cancelled: the payment window expired";
+  }
   const dotClass = STATUS_DOT_CLASS[order.status] || "bg-blue-500 shadow-blue-300/60";
   const pillClass = STATUS_PILL_CLASS[order.status] || "bg-blue-500/10 text-blue-600";
 
@@ -488,7 +509,29 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
             </div>
           )}
 
-          {order.estimatedWaitMinutes !== null && !isTerminal && (
+          {order.pickupAt && !isTerminal && (
+            <div className="mt-3 text-center">
+              <p className="text-sm font-semibold text-foreground">
+                {formatSlotLabel(order.pickupAt)}
+              </p>
+              <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                Pre-order pickup
+              </p>
+            </div>
+          )}
+
+          {paymentCountdown && (
+            <div className="mt-3 rounded-xl bg-amber-500/10 px-3 py-2 text-center">
+              <p className="font-mono text-xl font-semibold tracking-[0.06em] text-amber-600">
+                {paymentCountdown}
+              </p>
+              <p className="mt-0.5 text-[10px] uppercase tracking-[0.14em] text-amber-600/80">
+                Pay within to keep your slot
+              </p>
+            </div>
+          )}
+
+          {order.estimatedWaitMinutes !== null && !isTerminal && !order.pickupAt && (
             <div className="mt-3 text-center">
               <p className="font-mono text-2xl font-semibold tracking-[0.06em] text-foreground">
                 ~{order.estimatedWaitMinutes} min
@@ -501,7 +544,8 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
 
           {order.status === "PENDING" &&
             order.myPaymentShare &&
-            order.myPaymentShare.status === "PENDING" && (
+            order.myPaymentShare.status === "PENDING" &&
+            !paymentWindowExpired && (
             <div className="mt-3 space-y-1.5">
               <button
                 type="button"
@@ -542,7 +586,7 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
               </button>
             )}
 
-          {!isTerminal && (
+          {!isTerminal && !order.isPreorder && (
             <div className="mt-3">
               <PasabuyOrderEntry
                 orderStatus={order.status}

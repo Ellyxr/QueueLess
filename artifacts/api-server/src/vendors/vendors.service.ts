@@ -13,6 +13,7 @@ import { UpdateVendorDto } from './dto/update-vendor.dto';
 import { UpdateVendorPreorderAvailabilityDto } from './dto/update-vendor-preorder-availability.dto';
 import { UpdateVendorAvailabilityDto } from './dto/update-vendor-availability.dto';
 import { computeAvailabilityStatus, validateDaySchedule } from './availability.util';
+import { generatePreorderSlots, PREORDER_SLOT_MINUTES, type PreorderDay } from './preorder-slots.util';
 
 const PREORDER_AVAILABILITY_SELECT = {
   dayOfWeek: true,
@@ -95,6 +96,7 @@ export class VendorsService {
         status: true,
         preorderEnabled: true,
         preorderSameAsStoreHours: true,
+        preorderMinLeadTimeMinutes: true,
         availability: {
           select: AVAILABILITY_SELECT,
         },
@@ -240,6 +242,7 @@ export class VendorsService {
         status: true,
         preorderEnabled: true,
         preorderSameAsStoreHours: true,
+        preorderMinLeadTimeMinutes: true,
         preorderAvailability: {
           select: PREORDER_AVAILABILITY_SELECT,
         },
@@ -347,6 +350,51 @@ export class VendorsService {
     });
   }
 
+  /** Effective pre-order weekday schedule: store hours when mirrored, else the custom one. */
+  async getEffectivePreorderDays(vendorId: string): Promise<{
+    preorderEnabled: boolean;
+    minLeadTimeMinutes: number;
+    days: PreorderDay[];
+  }> {
+    const vendor = await this.prisma.vendor.findUnique({
+      where: { id: vendorId },
+      select: {
+        preorderEnabled: true,
+        preorderSameAsStoreHours: true,
+        preorderMinLeadTimeMinutes: true,
+        availability: { select: AVAILABILITY_SELECT },
+        preorderAvailability: { select: PREORDER_AVAILABILITY_SELECT },
+      },
+    });
+    if (!vendor) throw new NotFoundException('Vendor not found');
+
+    return {
+      preorderEnabled: vendor.preorderEnabled,
+      minLeadTimeMinutes: vendor.preorderMinLeadTimeMinutes,
+      days: vendor.preorderSameAsStoreHours
+        ? vendor.availability.map((day) => ({
+            dayOfWeek: day.dayOfWeek,
+            isEnabled: day.isOpen,
+            openTime: day.openTime,
+            closeTime: day.closeTime,
+          }))
+        : vendor.preorderAvailability,
+    };
+  }
+
+  async getPreorderSlots(vendorId: string) {
+    const { preorderEnabled, minLeadTimeMinutes, days } =
+      await this.getEffectivePreorderDays(vendorId);
+    const slots = preorderEnabled ? generatePreorderSlots(days, minLeadTimeMinutes) : [];
+    return {
+      preorderEnabled,
+      minLeadTimeMinutes,
+      slotMinutes: PREORDER_SLOT_MINUTES,
+      slots: slots.map((slot) => slot.toISOString()),
+      nextAvailableAt: slots[0]?.toISOString() ?? null,
+    };
+  }
+
   async updatePreorderAvailability(
     userId: string,
     vendorId: string,
@@ -392,6 +440,7 @@ export class VendorsService {
         data: {
           preorderEnabled: dto.preorderEnabled,
           preorderSameAsStoreHours: dto.sameAsStoreHours,
+          ...(dto.minLeadTimeMinutes !== undefined ? { preorderMinLeadTimeMinutes: dto.minLeadTimeMinutes } : {}),
         },
       });
 
@@ -418,6 +467,7 @@ export class VendorsService {
         id: true,
         preorderEnabled: true,
         preorderSameAsStoreHours: true,
+        preorderMinLeadTimeMinutes: true,
         preorderAvailability: {
           select: PREORDER_AVAILABILITY_SELECT,
         },

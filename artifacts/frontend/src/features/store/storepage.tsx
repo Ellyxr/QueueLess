@@ -14,6 +14,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { StoreItemCard } from "@/components/store-item-card";
+import { getVendorPreorderSlots, type VendorPreorderSlots } from "@/features/auth/api";
+import { formatSlotLabel } from "@/features/orders/preorder-format";
 
 interface MenuItemExtra {
   id: string;
@@ -43,6 +45,7 @@ export interface StoreScheduleRow {
 }
 
 export interface StorePageProps {
+  vendorId?: string;
   storeName: string;
   description?: string | null;
   campusLocation?: string | null;
@@ -70,9 +73,11 @@ export interface StorePageProps {
   availabilitySchedule?: StoreScheduleRow[];
   preorderEnabled?: boolean;
   preorderSchedule?: StoreScheduleRow[];
+  preorderMinLeadTimeMinutes?: number;
 }
 
 export default function StorePage({
+  vendorId,
   storeName,
   description,
   campusLocation,
@@ -95,7 +100,29 @@ export default function StorePage({
   availabilitySchedule,
   preorderEnabled,
   preorderSchedule,
+  preorderMinLeadTimeMinutes,
 }: StorePageProps) {
+  const [preorderSlots, setPreorderSlots] = useState<VendorPreorderSlots | null>(null);
+
+  useEffect(() => {
+    if (!vendorId || editable || !preorderEnabled) {
+      setPreorderSlots(null);
+      return;
+    }
+    let cancelled = false;
+    getVendorPreorderSlots(vendorId)
+      .then((result) => {
+        if (!cancelled) setPreorderSlots(result);
+      })
+      .catch(() => {
+        if (!cancelled) setPreorderSlots(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [vendorId, editable, preorderEnabled]);
+
+  const preorderOpen = Boolean(preorderSlots && preorderSlots.slots.length > 0);
   const [isLoading, setIsLoading] = useState(true);
   const [orderedCategories, setOrderedCategories] = useState(categories);
   const dragIndex = useRef<number | null>(null);
@@ -369,11 +396,36 @@ export default function StorePage({
                     </div>
                   )}
 
+                  {!editable && preorderEnabled === false && (
+                    <p className="mx-auto mt-3 max-w-xl text-center text-xs text-muted-foreground">
+                      Pre-orders are not available at this store.
+                    </p>
+                  )}
+
                   {preorderEnabled && preorderSchedule && (
                     <div className="mx-auto mt-3 max-w-xl rounded-2xl border border-primary/20 bg-primary/5 p-4">
                       <p className="mb-2 flex items-center justify-center gap-1.5 text-[10px] font-mono uppercase tracking-[0.14em] text-primary">
                         <CalendarClock className="h-3.5 w-3.5" /> Preorders available
                       </p>
+                      {preorderSlots && (
+                        <p
+                          className={`mb-3 text-center text-xs font-medium ${
+                            preorderOpen ? "text-emerald-600" : "text-muted-foreground"
+                          }`}
+                        >
+                          {preorderOpen && preorderSlots.nextAvailableAt
+                            ? `Open for pre-orders · next pickup ${formatSlotLabel(preorderSlots.nextAvailableAt)}`
+                            : "Pre-orders are closed right now"}
+                          {preorderMinLeadTimeMinutes
+                            ? ` · order at least ${preorderMinLeadTimeMinutes} min ahead`
+                            : ""}
+                        </p>
+                      )}
+                      {preorderOpen && (
+                        <p className="mb-3 text-center text-[11px] text-muted-foreground">
+                          Choose "Pre-order for pickup" in your cart to reserve a time.
+                        </p>
+                      )}
                       <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-3">
                         {preorderSchedule.map((row) => (
                           <div key={row.dayLabel} className="flex items-center justify-between gap-2">
