@@ -16,6 +16,8 @@ import { Card } from "@/components/ui/card";
 import { StoreItemCard } from "@/components/store-item-card";
 import { getVendorPreorderSlots, type VendorPreorderSlots } from "@/features/auth/api";
 import { formatSlotLabel } from "@/features/orders/preorder-format";
+import { StoreReviews } from "@/features/reviews/store-reviews";
+import { formatRating, StarDisplay } from "@/features/reviews/star-rating";
 
 interface MenuItemExtra {
   id: string;
@@ -74,6 +76,8 @@ export interface StorePageProps {
   preorderEnabled?: boolean;
   preorderSchedule?: StoreScheduleRow[];
   preorderMinLeadTimeMinutes?: number;
+  averageRating?: number | null;
+  ratingCount?: number;
 }
 
 export default function StorePage({
@@ -101,7 +105,10 @@ export default function StorePage({
   preorderEnabled,
   preorderSchedule,
   preorderMinLeadTimeMinutes,
+  averageRating,
+  ratingCount = 0,
 }: StorePageProps) {
+  const [activeTab, setActiveTab] = useState<"menu" | "reviews">("menu");
   const [preorderSlots, setPreorderSlots] = useState<VendorPreorderSlots | null>(null);
 
   useEffect(() => {
@@ -445,7 +452,36 @@ export default function StorePage({
             </div>
           </div>
 
-          {!hasMenu ? (
+          <div className="mt-6 flex items-center gap-2 border-b border-border" role="tablist">
+            {([
+              { key: "menu", label: "Menu" },
+              { key: "reviews", label: "Reviews" },
+            ] as const).map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`-mb-px border-b-2 px-4 py-2 text-sm font-semibold transition-colors ${
+                  activeTab === tab.key
+                    ? "border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {tab.label}
+                {tab.key === "reviews" && ratingCount > 0 && (
+                  <span className="ml-1.5 inline-flex items-center gap-1 text-xs font-medium">
+                    <StarDisplay value={1} className="h-3 w-3" /> {formatRating(averageRating)} ({ratingCount})
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === "reviews" && vendorId ? (
+            <StoreReviews vendorId={vendorId} />
+          ) : !hasMenu ? (
             <div className="my-12 flex flex-col items-center justify-center rounded-[24px] border border-border/80 bg-card/50 py-16 text-center backdrop-blur-sm">
               <p className="text-lg font-medium text-foreground">
                 Menu coming soon

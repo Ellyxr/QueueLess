@@ -367,6 +367,8 @@ export class WalletService {
         status: result.paidOrder.status,
         updatedAt: result.paidOrder.updatedAt,
       });
+    if (result.paidOrder?.status === OrderStatus.SCHEDULED)
+      await this.realtime.emitPreorderEvent(result.orderId, "preorder.created");
     return {
       paymentId: result.paymentId,
       orderId: result.orderId,

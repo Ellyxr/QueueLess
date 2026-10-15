@@ -665,6 +665,11 @@ export default function ProfilePage() {
                       <div>
                         <p className="font-medium">
                           {order.items[0]?.name || "Order"}
+                          {order.isUncollected && (
+                            <span className="ml-2 rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-destructive">
+                              Uncollected
+                            </span>
+                          )}
                         </p>
                         <p className="mt-1 text-sm text-muted-foreground">
                           {order.vendor.name}

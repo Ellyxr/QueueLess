@@ -19,6 +19,9 @@ import {
 import { RefundRequestDialog } from "@/features/refunds/refund-request-dialog";
 import { PasabuyOrderEntry } from "@/features/pasabuy/pasabuy-order-entry";
 import { formatCountdown, formatSlotLabel } from "@/features/orders/preorder-format";
+import { PreorderManage } from "@/features/orders/preorder-manage";
+import { ReviewPrompt } from "@/features/reviews/review-prompt";
+import { useRealtimeEvents } from "@/features/realtime/realtime";
 
 const REFUND_HIDDEN_STATUSES = new Set(["PENDING", "CANCELLED"]);
 
@@ -248,6 +251,20 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
     setIsMinimized(true);
   };
 
+  // Realtime pushes (status changes, pre-order created/released/updated) refresh
+  // this card immediately; the polling below stays as the fallback.
+  useRealtimeEvents(
+    ["realtime.ready", "order.status.updated", "preorder.created", "preorder.released", "preorder.updated"],
+    (event, payload) => {
+      if (event !== "realtime.ready" && payload?.orderId !== orderId) return;
+      getOrderStatus(orderId)
+        .then(setOrder)
+        .catch(() => {
+          // the next poll reconciles
+        });
+    },
+  );
+
   useEffect(() => {
     let cancelled = false;
 
@@ -379,6 +396,9 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
     Boolean(order.paymentExpiresAt) &&
     paymentCountdown === null;
   let subtext = STATUS_SUBTEXT[order.status] || "";
+  if (order.isUncollected) {
+    subtext = "Your pre-order was ready but not picked up on time — please collect it or contact the vendor";
+  }
   if (order.isPreorder && order.status === "PENDING") {
     subtext = paymentWindowExpired
       ? "Payment window expired — this pre-order is being cancelled"
@@ -585,6 +605,21 @@ function TrackedOrderCard({ orderId, stackIndex }: { orderId: string; stackIndex
                 {pingSent ? "Owner notified" : isPinging ? "Pinging..." : "Ping owner"}
               </button>
             )}
+
+          {order.isUncollected && (
+            <div className="mt-3 rounded-xl bg-destructive/10 px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-destructive">
+              Uncollected
+            </div>
+          )}
+
+          <PreorderManage order={order} onChanged={setOrder} />
+
+          {order.canReview && (
+            <ReviewPrompt
+              orderId={order.orderId}
+              onSubmitted={() => setOrder((current) => (current ? { ...current, canReview: false, hasReview: true } : current))}
+            />
+          )}
 
           {!isTerminal && !order.isPreorder && (
             <div className="mt-3">

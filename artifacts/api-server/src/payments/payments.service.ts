@@ -1268,6 +1268,9 @@ export class PaymentsService {
           updatedAt: result.paidOrder.updatedAt,
         },
       );
+      if (result.paidOrder.status === OrderStatus.SCHEDULED) {
+        await this.realtimeGateway.emitPreorderEvent(result.paidOrder.id, 'preorder.created');
+      }
     }
 
     let refundRequiresReview = false;

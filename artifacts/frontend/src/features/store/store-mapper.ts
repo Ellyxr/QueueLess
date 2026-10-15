@@ -127,6 +127,8 @@ export function toStorePageProps(vendor: VendorStorefront): StorePageProps {
         : undefined,
     preorderEnabled: vendor.preorderEnabled,
     preorderMinLeadTimeMinutes: vendor.preorderMinLeadTimeMinutes,
+    averageRating: vendor.averageRating,
+    ratingCount: vendor.ratingCount,
     preorderSchedule:
       vendor.preorderEnabled && vendor.preorderAvailability && vendor.preorderAvailability.length > 0
         ? buildScheduleRows(vendor.preorderAvailability)

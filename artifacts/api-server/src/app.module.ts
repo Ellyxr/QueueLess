@@ -13,6 +13,7 @@ import { ProductsModule } from './products/products.module';
 import { EventsModule } from './events/events.module';
 import { CartsModule } from './carts/carts.module';
 import { OrdersModule } from './orders/orders.module';
+import { ReviewsModule } from './reviews/reviews.module';
 import { GroupOrdersModule } from './group-orders/group-orders.module';
 import { RefundsModule } from './refunds/refunds.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -41,6 +42,7 @@ import { DealsModule } from './deals/deals.module';
     EventsModule,
     CartsModule,
     OrdersModule,
+    ReviewsModule,
     GroupOrdersModule,
     QrModule,
     RefundsModule,

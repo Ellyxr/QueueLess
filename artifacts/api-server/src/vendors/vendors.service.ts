@@ -34,7 +34,7 @@ export class VendorsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async listActiveVendors() {
-    return this.prisma.vendor.findMany({
+    const vendors = await this.prisma.vendor.findMany({
       where: {
         status: VendorStatus.ACTIVE,
       },
@@ -46,6 +46,8 @@ export class VendorsService {
         categoryOrder: true,
         vendorType: true,
         status: true,
+        ratingCount: true,
+        ratingSum: true,
         products: {
           where: {
             isAvailable: true,
@@ -78,6 +80,12 @@ export class VendorsService {
         name: 'asc',
       },
     });
+
+    return vendors.map(({ ratingCount, ratingSum, ...vendor }) => ({
+      ...vendor,
+      ratingCount,
+      averageRating: ratingCount === 0 ? null : Math.round((ratingSum / ratingCount) * 10) / 10,
+    }));
   }
 
   async getVendorStorefront(vendorId: string, userId: string) {
@@ -97,6 +105,8 @@ export class VendorsService {
         preorderEnabled: true,
         preorderSameAsStoreHours: true,
         preorderMinLeadTimeMinutes: true,
+        ratingCount: true,
+        ratingSum: true,
         availability: {
           select: AVAILABILITY_SELECT,
         },
@@ -142,7 +152,7 @@ export class VendorsService {
       throw new NotFoundException('Vendor not found');
     }
 
-    const { _count, favoritedBy, availability, preorderAvailability, preorderSameAsStoreHours, ...rest } =
+    const { _count, favoritedBy, availability, preorderAvailability, preorderSameAsStoreHours, ratingSum, ...rest } =
       vendor;
 
     const { isOpenNow, nextAvailableLabel } = computeAvailabilityStatus(availability);
@@ -158,6 +168,7 @@ export class VendorsService {
 
     return {
       ...rest,
+      averageRating: rest.ratingCount === 0 ? null : Math.round((ratingSum / rest.ratingCount) * 10) / 10,
       favoritesCount: _count.favoritedBy,
       isFavoritedByMe: favoritedBy.length > 0,
       availabilityDays: availability,

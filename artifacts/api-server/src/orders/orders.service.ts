@@ -18,7 +18,12 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { PaymongoService } from '../payments/paymongo.service';
 import { VendorsService } from '../vendors/vendors.service';
 import { isBookablePreorderSlot } from '../vendors/preorder-slots.util';
-import { PREORDER_PAYMENT_WINDOW_MS } from './preorder.util';
+import {
+  getPreorderModifyState,
+  isUncollectedPreorder,
+  PREORDER_PAYMENT_WINDOW_MS,
+  UNCOLLECTED_GRACE_MS,
+} from './preorder.util';
 
 const VENDOR_CONTACT_PING_COOLDOWN_MS = 2 * 60 * 1000;
 const VENDOR_ACCEPT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -498,6 +503,7 @@ export class OrdersService {
       isPasabuyRequest: order.isPasabuyRequest,
       pickupAt: order.pickupAt,
       paymentExpiresAt: order.paymentExpiresAt,
+      isUncollected: isUncollectedPreorder(order),
       orderReference: order.id.slice(0, 8).toUpperCase(),
       total: order.totalAmount.toFixed(2),
       createdAt: order.createdAt,
@@ -548,6 +554,7 @@ export class OrdersService {
         paymentExpiresAt: true,
         paidAt: true,
         buyerContactPingAt: true,
+        review: { select: { id: true } },
         refunds: {
           orderBy: { createdAt: 'desc' },
           take: 1,
@@ -625,6 +632,7 @@ export class OrdersService {
         : null;
 
     const isOwner = order.customerId === userId;
+    const modifyState = getPreorderModifyState(order);
     const viewerRole = order.groupOrder ? (isOwner ? 'OWNER' : 'MEMBER') : null;
     const canComplete = order.groupOrder
       ? isOwner || order.groupOrder.initiator.allowParticipantOrderCompletion
@@ -666,6 +674,15 @@ export class OrdersService {
         name: item.product.name,
         quantity: item.quantity,
       })),
+      isUncollected: isUncollectedPreorder(order),
+      canModifyPreorder: isOwner && modifyState.canModify,
+      preorderLockedReason: isOwner ? modifyState.lockedReason : null,
+      hasReview: order.review !== null,
+      canReview:
+        isOwner &&
+        order.status === OrderStatus.COMPLETED &&
+        order.pickupConfirmedAt !== null &&
+        order.review === null,
       history: order.statusHistory,
       viewerRole,
       canComplete,
@@ -700,9 +717,15 @@ export class OrdersService {
     const orders = await this.prisma.order.findMany({
       where: {
         vendorId: vendor.id,
-        status: {
-          in: ['PENDING', 'PAID', 'SCHEDULED', 'COOKING'],
-        },
+        OR: [
+          { status: { in: ['PENDING', 'PAID', 'SCHEDULED', 'COOKING'] } },
+          // Ready pre-orders nobody collected stay visible so the vendor can deal with them.
+          {
+            status: 'READY_FOR_PICKUP',
+            isPreorder: true,
+            pickupAt: { lt: new Date(Date.now() - UNCOLLECTED_GRACE_MS) },
+          },
+        ],
       },
       orderBy: {
         createdAt: 'asc',
@@ -766,6 +789,7 @@ export class OrdersService {
           order.status === 'PENDING' ? 'PENDING' : 'PAID',
         isPasabuyRequest: order.isPasabuyRequest,
         isPreorder: order.isPreorder,
+        isUncollected: isUncollectedPreorder(order),
         pickupAt: order.pickupAt,
         scheduledReleaseAt: order.scheduledReleaseAt,
         paymentExpiresAt: order.paymentExpiresAt,
@@ -1454,6 +1478,7 @@ export class OrdersService {
         status: released.status,
         updatedAt: released.updatedAt,
       });
+      await this.realtimeGateway.emitPreorderEvent(released.id, 'preorder.released');
     }
   }
 
@@ -1476,21 +1501,7 @@ export class OrdersService {
 
     for (const order of expired) {
       try {
-        const openCheckouts = order.paymentShares
-          .map((share) => share.payment)
-          .filter(
-            (payment) =>
-              payment?.provider === 'PAYMONGO' &&
-              payment.status === 'PENDING' &&
-              payment.providerPaymentId,
-          );
-        let safeToCancel = true;
-        for (const payment of openCheckouts) {
-          if (!(await this.paymongoService.expireCheckoutSession(payment!.providerPaymentId!))) {
-            safeToCancel = false;
-          }
-        }
-        if (!safeToCancel) continue;
+        if (!(await this.expireOpenCheckouts(order.paymentShares))) continue;
 
         const cancelled = await this.prisma.$transaction(async (tx) => {
           const result = await tx.order.updateMany({
@@ -1533,6 +1544,177 @@ export class OrdersService {
         this.logger.warn(`Could not expire pre-order ${order.id}: ${String(error)}`);
       }
     }
+  }
+
+  /** Expires any open PayMongo checkouts; false if one can't be confirmed expired (it may have just been paid). */
+  private async expireOpenCheckouts(
+    shares: Array<{
+      payment: { status: string; provider: string; providerPaymentId: string | null } | null;
+    }>,
+  ): Promise<boolean> {
+    let safe = true;
+    for (const { payment } of shares) {
+      if (
+        payment?.provider === 'PAYMONGO' &&
+        payment.status === 'PENDING' &&
+        payment.providerPaymentId &&
+        !(await this.paymongoService.expireCheckoutSession(payment.providerPaymentId))
+      ) {
+        safe = false;
+      }
+    }
+    return safe;
+  }
+
+  private async loadStudentPreorder(userId: string, orderId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, customerId: userId },
+      select: {
+        id: true,
+        vendorId: true,
+        status: true,
+        isPreorder: true,
+        pickupAt: true,
+        scheduledReleaseAt: true,
+        items: { select: { product: { select: { preparationTimeMinutes: true } } } },
+        paymentShares: {
+          select: {
+            payment: { select: { status: true, provider: true, providerPaymentId: true } },
+          },
+        },
+      },
+    });
+    if (!order || !order.isPreorder) throw new NotFoundException('Pre-order not found');
+
+    const state = getPreorderModifyState(order);
+    if (!state.canModify) {
+      throw new ConflictException(
+        state.lockedReason ?? 'This pre-order can no longer be changed',
+      );
+    }
+    return order;
+  }
+
+  /** Student moves their pre-order to another pickup slot, until it is released to the vendor. */
+  async reschedulePreorder(userId: string, orderId: string, pickupAtIso: string) {
+    const order = await this.loadStudentPreorder(userId, orderId);
+    const pickupAt = new Date(pickupAtIso);
+
+    if (order.pickupAt?.getTime() === pickupAt.getTime()) {
+      return this.getOrderStatus(userId, orderId);
+    }
+
+    const schedule = await this.vendorsService.getEffectivePreorderDays(order.vendorId);
+    if (
+      !schedule.preorderEnabled ||
+      !isBookablePreorderSlot(schedule.days, schedule.minLeadTimeMinutes, pickupAt)
+    ) {
+      throw new BadRequestException(
+        'That pickup time is not available. Please choose another slot.',
+      );
+    }
+
+    const prepMinutes = Math.max(
+      ...order.items.map((item) => item.product.preparationTimeMinutes),
+    );
+    const scheduledReleaseAt = new Date(pickupAt.getTime() - prepMinutes * 60_000);
+
+    await this.prisma.$transaction(async (tx) => {
+      // Guarded on status and release time so a concurrent release or cancel wins cleanly.
+      const result = await tx.order.updateMany({
+        where: {
+          id: orderId,
+          customerId: userId,
+          status: order.status,
+          scheduledReleaseAt: { gt: new Date() },
+        },
+        data: { pickupAt, estimatedReadyAt: pickupAt, scheduledReleaseAt },
+      });
+      if (result.count !== 1) {
+        throw new ConflictException('This pre-order can no longer be changed');
+      }
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId,
+          status: order.status,
+          changedByUserId: userId,
+          note: `Pickup rescheduled to ${pickupAt.toISOString()}`,
+        },
+      });
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'PREORDER_RESCHEDULED',
+        entityType: 'Order', entityId: orderId,
+        beforeState: { pickupAt: order.pickupAt?.toISOString() ?? null },
+        afterState: { pickupAt: pickupAt.toISOString() },
+      } });
+    });
+
+    await this.realtimeGateway.emitPreorderEvent(orderId, 'preorder.updated');
+    return this.getOrderStatus(userId, orderId);
+  }
+
+  /** Student cancels their pre-order before release; a paid one is refunded automatically. */
+  async cancelPreorder(userId: string, orderId: string) {
+    const order = await this.loadStudentPreorder(userId, orderId);
+    const wasPaid = order.status === OrderStatus.SCHEDULED;
+
+    if (!wasPaid && !(await this.expireOpenCheckouts(order.paymentShares))) {
+      throw new ConflictException(
+        'A payment for this pre-order is being processed. Please try again in a moment.',
+      );
+    }
+
+    const cancelled = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.order.updateMany({
+        where: {
+          id: orderId,
+          customerId: userId,
+          status: order.status,
+          scheduledReleaseAt: { gt: new Date() },
+        },
+        data: {
+          status: OrderStatus.CANCELLED,
+          cancellationReason: CancellationReason.CUSTOMER_REQUEST,
+        },
+      });
+      if (result.count !== 1) {
+        throw new ConflictException('This pre-order can no longer be changed');
+      }
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId,
+          status: OrderStatus.CANCELLED,
+          changedByUserId: userId,
+          note: 'Pre-order cancelled by student before cutoff',
+        },
+      });
+      await tx.auditRecord.create({ data: {
+        actorUserId: userId, actionType: 'ORDER_STATUS_UPDATED',
+        entityType: 'Order', entityId: orderId,
+        beforeState: { status: order.status },
+        afterState: { status: OrderStatus.CANCELLED, source: 'STUDENT_PREORDER_CANCEL' },
+      } });
+      return tx.order.findUniqueOrThrow({
+        where: { id: orderId },
+        select: { id: true, customerId: true, status: true, updatedAt: true },
+      });
+    });
+
+    await this.realtimeGateway.emitOrderStatusUpdated(cancelled.customerId, {
+      orderId: cancelled.id,
+      status: cancelled.status,
+      updatedAt: cancelled.updatedAt,
+    });
+    await this.realtimeGateway.emitPreorderEvent(orderId, 'preorder.updated');
+
+    if (wasPaid) {
+      await this.refundsService.autoRefundOrderPayments(
+        orderId,
+        'CUSTOMER_CANCELLED',
+        'Cancelled by student before cutoff',
+      );
+    }
+    return this.getOrderStatus(userId, orderId);
   }
 
   private async autoCancelAndRefund(orderId: string, category: string) {

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { useRealtimeEvents } from '@/features/realtime/realtime';
+import { VendorRatingPanel } from '@/features/reviews/vendor-rating-panel';
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -208,7 +210,8 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
 
   // US-017 State Management (Vendor Queue & Order Details)
   const [orderQueue, setOrderQueue] = useState<VendorQueueOrder[]>([]);
-  const [queueTab, setQueueTab] = useState<'LIVE' | 'SCHEDULED'>('LIVE');
+  const refreshQueueRef = useRef<() => void>(() => {});
+  const [queueTab, setQueueTab] = useState<'LIVE' | 'SCHEDULED' | 'UNCOLLECTED'>('LIVE');
   const [selectedOrder, setSelectedOrder] = useState<VendorQueueOrder | null>(null);
   const [isQueueLoading, setIsQueueLoading] = useState(true);
 
@@ -314,10 +317,17 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
       });
   }, []);
 
+  // Realtime events (new order, pre-order reserved/released/updated, status
+  // changes) refresh the queue immediately; polling below is the fallback.
+  useRealtimeEvents(
+    ['realtime.ready', 'order.created', 'order.status.updated', 'preorder.created', 'preorder.released', 'preorder.updated'],
+    () => refreshQueueRef.current(),
+  );
+
   // Poll the queue so a PayMongo webhook confirming payment flips an order
   // to "Paid" here without the vendor needing to refresh the page.
   useEffect(() => {
-    const QUEUE_POLL_INTERVAL_MS = 8000;
+    const QUEUE_POLL_INTERVAL_MS = 15000;
 
     const refreshQueue = () => {
       getVendorOrderQueue()
@@ -339,6 +349,7 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
         });
     };
 
+    refreshQueueRef.current = refreshQueue;
     const timer = window.setInterval(refreshQueue, QUEUE_POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, []);
@@ -379,10 +390,14 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
         .filter((order) => order.status === 'SCHEDULED')
         .sort((a, b) => new Date(a.pickupAt ?? 0).getTime() - new Date(b.pickupAt ?? 0).getTime())
     : [];
-  const liveOrders = Array.isArray(orderQueue)
-    ? orderQueue.filter((order) => order.status !== 'SCHEDULED')
+  const uncollectedOrders = Array.isArray(orderQueue)
+    ? orderQueue.filter((order) => order.isUncollected)
     : [];
-  const visibleQueue = queueTab === 'SCHEDULED' ? scheduledOrders : liveOrders;
+  const liveOrders = Array.isArray(orderQueue)
+    ? orderQueue.filter((order) => order.status !== 'SCHEDULED' && !order.isUncollected)
+    : [];
+  const visibleQueue =
+    queueTab === 'SCHEDULED' ? scheduledOrders : queueTab === 'UNCOLLECTED' ? uncollectedOrders : liveOrders;
 
   const handleSavePreorderAvailability = async () => {
     if (!vendor || isPreorderSaving) return;
@@ -1150,6 +1165,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
               {([
                 { key: 'LIVE', label: 'Live', count: liveOrders.length },
                 { key: 'SCHEDULED', label: 'Scheduled', count: scheduledOrders.length },
+                { key: 'UNCOLLECTED', label: 'Uncollected', count: uncollectedOrders.length },
               ] as const).map((tab) => (
                 <button
                   key={tab.key}
@@ -1187,6 +1203,8 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                 <div className="p-8 text-center text-muted-foreground text-sm">
                   {queueTab === 'SCHEDULED'
                     ? 'No scheduled pre-orders. Paid pre-orders wait here until it is time to prepare them.'
+                    : queueTab === 'UNCOLLECTED'
+                    ? 'No uncollected pre-orders.'
                     : 'No active orders in queue.'}
                 </div>
               ) : (
@@ -1263,6 +1281,11 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                           Pickup {formatPickupTime(order.pickupAt)}
                         </p>
                       )}
+                      {order.isUncollected && (
+                        <span className="mt-1 inline-flex rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-destructive">
+                          Uncollected
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex flex-wrap items-center justify-end gap-1.5">
@@ -1307,6 +1330,8 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
             </CardContent>
           </Card>
         </section>
+
+        <VendorRatingPanel />
 
         {/* US-012: Product Management Section */}
         <section id="menu-management-section" className="mt-10">

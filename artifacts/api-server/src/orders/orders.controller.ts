@@ -25,6 +25,7 @@ import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { RequestOrderRefundDto } from '../refunds/dto/request-order-refund.dto';
 
 import { CreateOrderDto } from './dto/create-order.dto';
+import { ReschedulePreorderDto } from './dto/reschedule-preorder.dto';
 import { OrdersService } from './orders.service';
 
 @ApiTags('Orders')
@@ -190,6 +191,29 @@ export class OrdersController {
     @Body() dto: RequestOrderRefundDto,
   ) {
     return this.ordersService.requestRefund(user.sub, orderId, dto);
+  }
+
+  @Patch(':orderId/preorder/reschedule')
+  @UseGuards(RolesGuard)
+  @Roles('BUYER')
+  @ApiOperation({ summary: 'Change the pickup time of a pre-order before its cutoff' })
+  async reschedulePreorder(
+    @CurrentUser() user: JwtPayload,
+    @Param('orderId') orderId: string,
+    @Body() dto: ReschedulePreorderDto,
+  ) {
+    return this.ordersService.reschedulePreorder(user.sub, orderId, dto.pickupAt);
+  }
+
+  @Post(':orderId/preorder/cancel')
+  @UseGuards(RolesGuard)
+  @Roles('BUYER')
+  @ApiOperation({ summary: 'Cancel a pre-order before its cutoff (paid pre-orders are refunded)' })
+  async cancelPreorder(
+    @CurrentUser() user: JwtPayload,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.ordersService.cancelPreorder(user.sub, orderId);
   }
 
   @Patch(':orderId/pickup')

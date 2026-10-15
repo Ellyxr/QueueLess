@@ -9,6 +9,7 @@ datasource db {
 }
 
 model User {
+  reviews Review[]
   vendorReportResponses ReportVendorResponse[] @relation("VendorReportAuthor")
   vendorReportReviews ReportVendorResponse[] @relation("VendorReportReviewer")
   vendorApplications VendorApplication[]
@@ -129,6 +130,10 @@ model Vendor {
   preorderEnabled          Boolean                      @default(false)
   preorderSameAsStoreHours Boolean                      @default(true)
   preorderMinLeadTimeMinutes Int                        @default(60)
+  /// Denormalised review aggregates so directory cards need no join; kept in sync inside the review-creation transaction.
+  ratingCount              Int                          @default(0)
+  ratingSum                Int                          @default(0)
+  reviews                  Review[]
   carts                    Cart[]
   deals                    Deal[]
   eventParticipations      EventVendorParticipation[]
@@ -380,6 +385,7 @@ model Order {
   reportsTargeting   Report[]              @relation("ReportTargetOrder")
   ledgerEntry        VendorLedgerEntry?
   refunds            Refund[]
+  review             Review?
 
   @@index([customerId])
   @@index([vendorId])
@@ -1228,4 +1234,21 @@ model ReportVendorResponse {
   @@unique([reportId, vendorId, kind])
   @@index([vendorId, createdAt])
   @@map("report_vendor_responses")
+}
+
+model Review {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId    String   @unique @db.Uuid
+  vendorId   String   @db.Uuid
+  customerId String   @db.Uuid
+  rating     Int
+  comment    String?
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  order    Order  @relation(fields: [orderId], references: [id])
+  vendor   Vendor @relation(fields: [vendorId], references: [id])
+  customer User   @relation(fields: [customerId], references: [id])
+
+  @@index([vendorId, createdAt(sort: Desc)])
+  @@map("reviews")
 }

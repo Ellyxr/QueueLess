@@ -133,6 +133,39 @@ export class RealtimeGateway implements OnGatewayConnection {
       .emit('order.created', payload);
   }
 
+  /**
+   * Pre-order lifecycle events (created = reserved and paid, released = sent
+   * to the vendor queue, updated = rescheduled/cancelled). Sent to both the
+   * student and the vendor owner so each side can refresh without polling.
+   */
+  async emitPreorderEvent(
+    orderId: string,
+    event: 'preorder.created' | 'preorder.released' | 'preorder.updated',
+  ) {
+    try {
+      const order = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: {
+          id: true,
+          status: true,
+          customerId: true,
+          vendorId: true,
+          pickupAt: true,
+          scheduledReleaseAt: true,
+          updatedAt: true,
+          vendor: { select: { ownerUserId: true } },
+        },
+      });
+      if (!order) return;
+      const { vendor, ...payload } = order;
+      for (const userId of new Set([order.customerId, vendor.ownerUserId])) {
+        this.server.to(this.userRoom(userId)).emit(event, { orderId: order.id, ...payload });
+      }
+    } catch (error) {
+      this.logger.warn(`Could not emit ${event} for order ${orderId}: ${String(error)}`);
+    }
+  }
+
   async emitPasabuyStatusUpdated(requestId: string, previousFulfillerUserId?: string) {
     try {
       const request = await this.prisma.pasabuyRequest.findUnique({

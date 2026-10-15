@@ -119,6 +119,9 @@ export interface VendorStorefront {
   preorderSameAsStoreHours?: boolean;
   preorderMinLeadTimeMinutes?: number;
   preorderAvailability?: VendorPreorderDay[];
+  /** Mean review rating (1 decimal), or null when the vendor has no reviews yet. */
+  averageRating?: number | null;
+  ratingCount?: number;
   availabilityDays?: VendorAvailabilityDay[];
   /** Only present on the buyer-facing storefront response, not the vendor's own settings fetch. */
   isOpenNow?: boolean;
@@ -180,6 +183,8 @@ export interface VendorQueueOrder {
   paymentStatus?: string;
   isPasabuyRequest?: boolean;
   isPreorder?: boolean;
+  /** Ready pre-order that was not collected within the grace period. */
+  isUncollected?: boolean;
   pickupAt?: string | null;
   scheduledReleaseAt?: string | null;
   paymentExpiresAt?: string | null;
@@ -221,6 +226,7 @@ export interface CustomerOrder {
   isPasabuyRequest: boolean;
   pickupAt: string | null;
   paymentExpiresAt: string | null;
+  isUncollected: boolean;
   /** 8-char uppercase order-id prefix computed server-side — use instead of any client-side UUID truncation. */
   orderReference: string;
   total: string;
@@ -919,6 +925,13 @@ export interface OrderStatusResponse {
   pickupAt: string | null;
   scheduledReleaseAt: string | null;
   paymentExpiresAt: string | null;
+  isUncollected: boolean;
+  /** Student may still reschedule/cancel this pre-order (before its release time). */
+  canModifyPreorder: boolean;
+  /** Why changes are closed, once past the cutoff. */
+  preorderLockedReason: string | null;
+  hasReview: boolean;
+  canReview: boolean;
   updatedAt: string;
   paidAt: string | null;
   buyerContactPingAt: string | null;
@@ -1880,5 +1893,57 @@ export function updateFeaturedListingSettings(
   return fetchWithAuth("/featured-listings/settings", {
     method: "PATCH",
     body: JSON.stringify(input),
+  });
+}
+export function reschedulePreorder(orderId: string, pickupAt: string): Promise<OrderStatusResponse> {
+  return fetchWithAuth(`/orders/${orderId}/preorder/reschedule`, {
+    method: "PATCH",
+    body: JSON.stringify({ pickupAt }),
+  });
+}
+
+export function cancelPreorder(orderId: string): Promise<OrderStatusResponse> {
+  return fetchWithAuth(`/orders/${orderId}/preorder/cancel`, { method: "POST" });
+}
+
+export interface ReviewView {
+  id: string;
+  rating: number;
+  comment: string | null;
+  createdAt: string;
+  reviewerName: string;
+}
+
+export interface VendorReviewsPage {
+  averageRating: number | null;
+  ratingCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  reviews: ReviewView[];
+}
+
+export function getVendorReviews(vendorId: string, page = 1, pageSize = 10): Promise<VendorReviewsPage> {
+  return fetchWithAuth(`/vendors/${vendorId}/reviews?page=${page}&pageSize=${pageSize}`);
+}
+
+export interface VendorReviewSummary {
+  averageRating: number | null;
+  ratingCount: number;
+  distribution: Record<"1" | "2" | "3" | "4" | "5", number>;
+  recentReviews: ReviewView[];
+}
+
+export function getMyReviewSummary(): Promise<VendorReviewSummary> {
+  return fetchWithAuth("/reviews/me/summary");
+}
+
+export function submitOrderReview(
+  orderId: string,
+  data: { rating: number; comment?: string },
+): Promise<{ id: string; rating: number; comment: string | null; createdAt: string }> {
+  return fetchWithAuth(`/orders/${orderId}/review`, {
+    method: "POST",
+    body: JSON.stringify(data),
   });
 }
