@@ -117,6 +117,7 @@ export interface VendorStorefront {
   isFavoritedByMe?: boolean;
   preorderEnabled?: boolean;
   preorderSameAsStoreHours?: boolean;
+  preorderMinLeadTimeMinutes?: number;
   preorderAvailability?: VendorPreorderDay[];
   availabilityDays?: VendorAvailabilityDay[];
   /** Only present on the buyer-facing storefront response, not the vendor's own settings fetch. */
@@ -178,6 +179,10 @@ export interface VendorQueueOrder {
   userId?: string;
   paymentStatus?: string;
   isPasabuyRequest?: boolean;
+  isPreorder?: boolean;
+  pickupAt?: string | null;
+  scheduledReleaseAt?: string | null;
+  paymentExpiresAt?: string | null;
   status: string;
   items?: VendorOrderItem[];
 }
@@ -186,12 +191,17 @@ export type CancellationReason =
   | 'NOT_AVAILABLE'
   | 'CUSTOMER_REQUEST'
   | 'CLOSING_EARLY'
+  | 'PAYMENT_EXPIRED'
   | 'OTHER';
 
 // US-017: Create/Submit Order from Cart
 export interface CreateOrderInput {
   cartId: string;
   isPasabuyRequest?: boolean;
+  /** Place the order as a scheduled pre-order for pickup at `pickupAt`. */
+  isPreorder?: boolean;
+  /** ISO 8601 pickup time; must be one of the vendor's preorder slots. */
+  pickupAt?: string;
 }
 
 export interface ProfileData {
@@ -209,6 +219,8 @@ export interface CustomerOrder {
   status: string;
   isPreorder: boolean;
   isPasabuyRequest: boolean;
+  pickupAt: string | null;
+  paymentExpiresAt: string | null;
   /** 8-char uppercase order-id prefix computed server-side — use instead of any client-side UUID truncation. */
   orderReference: string;
   total: string;
@@ -825,9 +837,23 @@ export function updateVendorStorefront(
   });
 }
 
+export interface VendorPreorderSlots {
+  preorderEnabled: boolean;
+  minLeadTimeMinutes: number;
+  slotMinutes: number;
+  /** Bookable pickup instants (ISO 8601, UTC), soonest first. */
+  slots: string[];
+  nextAvailableAt: string | null;
+}
+
+export function getVendorPreorderSlots(vendorId: string): Promise<VendorPreorderSlots> {
+  return fetchWithAuth(`/vendors/${vendorId}/preorder-slots`);
+}
+
 export interface UpdateVendorPreorderAvailabilityInput {
   preorderEnabled: boolean;
   sameAsStoreHours: boolean;
+  minLeadTimeMinutes?: number;
   days?: VendorPreorderDay[];
 }
 
@@ -838,6 +864,7 @@ export function updateVendorPreorderAvailability(
   id: string;
   preorderEnabled: boolean;
   preorderSameAsStoreHours: boolean;
+  preorderMinLeadTimeMinutes: number;
   preorderAvailability: VendorPreorderDay[];
 }> {
   return fetchWithAuth(`/vendors/${vendorId}/preorder-availability`, {
@@ -889,6 +916,9 @@ export interface OrderStatusResponse {
   cancellationNote: string | null;
   estimatedReadyAt: string | null;
   estimatedWaitMinutes: number | null;
+  pickupAt: string | null;
+  scheduledReleaseAt: string | null;
+  paymentExpiresAt: string | null;
   updatedAt: string;
   paidAt: string | null;
   buyerContactPingAt: string | null;
