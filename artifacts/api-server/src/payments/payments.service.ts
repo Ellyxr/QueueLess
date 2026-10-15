@@ -1,5 +1,4 @@
 import { FeaturedListingPlacement } from '@prisma/client';
-import { resolvePaidStatus } from '../orders/preorder.util';
 import { listingEndDate, lockFeaturedPricing } from '../featured-listings/featured-pricing.policy';
 import { activateStudentApplication } from '../vendor-applications/activate-student-application';
 import { subscriptionEnd } from '../vendor-applications/vendor-application.policy';
@@ -1179,7 +1178,6 @@ export class PaymentsService {
         },
       });
 
-      const paidStatus = existingOrder ? resolvePaidStatus(existingOrder) : OrderStatus.PAID;
       let orderMarkedPaid = false;
 
       let paidOrder:

@@ -125,7 +125,6 @@ export class VendorsService {
         status: true,
         preorderEnabled: true,
         preorderSameAsStoreHours: true,
-        preorderMinLeadTimeMinutes: true,
         availability: {
           select: AVAILABILITY_SELECT,
         },
@@ -278,7 +277,6 @@ export class VendorsService {
         status: true,
         preorderEnabled: true,
         preorderSameAsStoreHours: true,
-        preorderMinLeadTimeMinutes: true,
         preorderAvailability: {
           select: PREORDER_AVAILABILITY_SELECT,
         },
@@ -493,7 +491,6 @@ export class VendorsService {
         data: {
           preorderEnabled: dto.preorderEnabled,
           preorderSameAsStoreHours: dto.sameAsStoreHours,
-          ...(dto.minLeadTimeMinutes !== undefined ? { preorderMinLeadTimeMinutes: dto.minLeadTimeMinutes } : {}),
         },
       });
 

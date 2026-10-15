@@ -131,7 +131,6 @@ model Vendor {
   businessName             String?
   preorderEnabled          Boolean                      @default(false)
   preorderSameAsStoreHours Boolean                      @default(true)
-  preorderMinLeadTimeMinutes Int                        @default(60)
   carts                    Cart[]
   deals                    Deal[]
   eventParticipations      EventVendorParticipation[]
@@ -369,13 +368,7 @@ model Order {
   /// US-062: close of the pickup window the preorder was booked into.
   pickupWindowEndsAt DateTime?             @db.Timestamptz(6)
   pickupConfirmedAt  DateTime?             @db.Timestamptz(6)
-  /// Customer-chosen pickup time for pre-orders.
-  pickupAt           DateTime?             @db.Timestamptz(6)
-  /// When a paid pre-order leaves SCHEDULED and enters the live vendor queue.
-  scheduledReleaseAt DateTime?             @db.Timestamptz(6)
-  /// Unpaid pre-orders are cancelled after this moment.
-  paymentExpiresAt   DateTime?             @db.Timestamptz(6)
-  paidAt            DateTime?             @db.Timestamptz(6)
+  paidAt             DateTime?             @db.Timestamptz(6)
   buyerContactPingAt DateTime?             @db.Timestamptz(6)
   createdAt          DateTime              @default(now()) @db.Timestamptz(6)
   updatedAt          DateTime              @updatedAt @db.Timestamptz(6)
@@ -400,8 +393,6 @@ model Order {
   @@index([eventId])
   @@index([status])
   @@index([vendorId, status])
-  @@index([status, scheduledReleaseAt])
-  @@index([status, paymentExpiresAt])
   @@map("orders")
 }
 
@@ -961,7 +952,6 @@ enum OrderStatus {
   /// US-059: paid preorder held outside the vendor's live queue until queueReleaseAt.
   SCHEDULED
   PAID
-  SCHEDULED
   COOKING
   OUT_FOR_DELIVERY
   READY_FOR_PICKUP

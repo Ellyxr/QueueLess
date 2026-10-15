@@ -3,7 +3,6 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
@@ -60,8 +59,6 @@ export class OrdersService {
     private readonly notificationsService: NotificationsService,
     private readonly pricingService: PricingService,
     private readonly realtimeGateway: RealtimeGateway,
-    private readonly vendorsService: VendorsService,
-    private readonly paymongoService: PaymongoService,
   ) {}
 
   async createOrder(
@@ -72,13 +69,6 @@ export class OrdersService {
     if (dto.isPasabuyRequest) {
       throw new BadRequestException('Pay for the order first, then POST /pasabuy/requests');
     }
-    if (dto.isPreorder && !dto.pickupAt) {
-      throw new BadRequestException('Choose a pickup date and time for your pre-order');
-    }
-    if (!dto.isPreorder && dto.pickupAt) {
-      throw new BadRequestException('pickupAt is only valid for pre-orders');
-    }
-    const pickupAt = dto.pickupAt ? new Date(dto.pickupAt) : null;
     const key = idempotencyKey?.trim();
 
     if (!key) {
@@ -575,8 +565,6 @@ export class OrdersService {
         reservationExpiresAt: true,
         queueReleaseAt: true,
         isPasabuyRequest: true,
-        pickupAt: true,
-        paymentExpiresAt: true,
         totalAmount: true,
         createdAt: true,
         paidAt: true,
@@ -608,8 +596,6 @@ export class OrdersService {
       reservationExpiresAt: order.reservationExpiresAt,
       queueReleaseAt: order.queueReleaseAt,
       isPasabuyRequest: order.isPasabuyRequest,
-      pickupAt: order.pickupAt,
-      paymentExpiresAt: order.paymentExpiresAt,
       orderReference: order.id.slice(0, 8).toUpperCase(),
       total: order.totalAmount.toFixed(2),
       createdAt: order.createdAt,
@@ -658,9 +644,6 @@ export class OrdersService {
         queueReleaseAt: true,
         updatedAt: true,
         pickupConfirmedAt: true,
-        pickupAt: true,
-        scheduledReleaseAt: true,
-        paymentExpiresAt: true,
         paidAt: true,
         buyerContactPingAt: true,
         refunds: {
@@ -776,9 +759,6 @@ export class OrdersService {
       reservationExpiresAt: order.reservationExpiresAt,
       queueReleaseAt: order.queueReleaseAt,
       estimatedWaitMinutes,
-      pickupAt: order.pickupAt,
-      scheduledReleaseAt: order.scheduledReleaseAt,
-      paymentExpiresAt: order.paymentExpiresAt,
       paidAt: order.paidAt,
       buyerContactPingAt: order.buyerContactPingAt,
       refund: order.refunds[0] ?? null,
@@ -912,7 +892,7 @@ export class OrdersService {
       where: {
         vendorId: vendor.id,
         status: {
-          in: ['PENDING', 'PAID', 'SCHEDULED', 'COOKING'],
+          in: ['PENDING', 'PAID', 'COOKING'],
         },
         // US-058: a preorder is a reservation the vendor can trust only once
         // it is paid; unpaid ones stay hidden until paid or expired.
@@ -1469,9 +1449,6 @@ export class OrdersService {
         OrderStatus.COOKING,
         OrderStatus.CANCELLED,
       ],
-      SCHEDULED: [
-        OrderStatus.CANCELLED,
-      ],
       COOKING: [
         OrderStatus.READY_FOR_PICKUP,
         OrderStatus.CANCELLED,
@@ -1549,8 +1526,6 @@ export class OrdersService {
       reservationExpiresAt: order.reservationExpiresAt,
       queueReleaseAt: order.queueReleaseAt,
       pickupConfirmedAt: order.pickupConfirmedAt,
-      pickupAt: order.pickupAt,
-      paymentExpiresAt: order.paymentExpiresAt,
       estimatedWaitMinutes,
       subtotal: order.subtotal.toFixed(2),
     };
@@ -1667,145 +1642,6 @@ export class OrdersService {
         order.updatedAt <= order.buyerContactPingAt
       ) {
         await this.autoCancelAndRefund(order.id, 'VENDOR_UNRESPONSIVE');
-      }
-    }
-  }
-
-  /**
-   * Moves paid pre-orders whose release time has arrived from SCHEDULED
-   * into the live vendor queue (PAID), and tells the vendor.
-   */
-  @Cron('*/1 * * * *')
-  async releaseScheduledOrders() {
-    const due = await this.prisma.order.findMany({
-      where: { status: OrderStatus.SCHEDULED, scheduledReleaseAt: { lte: new Date() } },
-      select: { id: true },
-    });
-
-    for (const { id } of due) {
-      const released = await this.prisma.$transaction(async (tx) => {
-        const result = await tx.order.updateMany({
-          where: { id, status: OrderStatus.SCHEDULED },
-          data: { status: OrderStatus.PAID },
-        });
-        if (result.count !== 1) return null;
-
-        await tx.orderStatusHistory.create({
-          data: {
-            orderId: id,
-            status: OrderStatus.PAID,
-            changedByUserId: null,
-            note: 'Pre-order released to the vendor queue',
-          },
-        });
-        await tx.auditRecord.create({ data: {
-          actorUserId: null, actionType: 'ORDER_STATUS_UPDATED',
-          entityType: 'Order', entityId: id,
-          beforeState: { status: OrderStatus.SCHEDULED },
-          afterState: { status: OrderStatus.PAID, source: 'PREORDER_RELEASE' },
-        } });
-        return tx.order.findUniqueOrThrow({
-          where: { id },
-          select: {
-            id: true, vendorId: true, customerId: true, status: true,
-            totalAmount: true, createdAt: true, updatedAt: true,
-            vendor: { select: { ownerUserId: true } },
-          },
-        });
-      });
-
-      if (!released) continue;
-
-      this.realtimeGateway.emitNewOrder(released.vendor.ownerUserId, {
-        orderId: released.id,
-        vendorId: released.vendorId,
-        customerId: released.customerId,
-        status: released.status,
-        totalAmount: released.totalAmount.toFixed(2),
-        createdAt: released.createdAt,
-      });
-      await this.realtimeGateway.emitOrderStatusUpdated(released.customerId, {
-        orderId: released.id,
-        status: released.status,
-        updatedAt: released.updatedAt,
-      });
-    }
-  }
-
-  /**
-   * Cancels pre-orders that were reserved but not paid within the payment
-   * window, expiring any open PayMongo checkout first. A checkout that can't
-   * be confirmed expired (e.g. it was just paid) is left for its webhook.
-   */
-  @Cron('*/1 * * * *')
-  async expireUnpaidPreorders() {
-    const expired = await this.prisma.order.findMany({
-      where: { status: OrderStatus.PENDING, paymentExpiresAt: { lte: new Date() } },
-      select: {
-        id: true,
-        paymentShares: {
-          select: { payment: { select: { status: true, provider: true, providerPaymentId: true } } },
-        },
-      },
-    });
-
-    for (const order of expired) {
-      try {
-        const openCheckouts = order.paymentShares
-          .map((share) => share.payment)
-          .filter(
-            (payment) =>
-              payment?.provider === 'PAYMONGO' &&
-              payment.status === 'PENDING' &&
-              payment.providerPaymentId,
-          );
-        let safeToCancel = true;
-        for (const payment of openCheckouts) {
-          if (!(await this.paymongoService.expireCheckoutSession(payment!.providerPaymentId!))) {
-            safeToCancel = false;
-          }
-        }
-        if (!safeToCancel) continue;
-
-        const cancelled = await this.prisma.$transaction(async (tx) => {
-          const result = await tx.order.updateMany({
-            where: { id: order.id, status: OrderStatus.PENDING },
-            data: {
-              status: OrderStatus.CANCELLED,
-              cancellationReason: CancellationReason.PAYMENT_EXPIRED,
-            },
-          });
-          if (result.count !== 1) return null;
-
-          await tx.orderStatusHistory.create({
-            data: {
-              orderId: order.id,
-              status: OrderStatus.CANCELLED,
-              changedByUserId: null,
-              note: 'Pre-order cancelled: payment window expired',
-            },
-          });
-          await tx.auditRecord.create({ data: {
-            actorUserId: null, actionType: 'ORDER_STATUS_UPDATED',
-            entityType: 'Order', entityId: order.id,
-            beforeState: { status: OrderStatus.PENDING },
-            afterState: { status: OrderStatus.CANCELLED, source: 'PAYMENT_EXPIRED' },
-          } });
-          return tx.order.findUniqueOrThrow({
-            where: { id: order.id },
-            select: { id: true, customerId: true, status: true, updatedAt: true },
-          });
-        });
-
-        if (cancelled) {
-          await this.realtimeGateway.emitOrderStatusUpdated(cancelled.customerId, {
-            orderId: cancelled.id,
-            status: cancelled.status,
-            updatedAt: cancelled.updatedAt,
-          });
-        }
-      } catch (error) {
-        this.logger.warn(`Could not expire pre-order ${order.id}: ${String(error)}`);
       }
     }
   }

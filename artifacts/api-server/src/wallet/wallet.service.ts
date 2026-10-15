@@ -1,4 +1,3 @@
-import { resolvePaidStatus } from "../orders/preorder.util";
 import {
   BadRequestException,
   ConflictException,
@@ -284,6 +283,11 @@ export class WalletService {
         share.payment?.status === PaymentStatus.SUCCEEDED
       )
         throw new ConflictException("Order or payment share cannot be paid");
+      // US-058: checked after the order row lock, so it cannot race the expiry job.
+      if (isReservationExpired(share.order))
+        throw new ConflictException(
+          "This reservation expired before it was paid; please reserve again",
+        );
       if (share.amountDue.lte(0))
         throw new BadRequestException("Payment amount must be positive");
       const debit = await tx.wallet.updateMany({
@@ -360,7 +364,7 @@ export class WalletService {
           userId,
           "ORDER_STATUS_UPDATED",
           share.orderId,
-          { status: "PAID", paymentId: payment.id },
+          { status: paidOrder.status, paymentId: payment.id },
           "Order",
         );
       }

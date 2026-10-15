@@ -766,7 +766,6 @@ export class AdminService {
     'PENDING',
     'SCHEDULED',
     'PAID',
-    'SCHEDULED',
     'COOKING',
     'OUT_FOR_DELIVERY',
     'READY_FOR_PICKUP',
