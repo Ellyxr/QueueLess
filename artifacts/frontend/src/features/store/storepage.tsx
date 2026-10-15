@@ -14,8 +14,9 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { StoreItemCard } from "@/components/store-item-card";
-import { getVendorPreorderSlots, type VendorPreorderSlots } from "@/features/auth/api";
-import { formatSlotLabel } from "@/features/orders/preorder-format";
+import type { StorefrontPreorderInfo } from "@/features/auth/api";
+import { StoreReviews } from "@/features/reviews/store-reviews";
+import { formatRating, StarDisplay } from "@/features/reviews/star-rating";
 
 interface MenuItemExtra {
   id: string;
@@ -73,7 +74,9 @@ export interface StorePageProps {
   availabilitySchedule?: StoreScheduleRow[];
   preorderEnabled?: boolean;
   preorderSchedule?: StoreScheduleRow[];
-  preorderMinLeadTimeMinutes?: number;
+  preorderStatus?: StorefrontPreorderInfo;
+  averageRating?: number | null;
+  ratingCount?: number;
 }
 
 export default function StorePage({
@@ -100,29 +103,11 @@ export default function StorePage({
   availabilitySchedule,
   preorderEnabled,
   preorderSchedule,
-  preorderMinLeadTimeMinutes,
+  preorderStatus,
+  averageRating,
+  ratingCount = 0,
 }: StorePageProps) {
-  const [preorderSlots, setPreorderSlots] = useState<VendorPreorderSlots | null>(null);
-
-  useEffect(() => {
-    if (!vendorId || editable || !preorderEnabled) {
-      setPreorderSlots(null);
-      return;
-    }
-    let cancelled = false;
-    getVendorPreorderSlots(vendorId)
-      .then((result) => {
-        if (!cancelled) setPreorderSlots(result);
-      })
-      .catch(() => {
-        if (!cancelled) setPreorderSlots(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [vendorId, editable, preorderEnabled]);
-
-  const preorderOpen = Boolean(preorderSlots && preorderSlots.slots.length > 0);
+  const [activeTab, setActiveTab] = useState<"menu" | "reviews">("menu");
   const [isLoading, setIsLoading] = useState(true);
   const [orderedCategories, setOrderedCategories] = useState(categories);
   const dragIndex = useRef<number | null>(null);
@@ -407,23 +392,17 @@ export default function StorePage({
                       <p className="mb-2 flex items-center justify-center gap-1.5 text-[10px] font-mono uppercase tracking-[0.14em] text-primary">
                         <CalendarClock className="h-3.5 w-3.5" /> Preorders available
                       </p>
-                      {preorderSlots && (
+                      {preorderStatus && (
                         <p
                           className={`mb-3 text-center text-xs font-medium ${
-                            preorderOpen ? "text-emerald-600" : "text-muted-foreground"
+                            preorderStatus.acceptingPreorders ? "text-emerald-600" : "text-muted-foreground"
                           }`}
                         >
-                          {preorderOpen && preorderSlots.nextAvailableAt
-                            ? `Open for pre-orders · next pickup ${formatSlotLabel(preorderSlots.nextAvailableAt)}`
+                          {preorderStatus.acceptingPreorders
+                            ? preorderStatus.pickupOpenNow
+                              ? "Open for pre-orders now"
+                              : `Next pre-order pickup: ${preorderStatus.nextPickupLabel ?? "see schedule"}`
                             : "Pre-orders are closed right now"}
-                          {preorderMinLeadTimeMinutes
-                            ? ` · order at least ${preorderMinLeadTimeMinutes} min ahead`
-                            : ""}
-                        </p>
-                      )}
-                      {preorderOpen && (
-                        <p className="mb-3 text-center text-[11px] text-muted-foreground">
-                          Choose "Pre-order for pickup" in your cart to reserve a time.
                         </p>
                       )}
                       <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-3">
@@ -445,7 +424,34 @@ export default function StorePage({
             </div>
           </div>
 
-          {!hasMenu ? (
+          <div className="mt-6 flex items-center gap-2 border-b border-border" role="tablist">
+            {([
+              { key: "menu", label: "Menu" },
+              { key: "reviews", label: "Reviews" },
+            ] as const).map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`-mb-px border-b-2 px-4 py-2 text-sm font-semibold transition-colors ${
+                  activeTab === tab.key ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {tab.label}
+                {tab.key === "reviews" && ratingCount > 0 && (
+                  <span className="ml-1.5 inline-flex items-center gap-1 text-xs font-medium">
+                    <StarDisplay value={1} className="h-3 w-3" /> {formatRating(averageRating)} ({ratingCount})
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === "reviews" && vendorId ? (
+            <StoreReviews vendorId={vendorId} />
+          ) : !hasMenu ? (
             <div className="my-12 flex flex-col items-center justify-center rounded-[24px] border border-border/80 bg-card/50 py-16 text-center backdrop-blur-sm">
               <p className="text-lg font-medium text-foreground">
                 Menu coming soon

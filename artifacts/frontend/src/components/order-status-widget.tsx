@@ -11,6 +11,7 @@ import {
 import {
   AUTH_STATE_CHANGED_EVENT,
   confirmOrderPickup,
+  hasReviewedOrder,
   contactVendor,
   createPaymentCheckout,
   fetchWithAuth,
@@ -21,6 +22,8 @@ import {
 import { RefundRequestDialog } from "@/features/refunds/refund-request-dialog";
 import { PasabuyOrderEntry } from "@/features/pasabuy/pasabuy-order-entry";
 import { formatCountdown, formatSlotLabel } from "@/features/orders/preorder-format";
+import { PreorderManage } from "@/features/orders/preorder-manage";
+import { ReviewPrompt } from "@/features/reviews/review-prompt";
 
 const REFUND_HIDDEN_STATUSES = new Set(["PENDING", "CANCELLED"]);
 const POLL_INTERVAL_MS = 8000;
@@ -29,6 +32,7 @@ const STATUS_LABELS: Record<string, string> = {
   PENDING: "Pending",
   PAID: "Paid",
   SCHEDULED: "Scheduled",
+  UNCOLLECTED: "Uncollected",
   COOKING: "Preparing",
   OUT_FOR_DELIVERY: "Out for delivery",
   READY_FOR_PICKUP: "Ready for pickup",
@@ -39,7 +43,8 @@ const STATUS_LABELS: Record<string, string> = {
 const STATUS_SUBTEXT: Record<string, string> = {
   PENDING: "Vendor hasn't confirmed your order yet",
   PAID: "Payment received; waiting for vendor acceptance",
-  SCHEDULED: "Payment received; the vendor will start on your pre-order closer to pickup time",
+  SCHEDULED: "Payment received; the vendor starts on your pre-order before pickup",
+  UNCOLLECTED: "This pre-order was ready but not collected in time",
   COOKING: "Your order is being prepared",
   OUT_FOR_DELIVERY: "Your order is on its way",
   READY_FOR_PICKUP: "Your order is ready — come grab it",
@@ -51,6 +56,7 @@ const STATUS_DOT_CLASS: Record<string, string> = {
   PENDING: "bg-slate-400 shadow-slate-300/60",
   PAID: "bg-blue-500 shadow-blue-300/60",
   SCHEDULED: "bg-violet-500 shadow-violet-300/60",
+  UNCOLLECTED: "bg-destructive shadow-destructive/40",
   COOKING: "bg-amber-400 shadow-amber-300/60",
   OUT_FOR_DELIVERY: "bg-amber-400 shadow-amber-300/60",
   READY_FOR_PICKUP: "bg-amber-400 shadow-amber-300/60",
@@ -62,6 +68,7 @@ const STATUS_PILL_CLASS: Record<string, string> = {
   PENDING: "bg-slate-500/10 text-slate-600",
   PAID: "bg-blue-500/10 text-blue-600",
   SCHEDULED: "bg-violet-500/10 text-violet-600",
+  UNCOLLECTED: "bg-destructive/10 text-destructive",
   COOKING: "bg-amber-500/10 text-amber-600",
   OUT_FOR_DELIVERY: "bg-amber-500/10 text-amber-600",
   READY_FOR_PICKUP: "bg-amber-500/10 text-amber-600",
@@ -69,7 +76,7 @@ const STATUS_PILL_CLASS: Record<string, string> = {
   CANCELLED: "bg-destructive/10 text-destructive",
 };
 
-const TERMINAL_STATUSES = new Set(["COMPLETED", "CANCELLED"]);
+const TERMINAL_STATUSES = new Set(["COMPLETED", "CANCELLED", "UNCOLLECTED"]);
 
 const widgetVariants = {
   hidden: {
@@ -558,6 +565,19 @@ function TrackedOrderCard({
     return () => window.clearInterval(timer);
   }, []);
   const [order, setOrder] = useState<OrderStatusResponse | null>(null);
+  // After pickup is confirmed, show the review prompt until the student has reviewed.
+  const [reviewState, setReviewState] = useState<"unknown" | "needed" | "done">("unknown");
+  const completedByViewer = order?.status === "COMPLETED" && order.viewerRole !== "MEMBER";
+  useEffect(() => {
+    if (!completedByViewer) return;
+    let cancelled = false;
+    hasReviewedOrder(orderId).then((reviewed) => {
+      if (!cancelled) setReviewState(reviewed ? "done" : "needed");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [completedByViewer, orderId]);
   const [initialUi] = useState(() => readWidgetState(orderId));
   const [isMinimized, setIsMinimized] = useState(initialUi.minimized);
   const [side, setSide] = useState<WidgetSide>(initialUi.side);
@@ -726,21 +746,18 @@ function TrackedOrderCard({
   const isTerminal = TERMINAL_STATUSES.has(order.status);
   const label = STATUS_LABELS[order.status] || order.status;
   const paymentCountdown =
-    order.isPreorder && order.status === "PENDING" && order.paymentExpiresAt
-      ? formatCountdown(order.paymentExpiresAt, now)
+    order.isPreorder && order.status === "PENDING" && order.reservationExpiresAt
+      ? formatCountdown(order.reservationExpiresAt, now)
       : null;
-  const paymentWindowExpired =
-    order.isPreorder &&
-    order.status === "PENDING" &&
-    Boolean(order.paymentExpiresAt) &&
-    paymentCountdown === null;
+  const reservationExpired =
+    order.isPreorder && order.status === "PENDING" && Boolean(order.reservationExpiresAt) && paymentCountdown === null;
   let subtext = STATUS_SUBTEXT[order.status] || "";
   if (order.isPreorder && order.status === "PENDING") {
-    subtext = paymentWindowExpired
-      ? "Payment window expired — this pre-order is being cancelled"
-      : "Awaiting payment to reserve your pickup slot";
-  } else if (order.status === "CANCELLED" && order.cancellationReason === "PAYMENT_EXPIRED") {
-    subtext = "Cancelled: the payment window expired";
+    subtext = reservationExpired
+      ? "Reservation expired — this pre-order is being released"
+      : "Awaiting payment to reserve your pickup time";
+  } else if (order.status === "CANCELLED" && order.cancellationReason === "RESERVATION_EXPIRED") {
+    subtext = "Cancelled: the reservation expired before payment";
   }
   const dotClass = STATUS_DOT_CLASS[order.status] || "bg-blue-500 shadow-blue-300/60";
   const pillClass = STATUS_PILL_CLASS[order.status] || "bg-blue-500/10 text-blue-600";
@@ -866,29 +883,21 @@ function TrackedOrderCard({
             </div>
           )}
 
-          {order.pickupAt && !isTerminal && (
+          {order.isPreorder && order.scheduledPickupAt && !isTerminal && (
             <div className="mt-3 text-center">
-              <p className="text-sm font-semibold text-foreground">
-                {formatSlotLabel(order.pickupAt)}
-              </p>
-              <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                Pre-order pickup
-              </p>
+              <p className="text-sm font-semibold text-foreground">{formatSlotLabel(order.scheduledPickupAt)}</p>
+              <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Pre-order pickup</p>
             </div>
           )}
 
           {paymentCountdown && (
             <div className="mt-3 rounded-xl bg-amber-500/10 px-3 py-2 text-center">
-              <p className="font-mono text-xl font-semibold tracking-[0.06em] text-amber-600">
-                {paymentCountdown}
-              </p>
-              <p className="mt-0.5 text-[10px] uppercase tracking-[0.14em] text-amber-600/80">
-                Pay within to keep your slot
-              </p>
+              <p className="font-mono text-xl font-semibold tracking-[0.06em] text-amber-600">{paymentCountdown}</p>
+              <p className="mt-0.5 text-[10px] uppercase tracking-[0.14em] text-amber-600/80">Pay within to keep your time</p>
             </div>
           )}
 
-          {order.estimatedWaitMinutes !== null && !isTerminal && !order.pickupAt && (
+          {order.estimatedWaitMinutes !== null && !isTerminal && !order.isPreorder && (
             <div className="mt-3 text-center">
               <p className="font-mono text-2xl font-semibold tracking-[0.06em] text-foreground">
                 ~{order.estimatedWaitMinutes} min
@@ -902,7 +911,7 @@ function TrackedOrderCard({
           {order.status === "PENDING" &&
             order.myPaymentShare &&
             order.myPaymentShare.status === "PENDING" &&
-            !paymentWindowExpired && (
+            !reservationExpired && (
             <div className="mt-3 space-y-1.5">
               <button
                 type="button"
@@ -942,6 +951,18 @@ function TrackedOrderCard({
                 {pingSent ? "Owner notified" : isPinging ? "Pinging..." : "Ping owner"}
               </button>
             )}
+
+          {order.isPreorder && order.viewerRole !== "MEMBER" && (
+            <PreorderManage
+              orderId={orderId}
+              status={order.status}
+              onChanged={() => getOrderStatus(orderId).then(setOrder).catch(() => {})}
+            />
+          )}
+
+          {reviewState === "needed" && completedByViewer && (
+            <ReviewPrompt orderId={orderId} onSubmitted={() => setReviewState("done")} />
+          )}
 
           {!isTerminal && !order.isPreorder && (
             <div className="mt-3">

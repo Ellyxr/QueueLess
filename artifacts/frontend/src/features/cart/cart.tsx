@@ -21,7 +21,6 @@ import {
 } from "@/features/orders/order-tracking";
 import { createOrderForVendorItems, setCheckoutQueue } from "@/features/cart/checkout";
 import { PreorderPicker, type OrderTiming } from "@/features/cart/preorder-picker";
-import { getVendorPreorderSlots } from "@/features/auth/api";
 import { GroupOrderCartView } from "@/features/group-orders/group-order-cart-view";
 import {
   GROUP_ORDER_SESSION_CHANGED_EVENT,
@@ -273,19 +272,6 @@ export default function CartPage() {
     setIsSubmitting(true);
     setPreorderError(null);
     try {
-      if (isPreorder && preorderPickupAt) {
-        // Re-check the slot before touching the server cart: the slot may have
-        // lapsed (lead time) while this page was open, and a failed order
-        // attempt would otherwise leave items added to the cart.
-        const slots = await getVendorPreorderSlots(items[0].vendorId || "");
-        if (!slots.preorderEnabled || !slots.slots.includes(preorderPickupAt)) {
-          setPreorderPickupAt(null);
-          setPreorderError("That pickup time is no longer available. Please choose another slot.");
-          submitLock.current = false;
-          setIsSubmitting(false);
-          return;
-        }
-      }
       // Items can come from several vendors — each vendor gets its own
       // order (and its own PayMongo checkout session), one at a time.
       // We place the first vendor's order now; the rest stay queued and
@@ -323,6 +309,7 @@ export default function CartPage() {
     } catch (error) {
       console.error("Failed to submit order:", error);
       if (isPreorder) {
+        // The server explains what is wrong (outside pickup hours, too soon, ...).
         setPreorderError(error instanceof Error ? error.message : "Failed to place pre-order. Please try again.");
         setPreorderPickupAt(null);
       } else {
@@ -684,9 +671,7 @@ export default function CartPage() {
               onPickupAtChange={setPreorderPickupAt}
               disabled={isSubmitting}
             />
-            {preorderError && (
-              <p className="px-1 text-xs text-destructive">{preorderError}</p>
-            )}
+            {preorderError && <p className="px-1 text-xs text-destructive">{preorderError}</p>}
 
             {/* Promo code */}
             <div className="flex items-center rounded-[20px] border border-border bg-card px-4 py-1">
@@ -768,7 +753,7 @@ export default function CartPage() {
               <p className="mt-3 text-center text-[11px] text-muted-foreground">
                 {trackedOrderCount >= MAX_TRACKED_ORDERS
                   ? `You have ${MAX_TRACKED_ORDERS} orders in progress. Complete or dismiss one to order again.`
-                  : isPreorder ? "Pay within 10 minutes to reserve your pickup slot, or it will be released."
+                  : isPreorder ? "Pay soon to hold your pickup time — unpaid reservations are released."
                   : paymentMethod === "WALLET" ? "Continue to your wallet to confirm payment or cash in." : `You'll be redirected to PayMongo Sandbox to complete payment. (${trackedOrderCount}/${MAX_TRACKED_ORDERS} active orders)`}
               </p>
             </section>

@@ -85,7 +85,7 @@ export async function createOrderForVendorItems(
   const order = await createOrder({
     cartId: activeCartId,
     isPasabuyRequest,
-    ...(preorderPickupAt ? { isPreorder: true, pickupAt: preorderPickupAt } : {}),
+    ...(preorderPickupAt ? { isPreorder: true, scheduledPickupAt: preorderPickupAt } : {}),
   });
 
   const orderId = order?.id;
