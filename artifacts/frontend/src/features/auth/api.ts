@@ -1144,6 +1144,19 @@ export function pingGroupOrder(groupOrderId: string): Promise<{ message: string 
   return fetchWithAuth(`/group-orders/${groupOrderId}/ping`, { method: "POST" });
 }
 
+/** A joined member leaves an open group order (the owner must cancel instead). */
+export function leaveGroupOrder(groupOrderId: string): Promise<{ groupOrderId: string; userId: string; status: "LEFT" }> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/leave`, { method: "POST" });
+}
+
+/** Owner removes a member from an open group order. */
+export function removeGroupOrderMember(
+  groupOrderId: string,
+  userId: string,
+): Promise<{ groupOrderId: string; userId: string; status: "LEFT" }> {
+  return fetchWithAuth(`/group-orders/${groupOrderId}/members/${userId}`, { method: "DELETE" });
+}
+
 export function cancelGroupOrder(groupOrderId: string): Promise<GroupOrderResponse> {
   return fetchWithAuth(`/group-orders/${groupOrderId}`, { method: "DELETE" });
 }

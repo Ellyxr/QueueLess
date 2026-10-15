@@ -729,6 +729,21 @@ export default function MarketplacePage({
     setIsStorefrontExpanded(false);
   };
 
+  // The split-pane preview only exists on laptop widths and up; below that a
+  // store card opens the full store page instead, so drop any open preview.
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 1023px)");
+    const closeOnSmallScreens = () => {
+      if (query.matches) {
+        setSelectedVendorId(null);
+        setIsStorefrontExpanded(false);
+      }
+    };
+    closeOnSmallScreens();
+    query.addEventListener("change", closeOnSmallScreens);
+    return () => query.removeEventListener("change", closeOnSmallScreens);
+  }, []);
+
   useEffect(() => {
     const refreshGroupSession = () => setGroupSession(getGroupOrderSession());
     window.addEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, refreshGroupSession);
@@ -1044,19 +1059,21 @@ export default function MarketplacePage({
                   </div>
                   <div className="flex items-center gap-3">
                     <Sparkles className="h-4 w-4 text-primary" />
-                    <Button variant="ghost" className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-secondary">
-                      View all
-                    </Button>
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-4 md:hidden">
+                <div className="flex flex-col gap-4 lg:hidden">
                   {filteredFeatured.map((vendor) => (
                     <VendorCard key={vendor.name} {...vendor} />
                   ))}
                 </div>
 
-                <div className="hidden md:grid md:grid-cols-3 md:gap-4 [grid-auto-flow:dense]">
+                <div
+                  className={cn(
+                    "hidden gap-4 lg:grid [grid-auto-flow:dense]",
+                    selectedVendorId ? "lg:grid-cols-2" : "lg:grid-cols-3",
+                  )}
+                >
                   {filteredFeatured.map((vendor) => (
                     <VendorCard key={vendor.name} {...vendor} onSelect={handleSelectVendor} />
                   ))}
@@ -1138,9 +1155,6 @@ export default function MarketplacePage({
                       </form>
                     )}
 
-                    <Button variant="ghost" className="rounded-full px-3 py-1.5 text-sm text-muted-foreground hover:bg-secondary">
-                      View all
-                    </Button>
                   </div>
                 </div>
 
@@ -1148,13 +1162,18 @@ export default function MarketplacePage({
                   <p className="mb-4 text-xs text-destructive">{groupOrderError}</p>
                 )}
 
-                <div className="flex flex-col gap-4 md:hidden">
+                <div className="flex flex-col gap-4 lg:hidden">
                   {filteredLocal.map((vendor) => (
                     <VendorCard key={vendor.name} {...vendor} />
                   ))}
                 </div>
 
-                <div className="hidden md:grid md:grid-cols-3 md:gap-4 [grid-auto-flow:dense]">
+                <div
+                  className={cn(
+                    "hidden gap-4 lg:grid [grid-auto-flow:dense]",
+                    selectedVendorId ? "lg:grid-cols-2" : "lg:grid-cols-3",
+                  )}
+                >
                   {filteredLocal.map((vendor) => (
                     <VendorCard key={vendor.name} {...vendor} onSelect={handleSelectVendor} />
                   ))}
