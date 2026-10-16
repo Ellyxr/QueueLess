@@ -146,6 +146,12 @@ jobs:
       - name: Generate Prisma client
         run: pnpm --filter @workspace/api-server prisma:generate
 
+      # BUG-004 / TC-014: on a throwaway empty database, the initial migration
+      # applies alone and creates everything it declares, then the rest apply
+      # on top with no drift.
+      - name: Initial migration on a clean database (TC-014)
+        run: pnpm --filter @workspace/api-server db:verify:clean --temp-db
+
       - name: Apply all migrations to a clean database
         run: pnpm --filter @workspace/api-server exec prisma migrate deploy
 

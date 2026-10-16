@@ -4,5 +4,5 @@
     "rootDir": "..",
     "noEmit": true
   },
-  "include": ["seed.ts", "verify-db.ts", "generate-erd.ts"]
+  "include": ["seed.ts", "verify-db.ts", "generate-erd.ts", "verify-clean-migration.ts"]
 }
