@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { PreorderQueuePanel } from '@/features/vendor/preorder-queue-panel';
+import { formatSlotLabel } from '@/features/orders/preorder-format';
 import { VendorRatingPanel } from '@/features/reviews/vendor-rating-panel';
 import {
   ArrowDownRight,
@@ -1183,6 +1184,18 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                     <div>
                       <p className="text-sm font-semibold text-foreground">#{order.id.slice(-6).toUpperCase()}</p>
                       <p className="text-xs text-muted-foreground">₱{Number(order.totalAmount).toFixed(2)}</p>
+                      {order.isPreorder && (
+                        <div className="mt-1">
+                          <span className="inline-flex rounded-full bg-violet-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-violet-600">
+                            Pre-order
+                          </span>
+                          {order.scheduledPickupAt && (
+                            <p className="mt-0.5 text-xs font-medium text-violet-600">
+                              Pickup {formatSlotLabel(order.scheduledPickupAt)}
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <div>
@@ -1592,6 +1605,22 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                     <span className="text-xs text-muted-foreground block">Requested Pasabuy?</span>
                     <span className="font-semibold text-foreground">{selectedOrder.isPasabuyRequest ? 'Yes' : 'No'}</span>
                   </div>
+                  <div>
+                    <span className="text-xs text-muted-foreground block">Order Type</span>
+                    <span className={`font-semibold ${selectedOrder.isPreorder ? 'text-violet-600' : 'text-foreground'}`}>
+                      {selectedOrder.isPreorder ? 'Pre-order' : 'Order now'}
+                    </span>
+                  </div>
+                  {selectedOrder.isPreorder && (
+                    <div className="col-span-2">
+                      <span className="text-xs text-muted-foreground block">Scheduled Pickup</span>
+                      <span className="font-semibold text-violet-600">
+                        {selectedOrder.scheduledPickupAt
+                          ? formatSlotLabel(selectedOrder.scheduledPickupAt)
+                          : 'Not set'}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {selectedOrder.isPasabuyRequest && (
