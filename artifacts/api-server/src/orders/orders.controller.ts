@@ -206,6 +206,18 @@ export class OrdersController {
     return this.ordersService.getCustomerOrders(user.sub);
   }
 
+  // BUG-006: declared before ':id' so "active" is never read as an order id.
+  @Get('active')
+  @UseGuards(RolesGuard)
+  @Roles('BUYER')
+  @ApiOperation({
+    summary:
+      'My in-progress orders (placed or joined as a group member), to rebuild the order-status widget after a reconnect or login',
+  })
+  async getActiveOrders(@CurrentUser() user: JwtPayload) {
+    return this.ordersService.getActiveOrders(user.sub);
+  }
+
   @Get('ready-for-pickup')
   @UseGuards(RolesGuard)
   @Roles('BUYER')

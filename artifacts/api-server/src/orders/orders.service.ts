@@ -29,6 +29,17 @@ import {
   validatePreorderSlot,
 } from './preorder-slot.policy';
 
+// BUG-006: statuses an order-status widget keeps showing; unpaid PENDING
+// orders count only while newer than ACTIVE_PENDING_WINDOW_MS.
+export const ACTIVE_ORDER_STATUSES: OrderStatus[] = [
+  OrderStatus.SCHEDULED,
+  OrderStatus.PAID,
+  OrderStatus.COOKING,
+  OrderStatus.OUT_FOR_DELIVERY,
+  OrderStatus.READY_FOR_PICKUP,
+];
+export const ACTIVE_PENDING_WINDOW_MS = 2 * 60 * 60 * 1000;
+
 // Same instant, whatever offset the client used ("08:00+08:00" == "00:00Z").
 function samePickup(stored: Date | null, requested: Date | null): boolean {
   return (stored?.getTime() ?? null) === (requested?.getTime() ?? null);
@@ -550,6 +561,59 @@ export class OrdersService {
               : 'GROUP_MEMBER',
         };
       }),
+    };
+  }
+
+  /**
+   * BUG-006: the student's in-progress orders - ones they placed and group
+   * orders they joined - so the order-status widget can be rebuilt after a
+   * reconnect, reload or new login. Unpaid PENDING orders only count while
+   * recent, so abandoned checkouts do not come back. Newest first.
+   */
+  async getActiveOrders(userId: string, now: Date = new Date()) {
+    const recentPending = new Date(now.getTime() - ACTIVE_PENDING_WINDOW_MS);
+    const orders = await this.prisma.order.findMany({
+      where: {
+        AND: [
+          { OR: [
+            { customerId: userId },
+            { groupOrder: { participants: { some: { userId, status: 'JOINED' } } } },
+          ] },
+          { OR: [
+            { status: { in: ACTIVE_ORDER_STATUSES } },
+            { status: OrderStatus.PENDING, createdAt: { gte: recentPending } },
+          ] },
+        ],
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 20,
+      select: {
+        id: true,
+        customerId: true,
+        status: true,
+        orderType: true,
+        isPreorder: true,
+        scheduledPickupAt: true,
+        createdAt: true,
+        updatedAt: true,
+        vendor: { select: { id: true, name: true } },
+      },
+    });
+
+    return {
+      serverTime: now,
+      orders: orders.map((order) => ({
+        id: order.id,
+        orderReference: order.id.slice(0, 8).toUpperCase(),
+        status: order.status,
+        orderType: order.orderType,
+        isPreorder: order.isPreorder,
+        scheduledPickupAt: order.scheduledPickupAt,
+        role: order.customerId === userId ? 'CUSTOMER' : 'GROUP_MEMBER',
+        vendor: order.vendor,
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+      })),
     };
   }
 
