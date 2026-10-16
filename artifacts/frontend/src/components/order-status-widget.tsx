@@ -450,9 +450,13 @@ export function OrderStatusWidget() {
       }
 
       const apiBaseUrl = import.meta.env.VITE_API_BASE_URL;
-      const socketOrigin = apiBaseUrl
-        ? new URL(apiBaseUrl, window.location.origin).origin
-        : "http://localhost:5000";
+      const socketUrl = import.meta.env.VITE_SOCKET_URL;
+
+      const socketOrigin = socketUrl
+        ? socketUrl.replace(/\/+$/, "")
+        : apiBaseUrl
+          ? new URL(apiBaseUrl, window.location.origin).origin
+          : "http://localhost:5000";
 
       if (socket) {
         socket.auth = { token };
