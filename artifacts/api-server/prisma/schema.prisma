@@ -795,7 +795,7 @@ model FeaturedListingSettings {
   /// at a discount keep running until their plan ends.
   introDiscountEnabled Boolean @default(true)
   version Int @default(1)
-  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(6)
   @@map("featured_listing_settings")
 }
 
@@ -860,7 +860,7 @@ model Deal {
   triggerValue  Decimal?         @db.Decimal(10, 2)
   isActive      Boolean          @default(true)
   createdAt     DateTime         @default(now()) @db.Timestamptz(6)
-  updatedAt     DateTime         @updatedAt @db.Timestamptz(6)
+  updatedAt     DateTime         @default(now()) @updatedAt @db.Timestamptz(6)
   vendor        Vendor           @relation(fields: [vendorId], references: [id], onDelete: Cascade)
   product       Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
 
@@ -1132,7 +1132,7 @@ model Wallet {
   userId String @id @db.Uuid
   balance Decimal @default(0) @db.Decimal(10, 2)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
-  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   entries WalletEntry[]
   @@map("wallets")
 }
@@ -1146,9 +1146,9 @@ model WalletEntry {
   paymentId String? @unique @db.Uuid
   refundId String? @unique @db.Uuid
   createdAt DateTime @default(now()) @db.Timestamptz(6)
-  wallet Wallet @relation(fields: [userId], references: [userId], onDelete: Restrict)
-  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  refund Refund? @relation(fields: [refundId], references: [id], onDelete: Restrict)
+  wallet Wallet @relation(fields: [userId], references: [userId], onDelete: Restrict, onUpdate: NoAction)
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  refund Refund? @relation(fields: [refundId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   @@index([userId, createdAt])
   @@map("wallet_entries")
 }
