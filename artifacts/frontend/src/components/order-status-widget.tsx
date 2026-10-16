@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   getTrackedOrderIds,
   ORDER_TRACKING_CHANGED_EVENT,
+  startOrderTracking,
   stopTrackingOrder,
 } from "@/features/orders/order-tracking";
 import {
@@ -457,6 +458,26 @@ export function OrderStatusWidget() {
       }
     };
 
+    // BUG-006: rebuild the widget list from the server after a reconnect,
+    // reload or new login, so in-progress orders (placed or joined as a
+    // group member) reappear even if local tracking was lost.
+    const restoreActiveOrders = async () => {
+      if (!localStorage.getItem("token")) return;
+      try {
+        const result = await fetchWithAuth<{ orders: Array<{ id: string }> }>("/orders/active");
+        if (disposed) return;
+        for (const order of result.orders) {
+          if (!startOrderTracking(order.id)) break; // widget slots are full
+        }
+      } catch {
+        // Offline or not a student: keep whatever is already tracked.
+      }
+    };
+
+    const handleOnline = () => {
+      void restoreActiveOrders();
+    };
+
     const connectSocket = () => {
       const token = localStorage.getItem("token");
 
@@ -486,8 +507,10 @@ export function OrderStatusWidget() {
         transports: ["websocket", "polling"],
       });
 
+      // Fires on the first connect and after every reconnect.
       socket.on("realtime.ready", () => {
         void recoverReadyOrders();
+        void restoreActiveOrders();
       });
 
       socket.on("order.ready", (payload: ReadyOrder) => {
@@ -503,13 +526,16 @@ export function OrderStatusWidget() {
     };
 
     connectSocket();
+    void restoreActiveOrders();
     window.addEventListener(AUTH_STATE_CHANGED_EVENT, connectSocket);
     window.addEventListener("storage", handleStorage);
+    window.addEventListener("online", handleOnline);
 
     return () => {
       disposed = true;
       window.removeEventListener(AUTH_STATE_CHANGED_EVENT, connectSocket);
       window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("online", handleOnline);
       socket?.disconnect();
       channel?.close();
       if (audioContextRef.current && audioContextRef.current.state !== "closed") {
@@ -657,9 +683,14 @@ function TrackedOrderCard({
             window.clearInterval(timer);
           }
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           if (cancelled) return;
-          stopTrackingOrder(orderId);
+          // BUG-006: only drop the widget when the order is really gone (404).
+          // Offline, server errors and an expired session keep it; the next
+          // poll or reconnect recovers it.
+          if ((error as { status?: number } | null)?.status === 404) {
+            stopTrackingOrder(orderId);
+          }
         });
     };
 

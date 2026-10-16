@@ -334,22 +334,27 @@ export async function fetchWithAuth<T = unknown>(
     headers,
   });
 
+  // BUG-006: errors carry the HTTP status so callers can tell "gone" (404)
+  // apart from "offline/server error" without parsing messages.
+  const withStatus = (message: string) =>
+    Object.assign(new Error(message), { status: response.status });
+
   // US-008: Redirect when token is invalid or expired
   if (response.status === 401) {
     logoutUser();
-    throw new Error("Unauthorized / Session expired. Redirecting to login.");
+    throw withStatus("Unauthorized / Session expired. Redirecting to login.");
   }
 
   // US-006: Handle forbidden response
   if (response.status === 403) {
-    throw new Error(
+    throw withStatus(
       "Forbidden: You do not have permission to perform this action.",
     );
   }
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.message || "An error occurred.");
+    throw withStatus(errorData.message || "An error occurred.");
   }
 
   return response.json() as Promise<T>;
