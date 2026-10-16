@@ -385,7 +385,10 @@ export class GroupOrdersService {
 
       if (groupOrder.status !== 'OPEN') {
         throw new BadRequestException(
-          'Items can only be added while the group order is open',
+          groupOrder.status === 'FINALIZED' || groupOrder.status === 'CANCELLED'
+            ? `This group order is already ${groupOrder.status === 'FINALIZED' ? 'placed' : 'cancelled'}; ` +
+              'leave it to order on your own'
+            : 'Items can only be added while the group order is open',
         );
       }
 
@@ -752,10 +755,23 @@ export class GroupOrdersService {
       groupOrder.carts.map((cart) => [cart.userId, cart]),
     );
 
+    const shares = groupOrder.order?.paymentShares ?? [];
+
     return {
       id: groupOrder.id,
       code: groupOrder.code,
       status: groupOrder.status,
+      // BUG-005: once false the client should stop sending "add to cart" to
+      // this group and fall back to the student's own cart.
+      acceptingItems: groupOrder.status === 'OPEN',
+      paymentSplit: groupOrder.order
+        ? {
+            mode: groupOrder.paymentSplitMode,
+            sharesReady: shares.length > 0,
+            // The owner can still switch mode (e.g. to CUSTOM) until anyone pays.
+            canChange: !shares.some((share) => share.status === 'PAID' || share.paymentId !== null),
+          }
+        : null,
       initiator: groupOrder.initiator,
       vendor: groupOrder.vendor
         ? {
@@ -960,6 +976,9 @@ export class GroupOrdersService {
         },
         data: {
           status: 'FINALIZED',
+          // BUG-005: default split; the owner may switch to EQUAL/CUSTOM
+          // before anyone pays.
+          paymentSplitMode: 'ITEM_BASED',
         },
       });
 
@@ -1028,11 +1047,35 @@ export class GroupOrdersService {
         },
       });
 
+      // BUG-005: every participant can pay their own share straight away
+      // (each pays for what they ordered). Without this, members had nothing
+      // to pay until the owner completed a separate split step, which the
+      // Custom Amount screen could skip.
+      const defaultShares = this.calculateItemBasedShares(
+        joinedParticipants,
+        order.items,
+        this.decimalToCents(totalAmount),
+      );
+      await tx.paymentShare.createMany({
+        data: defaultShares.map((share) => ({
+          orderId: order.id,
+          payerUserId: share.payerUserId,
+          amountDue: new Prisma.Decimal(share.amountCents).div(100),
+          status: 'PENDING',
+        })),
+      });
+      const paymentShares = await tx.paymentShare.findMany({
+        where: { orderId: order.id },
+        include: { payer: { select: { id: true, fullName: true, email: true } } },
+        orderBy: { createdAt: 'asc' },
+      });
+
       await tx.auditRecord.create({ data: {
         actorUserId: userId, actionType: 'ORDER_CREATED',
         entityType: 'Order', entityId: order.id,
         afterState: { status: order.status, vendorId: order.vendorId,
-          groupOrderId, totalAmount: totalAmount.toFixed(2), orderType: order.orderType },
+          groupOrderId, totalAmount: totalAmount.toFixed(2), orderType: order.orderType,
+          paymentSplitMode: 'ITEM_BASED', paymentShares: defaultShares.length },
       } });
       await tx.auditRecord.create({ data: {
         actorUserId: userId, actionType: 'FEE_ASSESSED',
@@ -1057,6 +1100,13 @@ export class GroupOrdersService {
             marketplaceFee: order.marketplaceFee.toFixed(2),
             totalAmount: order.totalAmount.toFixed(2),
             estimatedReadyAt: order.estimatedReadyAt,
+            paymentSplitMode: 'ITEM_BASED',
+            paymentShares: paymentShares.map((share) => ({
+              id: share.id,
+              payer: share.payer,
+              amountDue: share.amountDue.toFixed(2),
+              status: share.status,
+            })),
             items: order.items.map((item) => ({
               id: item.id,
               productId: item.productId,
@@ -1286,16 +1336,20 @@ export class GroupOrdersService {
   }> {
     const sortedParticipants = [...participants].sort((a, b) => a.id.localeCompare(b.id));
 
-    const participantSubtotals = sortedParticipants.map((participant) => {
-      const subtotal = items
-        .filter((item) => item.participantId === participant.id)
-        .reduce((sum, item) => sum.add(item.lineSubtotal), new Prisma.Decimal(0));
+    // BUG-005: members who ordered nothing get no share. A PHP 0 share can
+    // never be paid (checkout rejects 0), so it would keep the order PENDING.
+    const participantSubtotals = sortedParticipants
+      .map((participant) => {
+        const subtotal = items
+          .filter((item) => item.participantId === participant.id)
+          .reduce((sum, item) => sum.add(item.lineSubtotal), new Prisma.Decimal(0));
 
-      return {
-        payerUserId: participant.userId,
-        subtotalCents: this.decimalToCents(subtotal),
-      };
-    });
+        return {
+          payerUserId: participant.userId,
+          subtotalCents: this.decimalToCents(subtotal),
+        };
+      })
+      .filter((participant) => participant.subtotalCents > 0);
 
     const totalItemCents = participantSubtotals.reduce(
       (sum, participant) => sum + participant.subtotalCents,
