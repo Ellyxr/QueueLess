@@ -279,6 +279,7 @@ export function OrderStatusWidget() {
       return true;
     };
 
+    
     const playBuzzer = async (): Promise<boolean> => {
       if (!soundEnabledRef.current) return false;
 
@@ -296,27 +297,42 @@ export function OrderStatusWidget() {
 
         audioContextRef.current ??= new AudioContextClass();
         const context = audioContextRef.current;
+
         if (context.state === "suspended") {
           await context.resume();
         }
 
-        const oscillator = context.createOscillator();
-        const gain = context.createGain();
+        const notes = [
+          { frequency: 880, start: 0, duration: 0.35 },
+          { frequency: 880, start: 0.4, duration: 0.3 },
+        ];
 
-        oscillator.type = "square";
-        oscillator.frequency.value = 880;
-        gain.gain.value = 0.08;
+        for (const note of notes) {
+          const oscillator = context.createOscillator();
+          const gain = context.createGain();
 
-        oscillator.connect(gain);
-        gain.connect(context.destination);
+          oscillator.type = "square";
+          oscillator.frequency.value = note.frequency;
 
-        oscillator.start();
-        oscillator.stop(context.currentTime + 0.35);
+          const startTime = context.currentTime + note.start;
+          const endTime = startTime + note.duration;
 
-        oscillator.onended = () => {
-          oscillator.disconnect();
-          gain.disconnect();
-        };
+          gain.gain.setValueAtTime(0, startTime);
+          gain.gain.linearRampToValueAtTime(0.08, startTime + 0.015);
+          gain.gain.setValueAtTime(0.08, endTime - 0.015);
+          gain.gain.linearRampToValueAtTime(0, endTime);
+
+          oscillator.connect(gain);
+          gain.connect(context.destination);
+
+          oscillator.start(startTime);
+          oscillator.stop(endTime);
+
+          oscillator.onended = () => {
+            oscillator.disconnect();
+            gain.disconnect();
+          };
+        }
 
         setSoundNeedsInteraction(false);
         return true;
@@ -325,6 +341,7 @@ export function OrderStatusWidget() {
         return false;
       }
     };
+
 
     const showReadyAlert = (order: ReadyOrder) => {
       const vendorName = order.vendor.name;
