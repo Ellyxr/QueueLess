@@ -11,7 +11,9 @@ import { PricingService } from '../common/pricing/pricing.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { CreatePasabuyRequestDto, PreviewPasabuyRequestDto } from './dto/create-pasabuy-request.dto';
 
-const REQUEST_WINDOW_MS = 15 * 60_000;
+// How long a posted request stays open for a deliverer to accept it.
+export const REQUEST_WINDOW_MINUTES = 15;
+const REQUEST_WINDOW_MS = REQUEST_WINDOW_MINUTES * 60_000;
 
 @Injectable()
 export class PasabuyCreationService {
@@ -33,10 +35,20 @@ export class PasabuyCreationService {
     const assessment = assessDropoff(dto.dropoffLatitude, dto.dropoffLongitude,
       order.vendor.pickupLatitude, order.vendor.pickupLongitude);
     const fee = this.pricing.calculatePasabuyFee(assessment.inCampus);
+    // BUG-007: the modal shows the expiry too. The saved expiry is set when
+    // the request is posted, so preview gives the window and the expiry if
+    // posted now; the create response returns the saved value.
+    const now = this.clock();
     return { ...assessment, dropoffLatitude: dto.dropoffLatitude, dropoffLongitude: dto.dropoffLongitude,
       dropoffLocation: dto.dropoffLocation?.trim() || `${dto.dropoffLatitude.toFixed(6)}, ${dto.dropoffLongitude.toFixed(6)}`,
-      convenienceFee: fee.amount.toFixed(2), feeTier: fee.feeTier, currency: 'PHP' };
+      convenienceFee: fee.amount.toFixed(2), feeTier: fee.feeTier, currency: 'PHP',
+      requestWindowMinutes: REQUEST_WINDOW_MINUTES,
+      estimatedExpiresAt: new Date(now.getTime() + REQUEST_WINDOW_MS),
+      serverTime: now };
   }
+
+  // Current time; replaced in tests.
+  clock: () => Date = () => new Date();
 
   async create(userId: string, dto: CreatePasabuyRequestDto) {
     if (dto.termsAccepted !== true) {
@@ -69,7 +81,7 @@ export class PasabuyCreationService {
         const inCampus = assessment.inCampus;
         const feeAssessment = this.pricing.calculatePasabuyFee(inCampus);
         const fee = feeAssessment.amount;
-        const now = new Date();
+        const now = this.clock();
         const expired = await tx.pasabuyRequest.findMany({
           where: { relatedOrderId: order.id, status: 'PENDING', expiresAt: { lte: now } },
           select: { id: true },
@@ -152,7 +164,15 @@ export class PasabuyCreationService {
         await this.realtimeGateway.emitPasabuyStatusUpdated(expiredId);
       }
       await this.realtimeGateway.emitPasabuyStatusUpdated(request.id);
-      return request;
+      // BUG-007: the saved fee and expiry, formatted like the preview so the
+      // values shown before and after posting can be compared directly.
+      return {
+        ...request,
+        convenienceFee: request.convenienceFee.toFixed(2),
+        totalAmount: request.totalAmount.toFixed(2),
+        currency: 'PHP',
+        requestWindowMinutes: REQUEST_WINDOW_MINUTES,
+      };
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new ConflictException('Order already has an active Pasabuy request');

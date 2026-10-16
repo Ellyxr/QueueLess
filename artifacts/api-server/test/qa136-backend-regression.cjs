@@ -265,7 +265,7 @@ test('Pasabuy outside radius requires confirmation; valid confirmation persists 
   const dto={orderId:'order',dropoffLatitude:0.003,dropoffLongitude:0,termsAccepted:true};
   await reject(service.create('buyer',dto),400);assert.equal(requests.length,0);assert.equal(marked,false);
   const request=await service.create('buyer',{...dto,outsideRadiusConfirmed:true});
-  assert(request.deliveryDistanceMeters>270);assert.equal(request.dropoffLocation,'0.003000, 0.000000');assert.equal(request.dropoffLatitude,0.003);assert.equal(request.convenienceFee.toFixed(2),'30.00');
+  assert(request.deliveryDistanceMeters>270);assert.equal(request.dropoffLocation,'0.003000, 0.000000');assert.equal(request.dropoffLatitude,0.003);assert.equal(request.convenienceFee,'30.00');
   assert.equal(audits.find(a=>a.actionType==='PASABUY_CREATED').afterState.outsideRadiusConfirmed,true);
 });
 test('HTTP routes enforce authentication, admin settings validation and vendor report privacy',async()=>{
