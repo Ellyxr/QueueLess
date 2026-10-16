@@ -100,7 +100,6 @@ export function PasabuyStudentIdCard() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleFileChange = async (files: FileList | null) => {

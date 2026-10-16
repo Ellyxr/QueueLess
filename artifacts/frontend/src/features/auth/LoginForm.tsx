@@ -31,8 +31,8 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSubmit }) => {
     try {
       setIsLoading(true);
       await onSubmit({ email, password });
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Invalid email or password.');
+    } catch (err: unknown) {
+      setErrorMessage((err instanceof Error && err.message) || 'Invalid email or password.');
     } finally {
       setIsLoading(false);
     }

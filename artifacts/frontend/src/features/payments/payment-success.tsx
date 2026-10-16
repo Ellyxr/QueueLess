@@ -225,7 +225,6 @@ function OrderPaymentSuccessPage() {
     hasAdvancedRef.current = true;
     setIsAdvancing(true);
     void advanceQueue(queue);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [confirmed]);
 
   return (

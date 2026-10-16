@@ -5,6 +5,42 @@ on:
     branches: ["main"]
 
 jobs:
+  # BUG-001 / TC-010: lint and type checks run on every PR and report their
+  # own status, separately from the build and tests.
+  lint-and-typecheck:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The API's types come from the generated Prisma client.
+      - name: Generate Prisma client
+        run: pnpm --filter @workspace/api-server prisma:generate
+
+      - name: Typecheck (shared libs, API, frontend, scripts)
+        run: pnpm run typecheck
+
+      - name: Lint API
+        run: pnpm --filter @workspace/api-server lint
+
+      - name: Lint frontend
+        run: pnpm --filter @workspace/frontend lint
+
   build-and-check:
     runs-on: ubuntu-latest
     

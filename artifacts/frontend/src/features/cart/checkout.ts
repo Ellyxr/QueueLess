@@ -65,7 +65,7 @@ export async function createOrderForVendorItems(
 ): Promise<{ orderId: string; checkoutUrl: string }> {
   let activeCartId = "";
   for (const item of items) {
-    const cartResponse: any = await fetchWithAuth("/carts/items", {
+    const cartResponse = await fetchWithAuth<{ id?: string; cartId?: string }>("/carts/items", {
       method: "POST",
       body: JSON.stringify({
         productId: item.productId,
@@ -73,8 +73,9 @@ export async function createOrderForVendorItems(
       }),
     });
 
-    if (cartResponse?.cartId || cartResponse?.id) {
-      activeCartId = cartResponse.cartId || cartResponse.id;
+    const responseCartId = cartResponse?.cartId || cartResponse?.id;
+    if (responseCartId) {
+      activeCartId = responseCartId;
     }
   }
 

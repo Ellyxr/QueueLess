@@ -123,8 +123,8 @@ export const RegisterForm: React.FC<RegisterFormProps> = ({ onSubmit }) => {
         role: selectedRole,
         businessName: selectedRole === "vendor" ? businessName : undefined,
       });
-    } catch (err: any) {
-      setErrorMessage(err.message || "Registration failed. Please try again.");
+    } catch (err: unknown) {
+      setErrorMessage((err instanceof Error && err.message) || "Registration failed. Please try again.");
     } finally {
       setIsLoading(false);
     }

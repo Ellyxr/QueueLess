@@ -63,6 +63,7 @@ import {
   type VendorDashboard,
   type VendorStorefront,
   type VendorQueueOrder,
+  type CancellationReason,
   type Weekday,
 } from '@/features/auth/api';
 import { EXTRA_CATEGORY } from '@/lib/product-extras';
@@ -287,7 +288,8 @@ export default function VendorPage({ username = 'Jordan' }: { username?: string 
 
     // US-017: Fetch Incoming Order Queue
     getVendorOrderQueue()
-      .then((data: any) => {
+      // The API returns { orders }, older responses a bare array or { data }.
+      .then((data: VendorQueueOrder[] | { orders?: VendorQueueOrder[]; data?: VendorQueueOrder[] }) => {
         const list = Array.isArray(data)
           ? data
           : Array.isArray(data?.orders)
@@ -658,7 +660,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
   const applyOrderStatusUpdate = async (
     orderId: string,
     newStatus: string,
-    extra?: { cancellationReason?: string; cancellationNote?: string },
+    extra?: { cancellationReason?: CancellationReason; cancellationNote?: string },
   ) => {
     if (isUpdatingStatusRef.current) return;
     const currentOrder = orderQueue.find((o) => o.id === orderId);
@@ -667,7 +669,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     isUpdatingStatusRef.current = true;
     setIsUpdatingStatus(true);
     try {
-      await updateOrderStatus(orderId, newStatus, extra as any);
+      await updateOrderStatus(orderId, newStatus, extra);
       showToast(`Order status updated to ${newStatus}`);
 
       const impliesPaid = newStatus !== 'PENDING' && newStatus !== 'CANCELLED';
@@ -694,7 +696,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
   const handleCancelOrder = async () => {
     if (!cancelTarget || !cancelReason) return;
     await applyOrderStatusUpdate(cancelTarget.id, 'CANCELLED', {
-      cancellationReason: cancelReason,
+      cancellationReason: cancelReason as CancellationReason,
       ...(cancelReason === 'OTHER' ? { cancellationNote: cancelNote.trim() } : {}),
     });
     if (cancelReason === 'NOT_AVAILABLE' && cancelTarget.items) {
@@ -1190,7 +1192,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
 
                     <div className="text-sm text-foreground truncate">
                       {order.items && order.items.length > 0 ? (() => {
-                        const firstItem = order.items[0] as any;
+                        const firstItem = order.items[0];
                         const itemName = firstItem.productName || firstItem.name || firstItem.product?.name || 'Item';
                         return (
                           <span>
@@ -1600,7 +1602,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                   <h4 className="font-semibold text-foreground mb-2">Order Items</h4>
                   <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
                     {selectedOrder.items && selectedOrder.items.length > 0 ? (
-                      (selectedOrder.items as any[]).map((rawItem, idx) => {
+                      selectedOrder.items.map((rawItem, idx) => {
                         const item = rawItem;
                         const itemName = item.productName || item.name || item.product?.name || 'Product';
                         const itemPrice = Number(item.price || item.unitPrice || item.product?.price || 0);
@@ -1659,9 +1661,9 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                     CANCELLED
                   </Button>
                 </div>
-                {selectedOrder.status === 'CANCELLED' && (selectedOrder as any).cancellationReason && (
+                {selectedOrder.status === 'CANCELLED' && selectedOrder.cancellationReason && (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Cancellation reason: <span className="font-medium text-foreground">{(selectedOrder as any).cancellationReason.replace(/_/g, ' ')}</span>
+                    Cancellation reason: <span className="font-medium text-foreground">{selectedOrder.cancellationReason.replace(/_/g, ' ')}</span>
                   </p>
                 )}
               </div>
