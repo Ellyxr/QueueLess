@@ -95,3 +95,61 @@ jobs:
       # recovery). They run against the compiled API, so they follow the build.
       - name: Run backend tests
         run: pnpm --filter @workspace/api-server test
+
+  # BUG-002 / TC-011: every PR applies all Prisma migrations to a clean
+  # PostgreSQL and fails if one breaks, is pending/failed, or if the result
+  # does not match schema.prisma (schema edited without a migration).
+  migrations:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: migrations
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migrations
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/migrations
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @workspace/api-server prisma:generate
+
+      - name: Apply all migrations to a clean database
+        run: pnpm --filter @workspace/api-server exec prisma migrate deploy
+
+      - name: Migration status (nothing pending or failed)
+        run: pnpm --filter @workspace/api-server exec prisma migrate status
+
+      - name: Schema drift check (migrations match schema.prisma)
+        run: pnpm --filter @workspace/api-server exec prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
+
+      - name: Verify database (connections and migrations)
+        run: pnpm --filter @workspace/api-server db:verify
