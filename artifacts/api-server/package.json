@@ -17,6 +17,7 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "db:migrate:status": "prisma migrate status",
     "db:verify": "tsx prisma/verify-db.ts",
+    "db:verify:clean": "tsx prisma/verify-clean-migration.ts",
     "erd": "tsx prisma/generate-erd.ts",
     "erd:check": "tsx prisma/generate-erd.ts --check",
     "smoke": "tsx e2e/smoke.ts",
