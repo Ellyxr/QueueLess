@@ -216,6 +216,10 @@ export interface VendorQueueOrder {
   userId?: string;
   paymentStatus?: string;
   isPasabuyRequest?: boolean;
+  /** BUG-009: pre-orders stay flagged after they are released into the live queue. */
+  isPreorder?: boolean;
+  /** ISO timestamp of the pickup slot the student chose; null for ASAP orders. */
+  scheduledPickupAt?: string | null;
   status: string;
   items?: VendorOrderItem[];
   cancellationReason?: CancellationReason | null;
