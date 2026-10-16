@@ -1,0 +1,674 @@
+%% QueueLess entity-relationship diagram (ERD)
+%% Generated from artifacts/api-server/prisma/schema.prisma - do not edit by hand.
+%% Regenerate: pnpm --filter @workspace/api-server erd   (CI fails when this file is stale)
+%% View: paste into https://mermaid.live or any Mermaid viewer.
+%% Review: the approved pull request that changes this file is the review record.
+%% 48 tables, 101 relationships, schema sha256 bd32ecc867ac
+%% Keys: PK primary key, FK foreign key, UK unique. Relationship labels are the Prisma relation fields.
+erDiagram
+  Cart ||--o{ CartItem : "cart"
+  Event |o--o{ Order : "event"
+  Event ||--o{ EventVendorParticipation : "event"
+  FeaturedListing |o--o{ Payment : "featuredListing"
+  FeaturedListing |o--o| VendorLedgerEntry : "featuredListing"
+  FeaturedListingPlan |o--o{ FeaturedListing : "plan"
+  GroupOrder |o--o{ Cart : "groupOrder"
+  GroupOrder |o--o| Order : "groupOrder"
+  GroupOrder ||--o{ GroupOrderParticipant : "groupOrder"
+  GroupOrderParticipant |o--o{ OrderItem : "participant"
+  Order |o--o{ Cart : "order"
+  Order |o--o{ FeeAssessment : "order"
+  Order |o--o{ OrderIdempotencyKey : "order"
+  Order |o--o{ PasabuyRequest : "relatedOrder"
+  Order |o--o{ Refund : "order"
+  Order |o--o{ Report : "reportedOrder"
+  Order |o--o| VendorLedgerEntry : "order"
+  Order ||--o{ OrderItem : "order"
+  Order ||--o{ OrderStatusHistory : "order"
+  Order ||--o{ PaymentShare : "order"
+  Order ||--o| OrderReview : "order"
+  OrderItem |o--o{ Refund : "orderItem"
+  OrderReview |o--o{ Report : "reportedReview"
+  Organization |o--o{ Event : "organization"
+  PasabuyRequest |o--o{ FeeAssessment : "pasabuyRequest"
+  PasabuyRequest |o--o{ Report : "reportedPasabuy"
+  PasabuyRequest |o--o| Payment : "pasabuyRequest"
+  PasabuyRequest ||--o{ PasabuyStatusHistory : "pasabuyRequest"
+  Payment |o--o{ PaymentIdempotencyKey : "payment"
+  Payment |o--o{ PaymentShare : "payment"
+  Payment |o--o{ Report : "reportedPayment"
+  Payment |o--o| WalletEntry : "payment"
+  Payment ||--o{ Refund : "payment"
+  PaymentShare ||--o{ PaymentIdempotencyKey : "paymentShare"
+  Payout |o--o{ VendorLedgerEntry : "payout"
+  Product |o--o{ FeaturedListing : "product"
+  Product |o--o{ Report : "reportedProduct"
+  Product ||--o{ CartItem : "product"
+  Product ||--o{ Deal : "product"
+  Product ||--o{ OrderItem : "product"
+  Refund |o--o| WalletEntry : "refund"
+  Report ||--o{ ReportStatusHistory : "report"
+  Report ||--o{ ReportVendorResponse : "report"
+  SubscriptionPlan ||--o{ VendorApplication : "plan"
+  SubscriptionPlan ||--o{ VendorSubscription : "plan"
+  User |o--o{ AuditRecord : "actor"
+  User |o--o{ Event : "createdBy"
+  User |o--o{ OrderReview : "hiddenBy"
+  User |o--o{ OrderStatusHistory : "changedByUser"
+  User |o--o{ PasabuyRequest : "fulfiller"
+  User |o--o{ PasabuyStatusHistory : "changedByUser"
+  User |o--o{ Report : "reportedUser"
+  User |o--o{ ReportVendorResponse : "reviewer"
+  User ||--o{ Cart : "user"
+  User ||--o{ GroupOrder : "initiator"
+  User ||--o{ GroupOrderParticipant : "user"
+  User ||--o{ Notification : "user"
+  User ||--o{ Order : "customer"
+  User ||--o{ OrderIdempotencyKey : "user"
+  User ||--o{ OrderReview : "reviewer"
+  User ||--o{ PasabuyRequest : "requester"
+  User ||--o{ Payment : "payer"
+  User ||--o{ PaymentIdempotencyKey : "user"
+  User ||--o{ PaymentShare : "payer"
+  User ||--o{ RefreshToken : "user"
+  User ||--o{ Refund : "requestedBy"
+  User ||--o{ Report : "reporter"
+  User ||--o{ ReportStatusHistory : "admin"
+  User ||--o{ ReportVendorResponse : "author"
+  User ||--o{ RoleAssignment : "user"
+  User ||--o{ VendorApplication : "student"
+  User ||--o{ VendorApplicationDocument : "owner"
+  User ||--o{ VendorFavorite : "user"
+  User ||--o| PasabuyProfile : "user"
+  User ||--o| Vendor : "owner"
+  User ||--o| Wallet : "user"
+  Vendor |o--o{ GroupOrder : "vendor"
+  Vendor |o--o{ Report : "reportedVendor"
+  Vendor |o--o{ VendorApplication : "vendor"
+  Vendor ||--o{ Cart : "vendor"
+  Vendor ||--o{ Deal : "vendor"
+  Vendor ||--o{ EventVendorParticipation : "vendor"
+  Vendor ||--o{ FeaturedListing : "vendor"
+  Vendor ||--o{ Order : "vendor"
+  Vendor ||--o{ OrderReview : "vendor"
+  Vendor ||--o{ Payout : "vendor"
+  Vendor ||--o{ Product : "vendor"
+  Vendor ||--o{ ReportVendorResponse : "vendor"
+  Vendor ||--o{ VendorAvailability : "vendor"
+  Vendor ||--o{ VendorFavorite : "vendor"
+  Vendor ||--o{ VendorLedgerEntry : "vendor"
+  Vendor ||--o{ VendorPreorderAvailability : "vendor"
+  Vendor ||--o{ VendorQrCode : "vendor"
+  Vendor ||--o{ VendorSubscription : "vendor"
+  Vendor ||--o| FeaturedIntroClaim : "vendor"
+  VendorApplicationDocument |o--o| VendorApplication : "signedContractDocument"
+  VendorApplicationDocument ||--o| VendorApplication : "idSelfieDocument"
+  VendorApplicationDocument ||--o| VendorApplication : "validIdDocument"
+  VendorSubscription |o--o{ Payment : "vendorSubscription"
+  VendorSubscription |o--o| VendorApplication : "subscription"
+  Wallet ||--o{ WalletEntry : "wallet"
+
+  AuditRecord {
+    String id PK
+    String actorUserId FK "optional"
+    String actionType
+    String entityType
+    String entityId
+    Json beforeState "optional"
+    Json afterState "optional"
+    DateTime createdAt
+  }
+  Cart {
+    String id PK
+    String userId FK
+    String vendorId FK
+    String groupOrderId FK "optional"
+    CartStatus status
+    DateTime createdAt
+    DateTime updatedAt
+    String orderId FK "optional"
+  }
+  CartItem {
+    String id PK
+    String cartId FK
+    String productId FK
+    Int quantity
+    DateTime addedAt
+  }
+  Deal {
+    String id PK
+    String vendorId FK
+    String productId FK
+    DealDiscountType discountType
+    Decimal discountValue
+    DealTriggerType triggerType
+    Decimal triggerValue "optional"
+    Boolean isActive
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  EmailVerificationCode {
+    String id PK
+    String email
+    String codeHash
+    EmailVerificationPurpose purpose
+    DateTime expiresAt
+    DateTime consumedAt "optional"
+    Int attempts
+    DateTime createdAt
+  }
+  Event {
+    String id PK
+    String organizationId FK "optional"
+    String createdByUserId FK "optional"
+    String name
+    String description "optional"
+    String location "optional"
+    DateTime startAt
+    DateTime endAt
+    EventStatus status
+    String bannerImageUrl "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  EventVendorParticipation {
+    String id PK
+    String eventId FK
+    String vendorId FK
+    EventVendorStatus status
+    DateTime joinedAt "optional"
+  }
+  FeaturedIntroClaim {
+    String vendorId PK, FK
+    Int rank UK
+    DateTime consumedAt "optional"
+    DateTime createdAt
+  }
+  FeaturedListing {
+    Int durationDaysSnapshot "optional"
+    Int durationMonthsSnapshot "optional"
+    Int settingsVersion "optional"
+    String purchaseKey "optional"
+    String purchaseFingerprint "optional"
+    String id PK
+    String vendorId FK
+    String productId FK "optional"
+    String planId FK "optional"
+    FeaturedListingPlacement placement
+    DateTime startDate "optional"
+    DateTime endDate "optional"
+    Decimal pricePaid "optional"
+    Int discountPercent
+    String imageUrl "optional"
+    FeaturedListingStatus status
+    DateTime createdAt
+  }
+  FeaturedListingPlan {
+    Int durationMonths "optional"
+    Boolean managedMonthly
+    String id PK
+    String name UK
+    FeaturedListingPlacement placement
+    Decimal price
+    Int durationDays
+    Boolean isActive
+    DateTime createdAt
+  }
+  FeaturedListingSettings {
+    Int id PK
+    Decimal monthlyPrice
+    Int firstVendorDiscount
+    Int secondVendorDiscount
+    Int thirdVendorDiscount
+    Boolean discountOnRenewals
+    Boolean introDiscountEnabled
+    Int version
+    DateTime updatedAt
+  }
+  FeeAssessment {
+    String id PK
+    FeeAssessmentType type
+    String orderId FK, UK "optional"
+    String pasabuyRequestId FK, UK "optional"
+    Decimal basisAmount "optional"
+    Decimal ratePercent "optional"
+    Decimal amount
+    PasabuyFeeTier feeTier "optional"
+    Int distanceMeters "optional"
+    String ruleVersion
+    DateTime assessedAt
+    DateTime createdAt
+  }
+  GroupOrder {
+    String id PK
+    String initiatorUserId FK
+    String vendorId FK "optional"
+    String code UK
+    GroupOrderStatus status
+    GroupPaymentSplitMode paymentSplitMode "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  GroupOrderParticipant {
+    String id PK
+    String groupOrderId FK
+    String userId FK
+    GroupOrderParticipantStatus status
+    DateTime joinedAt "optional"
+  }
+  Notification {
+    String id PK
+    String userId FK
+    String type
+    String title
+    String body
+    String relatedEntityType "optional"
+    String relatedEntityId "optional"
+    Boolean isRead
+    DateTime createdAt
+  }
+  Order {
+    String id PK
+    String customerId FK
+    String vendorId FK
+    String eventId FK "optional"
+    String groupOrderId FK, UK "optional"
+    OrderType orderType
+    OrderStatus status
+    Boolean isPasabuyRequest
+    Boolean isPreorder
+    CancellationReason cancellationReason "optional"
+    String cancellationNote "optional"
+    Decimal subtotal
+    Decimal marketplaceFee
+    Decimal totalAmount
+    DateTime estimatedReadyAt "optional"
+    DateTime scheduledPickupAt "optional"
+    DateTime reservationExpiresAt "optional"
+    DateTime queueReleaseAt "optional"
+    DateTime pickupWindowEndsAt "optional"
+    DateTime pickupConfirmedAt "optional"
+    DateTime paidAt "optional"
+    DateTime buyerContactPingAt "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  OrderIdempotencyKey {
+    String id PK
+    String userId FK
+    String key
+    String cartId
+    String eventId "optional"
+    String orderId FK "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  OrderItem {
+    String id PK
+    String orderId FK
+    String productId FK
+    String participantId FK "optional"
+    Int quantity
+    Decimal unitPriceSnapshot
+    Decimal lineSubtotal
+    DateTime removedAt "optional"
+    DateTime createdAt
+  }
+  OrderReview {
+    String id PK
+    String orderId FK, UK
+    String reviewerUserId FK
+    String vendorId FK
+    Int rating
+    String comment "optional"
+    DateTime hiddenAt "optional"
+    String hiddenByUserId FK "optional"
+    String hiddenReason "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  OrderStatusHistory {
+    String id PK
+    String orderId FK
+    OrderStatus status
+    String changedByUserId FK "optional"
+    String note "optional"
+    DateTime changedAt
+  }
+  Organization {
+    String id PK
+    String name
+    String description "optional"
+    String contactEmail "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  PasabuyProfile {
+    String id PK
+    String userId FK, UK
+    String studentId UK
+    String studentIdPhotoUrl "optional"
+    DateTime verifiedAt "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  PasabuyRequest {
+    String id PK
+    String requesterUserId FK
+    String fulfillerUserId FK "optional"
+    String relatedOrderId FK "optional"
+    PasabuyStatus status
+    String pickupLocation "optional"
+    String dropoffLocation "optional"
+    String itemDescription
+    Decimal convenienceFee
+    PasabuyFeeTier feeTier "optional"
+    Int deliveryDistanceMeters "optional"
+    Float dropoffLatitude "optional"
+    Float dropoffLongitude "optional"
+    Decimal totalAmount
+    DateTime acceptedAt "optional"
+    String pickupCode "optional"
+    DateTime pickupVerifiedAt "optional"
+    Int pickupVerificationAttempts
+    DateTime expiresAt "optional"
+    PasabuyPaymentStatus paymentStatus
+    DateTime paymentDeadline "optional"
+    DateTime termsAcceptedAt "optional"
+    DateTime pickedUpAt "optional"
+    DateTime deliveredAt "optional"
+    DateTime cancelledAt "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  PasabuyStatusHistory {
+    String id PK
+    String pasabuyRequestId FK
+    PasabuyStatus status
+    String changedByUserId FK "optional"
+    String note "optional"
+    DateTime changedAt
+  }
+  Payment {
+    String walletKey "optional"
+    String id PK
+    String payerUserId FK
+    PaymentPurpose purpose
+    String pasabuyRequestId FK, UK "optional"
+    String vendorSubscriptionId FK "optional"
+    String featuredListingId FK "optional"
+    Decimal amount
+    String currency
+    PaymentProvider provider
+    String providerPaymentId "optional"
+    String checkoutUrl "optional"
+    String providerPaymentResourceId "optional"
+    PaymentStatus status
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  PaymentIdempotencyKey {
+    String id PK
+    String userId FK
+    String key
+    String paymentShareId FK
+    String paymentId FK "optional"
+    String checkoutSessionId "optional"
+    String checkoutUrl "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  PaymentShare {
+    String id PK
+    String orderId FK
+    String payerUserId FK
+    Decimal amountDue
+    PaymentShareStatus status
+    String paymentId FK "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  Payout {
+    String id PK
+    String vendorId FK
+    Decimal amount
+    PayoutStatus status
+    String idempotencyKey UK "optional"
+    DateTime createdAt
+  }
+  Product {
+    String id PK
+    String vendorId FK
+    String name
+    String description "optional"
+    Decimal price
+    Int preparationTimeMinutes
+    String category "optional"
+    Boolean isAvailable
+    String imageUrl "optional"
+    String imageFileId "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  RefreshToken {
+    String id PK
+    String userId FK
+    String tokenHash UK
+    DateTime expiresAt
+    DateTime revokedAt "optional"
+    String replacedByTokenId "optional"
+    DateTime createdAt
+  }
+  Refund {
+    String id PK
+    String paymentId FK
+    String orderId FK "optional"
+    String orderItemId FK "optional"
+    Decimal amount
+    String reason "optional"
+    String category "optional"
+    RefundStatus status
+    RefundInitiator initiatedBy
+    String requestedByUserId FK
+    String providerRefundId "optional"
+    DateTime processedAt "optional"
+    DateTime createdAt
+  }
+  Report {
+    String vendorNotice "optional"
+    String id PK
+    String reporterUserId FK
+    String targetType "optional"
+    String category
+    String description
+    String attachmentPath "optional"
+    String attachmentFileId "optional"
+    String attachmentName "optional"
+    String attachmentMimeType "optional"
+    Int attachmentSize "optional"
+    ReportStatus status
+    String reportedUserId FK "optional"
+    String reportedVendorId FK "optional"
+    String reportedProductId FK "optional"
+    String reportedOrderId FK "optional"
+    String reportedPasabuyId FK "optional"
+    String reportedPaymentId FK "optional"
+    String reportedReviewId FK "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  ReportStatusHistory {
+    String id PK
+    String reportId FK
+    ReportStatus status
+    String adminUserId FK
+    String note "optional"
+    DateTime changedAt
+  }
+  ReportVendorResponse {
+    String id PK
+    String reportId FK
+    String vendorId FK
+    String authorUserId FK
+    String kind
+    String body
+    String status
+    String reviewedByUserId FK "optional"
+    String reviewNote "optional"
+    DateTime reviewedAt "optional"
+    DateTime createdAt
+  }
+  RoleAssignment {
+    String id PK
+    String userId FK
+    UserRole role
+    DateTime grantedAt
+    DateTime revokedAt "optional"
+  }
+  SubscriptionPlan {
+    Boolean studentApplicationEnabled
+    Int durationMonths "optional"
+    String id PK
+    String name UK
+    Decimal price
+    Int durationDays
+    String benefitsDescription "optional"
+    DateTime createdAt
+  }
+  User {
+    String id PK
+    String email UK
+    String passwordHash
+    String fullName UK
+    String phone "optional"
+    Boolean isActive
+    DateTime archivedAt "optional"
+    DateTime dataAccessGrantedAt "optional"
+    Boolean allowParticipantOrderCompletion
+    DateTime studentEmailVerifiedAt "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  Vendor {
+    String id PK
+    String ownerUserId FK, UK
+    String name
+    String description "optional"
+    String campusLocation "optional"
+    String pickupLocation "optional"
+    Float pickupLatitude "optional"
+    Float pickupLongitude "optional"
+    String_list categoryOrder
+    VendorType vendorType
+    VendorStatus status
+    DateTime createdAt
+    DateTime updatedAt
+    String businessName "optional"
+    Boolean preorderEnabled
+    Boolean preorderSameAsStoreHours
+  }
+  VendorApplication {
+    String id PK
+    String studentUserId FK
+    String businessName
+    String foodCategory
+    String validIdDocumentId FK, UK
+    String idSelfieDocumentId FK, UK
+    String signedContractDocumentId FK, UK "optional"
+    String bankDetailsEncrypted
+    String bankAccountLast4
+    String planId FK
+    Decimal quotedPrice
+    Int quotedDurationDays
+    Int quotedDurationMonths "optional"
+    String termsVersion
+    DateTime termsAcceptedAt
+    VendorApplicationStatus status
+    String rejectionReason "optional"
+    String contractRejectionReason "optional"
+    String paymentFailureReason "optional"
+    DateTime contractDueAt "optional"
+    DateTime contractVerifiedAt "optional"
+    String vendorId FK "optional"
+    String subscriptionId FK, UK "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  VendorApplicationDocument {
+    String id PK
+    String ownerUserId FK
+    VendorApplicationDocumentKind kind
+    String fileId UK
+    String privatePath
+    DateTime createdAt
+  }
+  VendorAvailability {
+    String id PK
+    String vendorId FK
+    Weekday dayOfWeek
+    Boolean isOpen
+    String openTime "optional"
+    String closeTime "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  VendorFavorite {
+    String id PK
+    String userId FK
+    String vendorId FK
+    DateTime createdAt
+  }
+  VendorLedgerEntry {
+    String featuredListingId FK, UK "optional"
+    String id PK
+    String vendorId FK
+    String orderId FK, UK "optional"
+    String payoutId FK "optional"
+    LedgerEntryType type
+    Decimal amount
+    DateTime createdAt
+  }
+  VendorPreorderAvailability {
+    String id PK
+    String vendorId FK
+    Weekday dayOfWeek
+    Boolean isEnabled
+    String openTime "optional"
+    String closeTime "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  VendorQrCode {
+    String id PK
+    String vendorId FK
+    String token UK
+    Boolean isActive
+    DateTime expiresAt "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  VendorSubscription {
+    String id PK
+    String vendorId FK
+    String planId FK
+    VendorSubscriptionStatus status
+    DateTime startDate "optional"
+    DateTime endDate "optional"
+    DateTime createdAt
+    DateTime updatedAt
+  }
+  Wallet {
+    String userId PK, FK
+    Decimal balance
+    DateTime updatedAt
+  }
+  WalletEntry {
+    String id PK
+    String userId FK
+    String type
+    Decimal amount
+    Decimal balanceAfter
+    String paymentId FK, UK "optional"
+    String refundId FK, UK "optional"
+    DateTime createdAt
+  }

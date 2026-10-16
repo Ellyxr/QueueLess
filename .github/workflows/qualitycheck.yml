@@ -35,6 +35,10 @@ jobs:
       - name: Typecheck (shared libs, API, frontend, scripts)
         run: pnpm run typecheck
 
+      # BUG-003 / TC-012: docs/erd.mmd must match schema.prisma.
+      - name: ERD is up to date with schema.prisma
+        run: pnpm --filter @workspace/api-server erd:check
+
       - name: Lint API
         run: pnpm --filter @workspace/api-server lint
 
