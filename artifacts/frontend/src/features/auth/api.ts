@@ -194,8 +194,18 @@ export interface UpdateVendorInput {
 export interface VendorOrderItem {
   productId?: string;
   productName?: string;
+  name?: string;
   quantity: number;
   price?: number;
+  unitPrice?: number | string;
+  product?: { name?: string; price?: number | string };
+}
+
+/** Order returned by create/status-change endpoints (the fields callers read). */
+export interface OrderMutationResult {
+  id: string;
+  status: string;
+  [key: string]: unknown;
 }
 
 export interface VendorQueueOrder {
@@ -208,6 +218,7 @@ export interface VendorQueueOrder {
   isPasabuyRequest?: boolean;
   status: string;
   items?: VendorOrderItem[];
+  cancellationReason?: CancellationReason | null;
 }
 
 export type CancellationReason =
@@ -948,11 +959,11 @@ export function getOrderStatus(orderId: string): Promise<OrderStatusResponse> {
   return fetchWithAuth(`/orders/${orderId}/status`);
 }
 
-export function confirmOrderPickup(orderId: string): Promise<any> {
+export function confirmOrderPickup(orderId: string): Promise<OrderMutationResult> {
   return fetchWithAuth(`/orders/${orderId}/pickup`, { method: "PATCH" });
 }
 
-export function createOrder(data: CreateOrderInput): Promise<any> {
+export function createOrder(data: CreateOrderInput): Promise<OrderMutationResult> {
   return fetchWithAuth("/orders", {
     method: "POST",
     headers: {
@@ -1014,7 +1025,7 @@ export function updateOrderStatus(
   orderId: string,
   status: string,
   extra?: { note?: string; cancellationReason?: CancellationReason; cancellationNote?: string },
-): Promise<any> {
+): Promise<OrderMutationResult> {
   return fetchWithAuth(`/orders/vendor/${orderId}/status`, {
     method: "PATCH",
     body: JSON.stringify({ status, ...extra }),

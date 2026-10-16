@@ -114,7 +114,6 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
       window.clearInterval(timer);
       window.removeEventListener(GROUP_ORDER_SESSION_CHANGED_EVENT, poll);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.groupOrderId]);
 
   const joinedParticipants = useMemo(
