@@ -1,7 +1,7 @@
 import path from 'path';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 
@@ -13,6 +13,7 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 const basePath = process.env.BASE_PATH ?? '/';
+const env = loadEnv('development', process.cwd(), 'VITE_');
 
 if (process.env.RENDER === 'true') {
   const apiBaseUrl = process.env.VITE_API_BASE_URL;
@@ -70,13 +71,15 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       '/api': {
-      target: 'http://localhost:5000',
-      changeOrigin: true,
+        target: env.VITE_API_BASE_URL
+          ? new URL(env.VITE_API_BASE_URL).origin
+          : 'http://localhost:5000',
+        changeOrigin: true,
+      },
     },
-  },
-  fs: {
-    strict: true,
-  },
+    fs: {
+      strict: true,
+    },
   },
   preview: {
     port,
