@@ -504,7 +504,11 @@ export default function AdminReportsPage() {
                       </SelectTrigger>
                       <SelectContent>
                         {selectedReport.status === "OPEN" && (
-                          <SelectItem value="IN_REVIEW">In review</SelectItem>
+                          <>
+                            <SelectItem value="IN_REVIEW">In review</SelectItem>
+                            <SelectItem value="RESOLVED">Resolved</SelectItem>
+                            <SelectItem value="DISMISSED">Dismissed</SelectItem>
+                          </>
                         )}
 
                         {selectedReport.status === "IN_REVIEW" && (
