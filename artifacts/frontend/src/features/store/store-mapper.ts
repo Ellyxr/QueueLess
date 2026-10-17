@@ -91,6 +91,7 @@ export function toStorePageProps(vendor: VendorStorefront): StorePageProps {
       name: product.name,
       flavorProfile: product.description || "Freshly prepared",
       price: Number(product.price),
+      isAvailable: product.isAvailable,
       extras: (product.eligibleExtras ?? []).map((extra) => ({
         id: extra.id,
         name: extra.name,

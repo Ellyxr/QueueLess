@@ -31,6 +31,7 @@ interface MenuItem {
   name: string;
   flavorProfile: string;
   price: number;
+  isAvailable?: boolean;
   extras?: MenuItemExtra[];
 }
 
@@ -509,7 +510,8 @@ export default function StorePage({
                             price={item.price}
                             storeName={storeName}
                             extras={item.extras}
-                            disabled={isOpenNow === false}
+                            disabled={isOpenNow === false || item.isAvailable === false}
+                            unavailable={item.isAvailable === false}
                           />
                         ))}
                       </div>

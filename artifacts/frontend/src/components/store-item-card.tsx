@@ -25,6 +25,7 @@ interface StoreItemCardProps {
   extras?: StoreItemCardExtra[];
   /** When true, ordering is disabled (e.g. the store is closed right now). */
   disabled?: boolean;
+  unavailable?: boolean;
 }
 
 export function StoreItemCard({
@@ -37,6 +38,7 @@ export function StoreItemCard({
   vendorId,
   extras,
   disabled = false,
+  unavailable = false,
 }: StoreItemCardProps) {
   const [isFavorited, setIsFavorited] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
@@ -272,7 +274,7 @@ export function StoreItemCard({
 
             <span className="grid grid-cols-[0fr] transition-[grid-template-columns] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover/cart:grid-cols-[1fr]">
               <span className="overflow-hidden whitespace-nowrap text-xs font-medium">
-                {disabled ? "Closed" : "Add to Cart"}
+                {unavailable ? "Unavailable" : disabled ? "Closed" : "Add to Cart"}
               </span>
             </span>
           </motion.button>
