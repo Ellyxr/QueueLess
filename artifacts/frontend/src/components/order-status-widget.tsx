@@ -196,6 +196,7 @@ export function OrderStatusWidget() {
       window.localStorage?.getItem(BUZZER_SOUND_ENABLED_KEY) === "true",
   );
   const [soundNeedsInteraction, setSoundNeedsInteraction] = useState(false);
+  const [soundPromptVisible, setSoundPromptVisible] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const soundEnabledRef = useRef(
     typeof window !== "undefined" &&
@@ -225,6 +226,7 @@ export function OrderStatusWidget() {
       localStorage.setItem(BUZZER_SOUND_ENABLED_KEY, "true");
       setSoundEnabled(true);
       setSoundNeedsInteraction(false);
+      setSoundPromptVisible(false);
     } catch {
       setSoundNeedsInteraction(true);
     }
@@ -426,8 +428,11 @@ export function OrderStatusWidget() {
 
       if (options.allowBuzzer && soundEnabledRef.current) {
         void playBuzzer();
-      } else if (options.allowBuzzer && !soundEnabledRef.current) {
+        } else if (options.allowBuzzer && !soundEnabledRef.current) {
         setSoundNeedsInteraction(false);
+        if (window.localStorage?.getItem(BUZZER_SOUND_ENABLED_KEY) === null) {
+        setSoundPromptVisible(true);
+        }
       }
     };
 
@@ -581,6 +586,7 @@ export function OrderStatusWidget() {
           orderId={orderId}
           stackIndex={index}
           soundEnabled={soundEnabled}
+          soundPromptVisible={soundPromptVisible}
           soundNeedsInteraction={soundNeedsInteraction}
           onEnableSound={enableBuzzerSound}
           onMuteSound={muteBuzzerSound}
@@ -595,6 +601,7 @@ function TrackedOrderCard({
   stackIndex,
   soundEnabled,
   soundNeedsInteraction,
+  soundPromptVisible,
   onEnableSound,
   onMuteSound,
 }: {
@@ -602,6 +609,7 @@ function TrackedOrderCard({
   stackIndex: number;
   soundEnabled: boolean;
   soundNeedsInteraction: boolean;
+  soundPromptVisible: boolean;
   onEnableSound: () => Promise<void>;
   onMuteSound: () => void;
 }) {
@@ -1113,6 +1121,27 @@ function TrackedOrderCard({
               />
             </button>
           </div>
+
+            {soundPromptVisible && !soundEnabled && (
+            <div
+              role="status"
+              className="mb-3 rounded-xl border border-primary/30 bg-primary/5 p-3"
+            >
+              <p className="text-xs font-medium text-foreground">
+                Your order is ready for pickup
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Turn on the buzzer to hear an alert next time.
+              </p>
+              <button
+                type="button"
+                onClick={() => void onEnableSound()}
+                className="mt-2 rounded-full bg-primary px-3 py-1 text-xs font-medium text-primary-foreground"
+              >
+                Enable buzzer sound
+              </button>
+            </div>
+          )}
 
           {soundNeedsInteraction && (
             <div
