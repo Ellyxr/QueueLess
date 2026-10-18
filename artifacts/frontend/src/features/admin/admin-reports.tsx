@@ -37,6 +37,8 @@ import {
   getAdminReport,
   listAdminReports,
   updateAdminReportStatus,
+  hideAdminReview,
+  restoreAdminReview,
   type AdminReport,
   type AdminReportDetail,
   type AdminReportStatus,
@@ -57,6 +59,7 @@ const TARGET_TYPES: AdminReportTargetType[] = [
   "TRANSACTION",
   "PRODUCT",
   "PASABUY",
+  "REVIEW",
 ];
 
 function formatDate(value: string) {
@@ -72,6 +75,7 @@ function getTargetType(
   if (report.reportedPaymentId) return "TRANSACTION";
   if (report.reportedProductId) return "PRODUCT";
   if (report.reportedPasabuyId) return "PASABUY";
+  if (report.reportedReviewId) return "REVIEW";
   return undefined;
 }
 
@@ -116,6 +120,10 @@ export default function AdminReportsPage() {
   const [resolutionNote, setResolutionNote] = useState("");
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [moderationReason, setModerationReason] = useState("");
+  const [moderatingReview, setModeratingReview] = useState(false);
+  const [moderationError, setModerationError] = useState<string | null>(null);
+  const [moderationMessage, setModerationMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -229,6 +237,56 @@ export default function AdminReportsPage() {
       );
     } finally {
       setUpdatingStatus(false);
+    }
+  }
+
+  async function handleReviewModeration(action: "hide" | "restore") {
+    if (!selectedReport?.reportedReview) return;
+
+    if (action === "hide" && moderationReason.trim().length < 3) {
+      setModerationError("Please provide a reason of at least 3 characters.");
+      return;
+    }
+
+    setModeratingReview(true);
+    setModerationError(null);
+    setModerationMessage(null);
+
+    try {
+      const review = selectedReport.reportedReview;
+
+      if (action === "hide") {
+        await hideAdminReview(
+          review.id,
+          moderationReason.trim(),
+          selectedReport.id,
+        );
+        setModerationMessage("Review hidden successfully.");
+      } else {
+        await restoreAdminReview(review.id, moderationReason.trim());
+        setModerationMessage("Review restored successfully.");
+      }
+
+      const updatedDetail = await getAdminReport(selectedReport.id);
+      setSelectedReport(updatedDetail);
+
+      const response = await listAdminReports({
+        status: status === "ALL" ? undefined : status,
+        targetType: targetType === "ALL" ? undefined : targetType,
+        page,
+        limit: 20,
+      });
+
+      setReports(response.items);
+      setTotalPages(response.totalPages);
+      setTotal(response.total);
+      setModerationReason("");
+    } catch (err) {
+      setModerationError(
+        err instanceof Error ? err.message : "Failed to moderate review.",
+      );
+    } finally {
+      setModeratingReview(false);
     }
   }
 
@@ -447,6 +505,99 @@ export default function AdminReportsPage() {
                   </p>
                 </div>
               </div>
+
+              {getTargetType(selectedReport) === "REVIEW" &&
+                selectedReport.reportedReview && (
+                  <div className="space-y-4 rounded-lg border border-border p-4">
+                    <div>
+                      <p className="text-sm font-semibold">Reported review</p>
+
+                      <div className="mt-3 space-y-2 text-sm">
+                        <p>
+                          <span className="font-medium">Rating: </span>
+                          {selectedReport.reportedReview.rating}/5
+                        </p>
+
+                        <p>
+                          <span className="font-medium">Review date: </span>
+                          {formatDate(selectedReport.reportedReview.createdAt)}
+                        </p>
+
+                        <p className="font-medium">Comment</p>
+                        <p className="whitespace-pre-wrap rounded-md bg-muted/30 p-3">
+                          {selectedReport.reportedReview.comment || "No written comment."}
+                        </p>
+
+                        <p>
+                          <span className="font-medium">Moderation status: </span>
+                          {selectedReport.reportedReview.hiddenAt ? "Hidden" : "Visible"}
+                        </p>
+
+                        {selectedReport.reportedReview.hiddenReason && (
+                          <p>
+                            <span className="font-medium">Hide reason: </span>
+                            {selectedReport.reportedReview.hiddenReason}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 border-t border-border pt-4">
+                      <label htmlFor="moderation-reason" className="text-sm font-medium">
+                        Moderation reason
+                      </label>
+
+                      <Textarea
+                        id="moderation-reason"
+                        value={moderationReason}
+                        onChange={(event) => setModerationReason(event.target.value)}
+                        placeholder={
+                          selectedReport.reportedReview.hiddenAt
+                            ? "Optional reason for restoring this review..."
+                            : "Explain why this review should be hidden..."
+                        }
+                        maxLength={500}
+                        rows={3}
+                        disabled={moderatingReview}
+                        className="resize-none"
+                      />
+
+                      {moderationError && (
+                        <p role="alert" className="text-sm text-destructive">
+                          {moderationError}
+                        </p>
+                      )}
+
+                      {moderationMessage && (
+                        <p role="status" className="text-sm text-foreground">
+                          {moderationMessage}
+                        </p>
+                      )}
+
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {selectedReport.reportedReview.hiddenAt ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={moderatingReview}
+                            onClick={() => void handleReviewModeration("restore")}
+                          >
+                            {moderatingReview ? "Processing..." : "Restore review"}
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            disabled={moderatingReview || moderationReason.trim().length < 3}
+                            onClick={() => void handleReviewModeration("hide")}
+                          >
+                            {moderatingReview ? "Processing..." : "Hide review"}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
               <div>
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
