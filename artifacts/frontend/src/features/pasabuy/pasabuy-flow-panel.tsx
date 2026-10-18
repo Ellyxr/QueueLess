@@ -152,7 +152,9 @@ export function PasabuyFlowPanel({ requestId }: { requestId: string }) {
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-              Pasabuy #{request.id.slice(0, 8).toUpperCase()}
+                {request.orderReference
+            ? `Order #${request.orderReference}`
+            : `Pasabuy #${request.id.slice(0, 8).toUpperCase()}`}
             </p>
             <p className="mt-1 text-lg font-semibold text-foreground">{request.itemDescription}</p>
           </div>

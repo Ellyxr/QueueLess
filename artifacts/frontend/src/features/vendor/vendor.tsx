@@ -134,12 +134,13 @@ function getNextOrderStatus(
     case 'PAID':
       return { label: 'Start Cooking', next: 'COOKING' };
     case 'COOKING':
-      return order.isPasabuyRequest
-        ? { label: 'Out for Delivery', next: 'OUT_FOR_DELIVERY' }
-        : { label: 'Ready for Pickup', next: 'READY_FOR_PICKUP' };
+      return { label: 'Ready for Pickup', next: 'READY_FOR_PICKUP' };
     case 'OUT_FOR_DELIVERY':
-    case 'READY_FOR_PICKUP':
       return { label: 'Mark Completed', next: 'COMPLETED' };
+    case 'READY_FOR_PICKUP':
+      // A Pasabuy order is completed by the deliverer's pickup after the vendor
+      // verifies the code, so the vendor has no manual completion here.
+      return order.isPasabuyRequest ? null : { label: 'Mark Completed', next: 'COMPLETED' };
     default:
       return null;
   }
@@ -1182,7 +1183,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                     className="grid grid-cols-[1fr_1fr_1.1fr_0.7fr_0.7fr_0.8fr_1.8fr] items-center gap-3 border-b border-border/80 px-4 py-4 last:border-b-0"
                   >
                     <div>
-                      <p className="text-sm font-semibold text-foreground">#{order.id.slice(-6).toUpperCase()}</p>
+                      <p className="text-sm font-semibold text-foreground">#{order.id.slice(0, 8).toUpperCase()}</p>
                       <p className="text-xs text-muted-foreground">₱{Number(order.totalAmount).toFixed(2)}</p>
                       {order.isPreorder && (
                         <div className="mt-1">
@@ -1663,10 +1664,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                   Update Order Status
                 </span>
                 <div className="flex flex-wrap gap-2">
-                  {(selectedOrder.isPasabuyRequest
-                    ? ['PENDING', 'PAID', 'COOKING', 'OUT_FOR_DELIVERY', 'COMPLETED']
-                    : ['PENDING', 'PAID', 'COOKING', 'READY_FOR_PICKUP', 'COMPLETED']
-                  ).map((statusOption) => (
+                    {['PENDING', 'PAID', 'COOKING', 'READY_FOR_PICKUP', 'COMPLETED'].map((statusOption) => (
                     <Button
                       key={statusOption}
                       type="button"
@@ -2031,7 +2029,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
               </div>
               <h3 className="text-lg font-bold text-foreground text-center">Cancel Order</h3>
               <p className="mt-2 text-xs text-muted-foreground text-center">
-                Ref #{cancelTarget.id.slice(-6).toUpperCase()} — this cannot be undone.
+                Ref #{cancelTarget.id.slice(0, 8).toUpperCase()} — this cannot be undone.
               </p>
 
               <div className="mt-4 space-y-2">
