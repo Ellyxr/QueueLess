@@ -132,6 +132,7 @@ export interface PasabuyStatusEvent {
 
 export interface PasabuyRequestDetail {
   id: string;
+  orderReference: string | null;
   requesterUserId: string;
   fulfillerUserId: string | null;
   status: PasabuyStatus;

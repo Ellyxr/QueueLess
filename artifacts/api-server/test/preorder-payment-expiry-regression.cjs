@@ -94,7 +94,7 @@ test('vendor queue hides unpaid preorders (they are not reservations yet)', asyn
   };
   await new OrdersService(prisma, {}, {}, {}, {}).getVendorOrderQueue('owner');
   assert.deepEqual(where.NOT, { isPreorder: true, status: 'PENDING' });
-  assert.deepEqual(where.status, { in: ['PENDING', 'PAID', 'COOKING'] });
+  assert.deepEqual(where.status, { in: ['PENDING', 'PAID', 'COOKING', 'READY_FOR_PICKUP'] });
 });
 
 // ------------------------------------------------------------ expiry job

@@ -956,7 +956,7 @@ export class OrdersService {
       where: {
         vendorId: vendor.id,
         status: {
-          in: ['PENDING', 'PAID', 'COOKING'],
+          in: ['PENDING', 'PAID', 'COOKING', 'READY_FOR_PICKUP'],
         },
         // US-058: a preorder is a reservation the vendor can trust only once
         // it is paid; unpaid ones stay hidden until paid or expired.

@@ -159,6 +159,7 @@ export class PasabuyService {
         deliveredAt: true, createdAt: true, updatedAt: true,
         payment: { select: { id: true, status: true, amount: true } },
         pickupCode: true,
+        relatedOrderId: true,
         statusHistory: { orderBy: { changedAt: 'asc' },
           select: { status: true, note: true, changedAt: true } },
       },
@@ -169,6 +170,7 @@ export class PasabuyService {
     }
     return {
       ...request,
+      orderReference: request.relatedOrderId?.slice(0, 8).toUpperCase() ?? null,
       pickupCode: request.fulfillerUserId === userId &&
         request.paymentStatus === 'PAID' ? request.pickupCode : null,
     };
