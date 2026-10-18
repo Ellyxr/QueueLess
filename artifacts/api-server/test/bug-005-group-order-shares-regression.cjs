@@ -3,7 +3,8 @@
 //    away (item-based), so members are never stuck with nothing to pay.
 //  - Members who ordered nothing get no PHP 0 share (it could never be paid
 //    and would keep the order PENDING forever).
-//  - The owner can still switch to a Custom split until anyone pays.
+//  - The owner's split choice (Equal / Custom) is applied when the order is
+//    placed; Custom waits for the owner's amounts. It can change until anyone pays.
 //  - Once placed, the group stops accepting items; a student's own cart is
 //    unaffected. Run after `pnpm build`:
 //   node --test test/bug-005-group-order-shares-regression.cjs
@@ -85,6 +86,63 @@ test('a member who ordered nothing gets no PHP 0 share (it could never be paid)'
   assert.ok(h.state.shares.every((s) => s.amountDue.greaterThan(0)));
 });
 
+test('Equal split chosen at placing: every member pays an even part of the total, in the same step', async () => {
+  const h = finalizeHarness();
+  const result = await h.service.finalizeGroupOrder('owner', 'g', 'EQUAL');
+
+  assert.equal(h.state.groupUpdate.paymentSplitMode, 'EQUAL');
+  // PHP 165 across owner, Mia and Ben (who ordered nothing): 55 each.
+  const byUser = Object.fromEntries(h.state.shares.map((s) => [s.payerUserId, s.amountDue.toFixed(2)]));
+  assert.deepEqual(byUser, { owner: '55.00', mia: '55.00', ben: '55.00' });
+  assert.equal(result.authoritativeOrder.paymentSplitMode, 'EQUAL');
+  assert.equal(result.authoritativeOrder.paymentShares.length, 3);
+  assert.equal(h.state.audits[0].afterState.paymentSplitMode, 'EQUAL');
+});
+
+test('Equal split never loses a centavo: shares add up to the order total exactly', async () => {
+  const h = finalizeHarness();
+  // 2 x 50 + 1 x 50 = 150, +10% = 165.00 split 3 ways is exact; force an uneven total.
+  h.service.pricingService = { calculateOrderTotals: (subtotal) => ({
+    subtotal, marketplaceFee: D('0.01'), totalAmount: subtotal.add('0.01'), marketplaceFeeRate: D(0), ruleVersion: 't' }) };
+  const result = await h.service.finalizeGroupOrder('owner', 'g', 'EQUAL');
+  const sum = h.state.shares.reduce((total, s) => total.add(s.amountDue), D(0));
+  assert.equal(sum.toFixed(2), result.authoritativeOrder.totalAmount);
+});
+
+test('Custom split chosen at placing: no shares until the owner enters the amounts', async () => {
+  const h = finalizeHarness();
+  const result = await h.service.finalizeGroupOrder('owner', 'g', 'CUSTOM');
+
+  assert.equal(h.state.groupUpdate.paymentSplitMode, 'CUSTOM');
+  assert.deepEqual(h.state.shares, []);
+  assert.deepEqual(result.authoritativeOrder.paymentShares, []);
+  assert.equal(result.authoritativeOrder.paymentSplitMode, 'CUSTOM');
+
+  // The group order tells the owner's app to show the amount screen (also after a reload).
+  const waiting = response('FINALIZED', [], 'CUSTOM');
+  assert.equal(waiting.paymentSplit.awaitingCustomAmounts, true);
+  assert.equal(waiting.paymentSplit.sharesReady, false);
+  const set = response('FINALIZED', [{ id: 's1', status: 'PENDING', paymentId: null }], 'CUSTOM');
+  assert.equal(set.paymentSplit.awaitingCustomAmounts, false);
+});
+
+test('finalize takes the split from the request body; an unknown mode is rejected', async () => {
+  const { FinalizeGroupOrderDto } = require('../dist/group-orders/dto/finalize-group-order.dto');
+  const { GroupOrdersController } = require('../dist/group-orders/group-orders.controller');
+  const { plainToInstance } = require('class-transformer');
+  const { validate } = require('class-validator');
+
+  const calls = [];
+  const controller = new GroupOrdersController({ finalizeGroupOrder: async (...args) => calls.push(args) });
+  await controller.finalizeGroupOrder({ sub: 'owner' }, 'g', { mode: 'EQUAL' });
+  await controller.finalizeGroupOrder({ sub: 'owner' }, 'g', {});
+  assert.deepEqual(calls, [['owner', 'g', 'EQUAL'], ['owner', 'g', undefined]]);
+
+  assert.equal((await validate(plainToInstance(FinalizeGroupOrderDto, { mode: 'EQUAL' }))).length, 0);
+  assert.equal((await validate(plainToInstance(FinalizeGroupOrderDto, {}))).length, 0);
+  assert.equal((await validate(plainToInstance(FinalizeGroupOrderDto, { mode: 'HALF' }))).length, 1);
+});
+
 // ------------------------------------------------------------ custom split
 
 function splitHarness({ paidShare = false } = {}) {
@@ -138,9 +196,9 @@ test('Custom amounts must add up to the order total', async () => {
 
 // ---------------------------------------- response flags and adding items
 
-const response = (groupStatus, shares) => new GroupOrdersService({}, {}, {}, {})['buildGroupOrderResponse']({
+const response = (groupStatus, shares, mode = 'ITEM_BASED') => new GroupOrdersService({}, {}, {}, {})['buildGroupOrderResponse']({
   id: 'g', code: 'MSBD8X', status: groupStatus, initiatorUserId: 'owner', initiator: { id: 'owner' },
-  vendor: VENDOR, paymentSplitMode: shares ? 'ITEM_BASED' : null, carts: [],
+  vendor: VENDOR, paymentSplitMode: shares ? mode : null, carts: [],
   participants: PARTICIPANTS.map((p) => ({ ...p, user: { id: p.userId }, joinedAt: new Date() })),
   order: shares ? { id: 'order-1', status: 'PENDING', orderType: 'GROUP', totalAmount: D('165'),
     paymentShares: shares.map((s) => ({ amountDue: D('1'), payer: {}, ...s })) } : null,
@@ -152,7 +210,7 @@ test('the group order tells the app whether it still accepts items and whether s
   assert.equal(response('OPEN', null).paymentSplit, null);
   const placed = response('FINALIZED', [{ id: 's1', status: 'PENDING', paymentId: null }]);
   assert.equal(placed.acceptingItems, false);
-  assert.deepEqual(placed.paymentSplit, { mode: 'ITEM_BASED', sharesReady: true, canChange: true });
+  assert.deepEqual(placed.paymentSplit, { mode: 'ITEM_BASED', sharesReady: true, awaitingCustomAmounts: false, canChange: true });
   const paying = response('FINALIZED', [{ id: 's1', status: 'PENDING', paymentId: 'pay' }]);
   assert.equal(paying.paymentSplit.canChange, false);
   assert.equal(response('CANCELLED', null).acceptingItems, false);

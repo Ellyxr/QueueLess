@@ -9,7 +9,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { CreateGroupOrderDto } from './dto/create-group-order.dto';
 import { AddGroupOrderItemDto } from './dto/add-group-order-item.dto';
 import { JoinGroupOrderByCodeDto } from './dto/join-group-order-by-code.dto';
-import { Prisma } from '@prisma/client';
+import { GroupPaymentSplitMode, Prisma } from '@prisma/client';
 import { SetPaymentSplitDto } from './dto/set-payment-split.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PricingService } from '../common/pricing/pricing.service';
@@ -768,6 +768,8 @@ export class GroupOrdersService {
         ? {
             mode: groupOrder.paymentSplitMode,
             sharesReady: shares.length > 0,
+            // CUSTOM was chosen but the owner has not entered the amounts yet.
+            awaitingCustomAmounts: groupOrder.paymentSplitMode === 'CUSTOM' && shares.length === 0,
             // The owner can still switch mode (e.g. to CUSTOM) until anyone pays.
             canChange: !shares.some((share) => share.status === 'PAID' || share.paymentId !== null),
           }
@@ -828,7 +830,11 @@ export class GroupOrdersService {
     };
   }
 
-  async finalizeGroupOrder(userId: string, groupOrderId: string) {
+  async finalizeGroupOrder(
+    userId: string,
+    groupOrderId: string,
+    splitMode: GroupPaymentSplitMode = 'ITEM_BASED',
+  ) {
     const result = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM group_orders WHERE id = ${groupOrderId}::uuid FOR UPDATE`;
       const groupOrder = await tx.groupOrder.findUnique({
@@ -976,9 +982,9 @@ export class GroupOrdersService {
         },
         data: {
           status: 'FINALIZED',
-          // BUG-005: default split; the owner may switch to EQUAL/CUSTOM
-          // before anyone pays.
-          paymentSplitMode: 'ITEM_BASED',
+          // BUG-005: the split the owner chose when placing the order; they
+          // may still change it before anyone pays.
+          paymentSplitMode: splitMode,
         },
       });
 
@@ -1047,23 +1053,29 @@ export class GroupOrdersService {
         },
       });
 
-      // BUG-005: every participant can pay their own share straight away
-      // (each pays for what they ordered). Without this, members had nothing
-      // to pay until the owner completed a separate split step, which the
-      // Custom Amount screen could skip.
-      const defaultShares = this.calculateItemBasedShares(
-        joinedParticipants,
-        order.items,
-        this.decimalToCents(totalAmount),
-      );
-      await tx.paymentShare.createMany({
-        data: defaultShares.map((share) => ({
-          orderId: order.id,
-          payerUserId: share.payerUserId,
-          amountDue: new Prisma.Decimal(share.amountCents).div(100),
-          status: 'PENDING',
-        })),
-      });
+      // BUG-005: shares follow the owner's split choice and are created in
+      // this transaction, so members can pay straight away:
+      //   ITEM_BASED  each member pays for what they ordered
+      //   EQUAL       the total is divided evenly across every member
+      //   CUSTOM      none yet; the owner sets each amount next
+      //               (payment-split), and members wait for that.
+      const orderTotalCents = this.decimalToCents(totalAmount);
+      const defaultShares =
+        splitMode === 'EQUAL'
+          ? this.calculateEqualShares(joinedParticipants, orderTotalCents)
+          : splitMode === 'CUSTOM'
+            ? []
+            : this.calculateItemBasedShares(joinedParticipants, order.items, orderTotalCents);
+      if (defaultShares.length) {
+        await tx.paymentShare.createMany({
+          data: defaultShares.map((share) => ({
+            orderId: order.id,
+            payerUserId: share.payerUserId,
+            amountDue: new Prisma.Decimal(share.amountCents).div(100),
+            status: 'PENDING',
+          })),
+        });
+      }
       const paymentShares = await tx.paymentShare.findMany({
         where: { orderId: order.id },
         include: { payer: { select: { id: true, fullName: true, email: true } } },
@@ -1075,7 +1087,7 @@ export class GroupOrdersService {
         entityType: 'Order', entityId: order.id,
         afterState: { status: order.status, vendorId: order.vendorId,
           groupOrderId, totalAmount: totalAmount.toFixed(2), orderType: order.orderType,
-          paymentSplitMode: 'ITEM_BASED', paymentShares: defaultShares.length },
+          paymentSplitMode: splitMode, paymentShares: defaultShares.length },
       } });
       await tx.auditRecord.create({ data: {
         actorUserId: userId, actionType: 'FEE_ASSESSED',
@@ -1100,7 +1112,7 @@ export class GroupOrdersService {
             marketplaceFee: order.marketplaceFee.toFixed(2),
             totalAmount: order.totalAmount.toFixed(2),
             estimatedReadyAt: order.estimatedReadyAt,
-            paymentSplitMode: 'ITEM_BASED',
+            paymentSplitMode: splitMode,
             paymentShares: paymentShares.map((share) => ({
               id: share.id,
               payer: share.payer,
@@ -1133,7 +1145,7 @@ export class GroupOrdersService {
           createdAt: order.createdAt,
         },
       };
-    });
+    }, { maxWait: 10000, timeout: 30000 });
 
     this.realtimeGateway.emitNewOrder(
       result.realtimeOrder.vendorOwnerUserId,
@@ -1313,7 +1325,7 @@ export class GroupOrdersService {
           )
           .toFixed(2),
       };
-    });
+    }, { maxWait: 10000, timeout: 30000 });
   }
 
   private decimalToCents(value: Prisma.Decimal): number {

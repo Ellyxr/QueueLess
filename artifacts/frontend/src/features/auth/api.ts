@@ -1181,10 +1181,15 @@ export function removeGroupOrderItem(
   });
 }
 
+/** BUG-005: the split is applied when the order is placed; CUSTOM then waits for setGroupOrderPaymentSplit. */
 export function finalizeGroupOrder(
   groupOrderId: string,
+  mode?: SetPaymentSplitInput["mode"],
 ): Promise<FinalizeGroupOrderResponse> {
-  return fetchWithAuth(`/group-orders/${groupOrderId}/finalize`, { method: "POST" });
+  return fetchWithAuth(`/group-orders/${groupOrderId}/finalize`, {
+    method: "POST",
+    body: JSON.stringify(mode ? { mode } : {}),
+  });
 }
 
 export function setGroupOrderPaymentSplit(

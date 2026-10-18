@@ -39,6 +39,17 @@ const currency = (amount: string | number) =>
 type SplitMode = "EQUAL" | "CUSTOM";
 type Stage = "building" | "confirming-split" | "placed";
 
+/** BUG-005: Custom split was chosen, but the owner has not entered the amounts yet. */
+function isAwaitingCustomSplit(order: GroupOrderResponse["authoritativeOrder"]): boolean {
+  return order?.paymentSplitMode === "CUSTOM" && order.paymentShares.length === 0;
+}
+
+/** Starting point for the custom amounts: the total split evenly. */
+function evenAmounts(total: string, participantIds: string[]): Record<string, string> {
+  const each = (Number(total) / Math.max(participantIds.length, 1)).toFixed(2);
+  return Object.fromEntries(participantIds.map((id) => [id, each]));
+}
+
 export function GroupOrderCartView({ session }: { session: GroupOrderSession }) {
   const [groupOrder, setGroupOrder] = useState<GroupOrderResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -88,10 +99,25 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
             });
           }
 
-          if (data.authoritativeOrder && !hasTrackedFinalOrder.current) {
-            hasTrackedFinalOrder.current = true;
-            startOrderTracking(data.authoritativeOrder.id);
-            setStage("placed");
+          if (data.authoritativeOrder) {
+            if (!hasTrackedFinalOrder.current) {
+              hasTrackedFinalOrder.current = true;
+              startOrderTracking(data.authoritativeOrder.id);
+            }
+            // BUG-005: the owner stays on the amount screen until a Custom
+            // split is saved (also after a reload); everyone else sees "placed".
+            if (session.isOwner && isAwaitingCustomSplit(data.authoritativeOrder)) {
+              const order = data.authoritativeOrder;
+              const joinedIds = data.participants
+                .filter((p) => p.status === "JOINED")
+                .map((p) => p.participantId);
+              setCustomAmounts((current) =>
+                Object.keys(current).length ? current : evenAmounts(order.totalAmount, joinedIds),
+              );
+              setStage("confirming-split");
+            } else {
+              setStage("placed");
+            }
           }
         })
         .catch((error: unknown) => {
@@ -210,20 +236,21 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
     setIsPlacing(true);
     try {
       await lockGroupOrder(session.groupOrderId);
-      const result = await finalizeGroupOrder(session.groupOrderId);
+      // BUG-005: the split is applied in the same request that places the
+      // order, so Equal shares exist the moment the order does.
+      const result = await finalizeGroupOrder(session.groupOrderId, splitMode);
 
       if (splitMode === "EQUAL") {
-        await setGroupOrderPaymentSplit(session.groupOrderId, { mode: "EQUAL" });
         startOrderTracking(result.authoritativeOrder.id);
         hasTrackedFinalOrder.current = true;
         clearGroupOrderSession();
         setStage("placed");
       } else {
-        const equalShare = (
-          Number(result.authoritativeOrder.totalAmount) / joinedParticipants.length
-        ).toFixed(2);
         setCustomAmounts(
-          Object.fromEntries(joinedParticipants.map((p) => [p.participantId, equalShare])),
+          evenAmounts(
+            result.authoritativeOrder.totalAmount,
+            joinedParticipants.map((p) => p.participantId),
+          ),
         );
         setStage("confirming-split");
       }
@@ -336,8 +363,11 @@ export function GroupOrderCartView({ session }: { session: GroupOrderSession }) 
           </div>
           <h2 className="mt-4 text-xl font-semibold">Group order placed</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            Check the order status widget for live updates.
+            {isAwaitingCustomSplit(groupOrder.authoritativeOrder)
+              ? `Waiting for ${groupOrder.initiator.fullName} to set each person's amount. You can pay from the order status widget once it's set.`
+              : "Check the order status widget for live updates."}
           </p>
+          {actionError && <p className="mt-2 text-xs text-destructive">{actionError}</p>}
         </section>
       ) : stage === "confirming-split" && groupOrder.authoritativeOrder ? (
         <section className="rounded-3xl border border-border/80 bg-card p-5 shadow-sm">

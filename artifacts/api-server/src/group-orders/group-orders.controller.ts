@@ -23,6 +23,7 @@ import { CreateGroupOrderDto } from './dto/create-group-order.dto';
 import { GroupOrdersService } from './group-orders.service';
 import { AddGroupOrderItemDto } from './dto/add-group-order-item.dto';
 import { SetPaymentSplitDto } from './dto/set-payment-split.dto';
+import { FinalizeGroupOrderDto } from './dto/finalize-group-order.dto';
 import { JoinGroupOrderByCodeDto } from './dto/join-group-order-by-code.dto';
 
 @ApiTags('Group Orders')
@@ -350,10 +351,12 @@ async addGroupOrderItem(
 async finalizeGroupOrder(
   @CurrentUser() user: { sub: string },
   @Param('groupOrderId') groupOrderId: string,
+  @Body() dto: FinalizeGroupOrderDto = {},
 ) {
   return this.groupOrdersService.finalizeGroupOrder(
     user.sub,
     groupOrderId,
+    dto?.mode,
   );
 }
 
