@@ -1257,7 +1257,8 @@ export interface CreateReportInput {
     | "ORDER"
     | "TRANSACTION"
     | "PRODUCT"
-    | "PASABUY";
+    | "PASABUY"
+    | "REVIEW";
   targetId?: string;
   category: string;
   description: string;
@@ -1315,7 +1316,8 @@ export type AdminReportTargetType =
   | "ORDER"
   | "TRANSACTION"
   | "PRODUCT"
-  | "PASABUY";
+  | "PASABUY"
+  | "REVIEW";
 
 export interface AdminReportAttachment {
   fileName: string;
@@ -1343,6 +1345,7 @@ export interface AdminReport {
   reportedPaymentId: string | null;
   reportedProductId: string | null;
   reportedPasabuyId: string | null;
+  reportedReviewId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1381,6 +1384,16 @@ export interface AdminReportDetail extends AdminReport {
   reportedPasabuy: {
     id: string;
     status: string;
+  } | null;
+  reportedReview: {
+    id: string;
+    orderId: string;
+    vendorId: string;
+    rating: number;
+    comment: string | null;
+    createdAt: string;
+    hiddenAt: string | null;
+    hiddenReason: string | null;
   } | null;
   statusHistory: Array<{
     id: string;
@@ -1445,6 +1458,43 @@ export async function updateAdminReportStatus(
     body: JSON.stringify({
       status,
       ...(note?.trim() ? { note: note.trim() } : {}),
+    }),
+  });
+}
+
+export interface AdminReviewModerationResult {
+  id: string;
+  orderId: string;
+  vendorId: string;
+  rating: number;
+  comment: string | null;
+  hiddenAt: string | null;
+  hiddenByUserId: string | null;
+  hiddenReason: string | null;
+}
+
+export function hideAdminReview(
+  reviewId: string,
+  reason: string,
+  reportId?: string,
+): Promise<AdminReviewModerationResult & { resolvedReportId: string | null }> {
+  return fetchWithAuth(`/admin/reviews/${reviewId}/hide`, {
+    method: "POST",
+    body: JSON.stringify({
+      reason: reason.trim(),
+      ...(reportId ? { reportId } : {}),
+    }),
+  });
+}
+
+export function restoreAdminReview(
+  reviewId: string,
+  reason?: string,
+): Promise<AdminReviewModerationResult> {
+  return fetchWithAuth(`/admin/reviews/${reviewId}/restore`, {
+    method: "POST",
+    body: JSON.stringify({
+      ...(reason?.trim() ? { reason: reason.trim() } : {}),
     }),
   });
 }
